@@ -24,55 +24,27 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// defaultListLimit/maxListLimit bound GET .../operations, and they are the
-// figures api/openapi.yaml states as `default` and `maximum` on it
-// (contract_sites_test.go is what keeps the two spellings in step).
-//
-// A LIMIT ABOVE THE MAXIMUM IS REFUSED, NOT CLAMPED, and this used to say the
-// opposite — that pagination is a best-effort detail a client should not get an
-// error for overshooting, safe to clamp in silence because the envelope says
-// whether anything was left behind. The envelope does say that, and it is what
-// #86 needed; it is not what makes a clamp honest. A ceiling this contract
-// states and this server does not apply is not a rule at all (#118): a
-// schema-aware client would not SEND limit=250 that the server would have
-// answered, and one that sent it anyway was answered as though it had asked for
-// 200 with nothing in the answer saying that the number it sent was not the
-// number applied.
-//
-// The same goes for everything else parsePage now refuses. A limit of 0, of -1,
-// or of "fifty" used to fall through to the default and come back 200 — a page
-// of fifty rows answering a question nobody asked, which is the same silence in
-// a smaller coat. Refusing says it once, in the only channel a client may read.
+// defaultListLimit and maxListLimit are the default and maximum openapi states
+// for GET .../operations (contract_sites_test.go keeps them in step). A limit
+// outside them, or one that is not a number, is refused rather than clamped or
+// defaulted: a ceiling the contract states and the server does not apply is no
+// rule at all (#118).
 const (
 	defaultListLimit = 50
 	maxListLimit     = 200
 )
 
-// spaceStore is the subset of family.Store this handler needs: reading the
-// space's base currency to convert each journal entry into it (see
-// operationInBase). Local interface (identical to account's and portfolio's
-// spaceStore) so tests can inject a fake or a real *family.Store
-// interchangeably — Go interface assignability is structural, so
-// *family.Store satisfies this with no conversion needed at the call site.
+// spaceStore is the part of family.Store this handler needs: the space's base
+// currency.
 type spaceStore interface {
 	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
-// converter is the subset of *marketdata.Converter this handler needs: Rate,
-// which resolves one currency pair's rate on a given DATE and reports the date
-// the rate actually came from, and RatesOn, which resolves many such queries in
-// a single round trip and answers each exactly as Rate would have (see
-// marketdata.RatesOn). The page uses both, and not interchangeably: RatesOn
-// fills the request's memo up front (prewarmRates) and Rate resolves whatever
-// is not in it (rateFor), which is what keeps the figures independent of the
-// prefetch.
-//
-// Local interface (mirroring account's and portfolio's identically named ones)
-// so tests can inject a double whose lookups fail with a genuine error rather
-// than marketdata.ErrNoRate — a real, DB-backed Converter cannot be made to do
-// that on demand, and the handler must treat the two completely differently
-// (see operationInBase). *marketdata.Converter satisfies this structurally, no
-// call site changes.
+// converter is the part of *marketdata.Converter this handler needs. RatesOn
+// fills the request's memo up front (prewarmRates) and Rate resolves whatever is
+// missing (rateFor), so the figures do not depend on the prefetch. Tests inject a
+// double that fails with a genuine error rather than marketdata.ErrNoRate, which
+// the handler must treat differently.
 type converter interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
@@ -111,10 +83,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals", view(h.handleListArrivals))
 }
 
-// writeError maps operation-specific errors to HTTP responses, falling back
-// to family.WriteError for everything else. ErrInconsistent gets its own
-// branch (409, with the engine's explanation in the body) since it isn't one
-// of the family package's sentinel errors.
+// writeError maps operation errors to HTTP responses: ErrInconsistent is a 409
+// with the engine's explanation; everything else goes to family.WriteError.
 func writeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrInconsistent) {
 		httpjson.Error(w, http.StatusConflict, err.Error())
@@ -123,54 +93,25 @@ func writeError(w http.ResponseWriter, err error) {
 	family.WriteError(w, err)
 }
 
-// hasUndatedLots reports whether this operation's amount is a cost basis whose
-// purchase dates are not all known — the exact condition amountTerms refuses to
-// answer for (see its doc comment), stated as a fact ABOUT the operation rather
-// than left to be inferred from in_base coming back null.
-//
-// It is the journal's twin of portfolio.hasUndatedLots, and it is here for the
-// same reason: null has several causes and they are not the same news. A missing
-// fx rate is a gap the backfill job closes on its own; an unrecorded purchase
-// date never resolves. On a journal row the difference is sharper than on a
-// position — a transfer's own date usually HAS a rate — so a screen that says
-// "no rate for the operation's date" over this case names a cause that is not
-// the cause and promises a number that will never come.
-//
-// inBaseGap draws that line finer still, separating a missing rate for the
-// operation's own date from one for a PURCHASE date (#79), and it is the field a
-// journal row is captioned from. This one stays because it answers a different
-// question — is amount_minor a cost basis with unknown dates? — for every
-// response that returns an operation, including the two that convert nothing and
-// publish no gap at all.
-//
-// Only a transfer or a conversion can be in this state. Every other operation's
-// amount is money that moved on the day the row is dated, which is a date it
-// always has. A conversion's legs carry a cost basis for the same reason a
-// transfer's do — the parcel travels, the money does not (see
-// portfolio.TypeExchangeOut) — and a parcel that reached the account undated
-// stays undated across the conversion, so the question is exactly as live here.
-// carriesCostBasis reports whether this row's amount_minor is a cost basis that
-// travelled with shares rather than money that moved on its own date — the four
-// types portfolio.MovesCash excludes for that reason, minus split, whose amount
-// is always zero and which carries no parcel at all.
-//
-// It is DERIVED from MovesCash rather than listed again, so that a type added to
-// one list cannot go missing from the other: everything MovesCash calls "not
-// money" is either a parcel of basis or a split, and a split is named here
-// explicitly because it is the one exclusion that is not about a parcel.
+// carriesCostBasis reports whether amount_minor is a cost basis that travelled
+// with shares rather than money that moved on its own date: what
+// portfolio.MovesCash excludes, minus split, whose amount is always zero. Derived
+// from MovesCash so the two lists cannot drift.
 func carriesCostBasis(o Operation) bool {
 	return !portfolio.MovesCash(o) && o.Type != TypeSplit
 }
 
+// hasUndatedLots reports whether amount_minor is a cost basis with at least one
+// piece of unknown purchase date. Unlike a missing rate, which the backfill
+// closes, this never resolves, so the row says so instead of leaving a reader
+// to infer it from a null in_base. The journal's counterpart of
+// portfolio.hasUndatedLots.
 func hasUndatedLots(o Operation) bool {
 	if !carriesCostBasis(o) {
 		return false
 	}
-	// No breakdown at all is the smallest instance of the case below, not a
-	// separate one: a basis given by hand, or one recorded before breakdowns
-	// were kept, has every piece dateless (see amountTerms). A piece bought for
-	// nothing needs no date (portfolio.DatelessBasis), as on the positions
-	// screen (#226).
+	// No breakdown means every piece is dateless (see amountTerms), unless
+	// the basis is zero (#226).
 	if len(o.TransferLots) == 0 {
 		return portfolio.DatelessBasis(nil, o.AmountMinor)
 	}
@@ -179,32 +120,10 @@ func hasUndatedLots(o Operation) bool {
 	})
 }
 
-// assembledFromLots reports whether amount_minor is a cost basis assembled
-// piece by piece from the purchases behind it, rather than money that moved
-// on occurred_on itself — a fact about how the FIGURE was arrived at, read
-// straight off the stored breakdown, and answered the same regardless of
-// whether that breakdown could be converted into the base currency.
-//
-// It used to be computed only inside operationInBase and published solely on
-// OperationInBase.AssembledFromLots, which meant it vanished exactly when
-// in_base did: a transfer already in the base currency, or one whose newest
-// purchase has no fx rate yet, has a perfectly good breakdown sitting in
-// o.TransferLots that operationInBase never gets asked about, because it
-// short-circuits before amountTerms is even called. The breakdown's presence
-// is a property of the operation, not of the conversion attempt, so this is
-// now computed here — from the same o.TransferLots amountTerms and
-// hasUndatedLots read — and published on every Operation, in_base present or
-// not (#67).
-//
-// True whenever a breakdown exists at all, whether or not every piece in it
-// carries a purchase date: a dateless piece makes hasUndatedLots true as
-// well, and the two are not mutually exclusive — a parcel that mixes dated
-// and undated pieces answers both questions "yes". False for a transfer with
-// no breakdown (a hand-typed basis, or one recorded before breakdowns were
-// kept): there is nothing to have been assembled from, and hasUndatedLots is
-// what answers for that parcel instead. Always false for a row that carries no
-// parcel at all — every type but a transfer's two legs and a conversion's,
-// which are the only ones TransferLots is ever stored for.
+// assembledFromLots reports whether amount_minor is a basis assembled from the
+// purchases in a stored breakdown. It is a fact about the row, published on every
+// operation whether or not in_base could be computed (#67). A breakdown with
+// dateless pieces answers yes here and to hasUndatedLots too.
 func assembledFromLots(o Operation) bool {
 	return len(o.TransferLots) > 0
 }
@@ -219,22 +138,14 @@ func toAPI(o Operation) apitypes.Operation {
 		Currency:    o.Currency,
 		FeeMinor:    o.FeeMinor,
 		Note:        o.Note,
-		// The contract enumerates source because the column's CHECK constraint
-		// closes the set; the conversion is not a claim that o.Source is one of
-		// them, only that the row came from a column that cannot hold anything
-		// else. A value outside the set would have to survive the constraint
-		// first, and then it would reach a client as itself rather than as a
-		// substitute — which is the honest failure of the two.
+		// The column's CHECK constraint closes the set the contract enumerates.
 		Source:            apitypes.OperationSource(o.Source),
 		CreatedAt:         o.CreatedAt,
 		HasUndatedLots:    hasUndatedLots(o),
 		AssembledFromLots: assembledFromLots(o),
 	}
-	// The mode and what this program can call it travel together, and both are
-	// absent when nobody said where the operation happened. They are set from
-	// the SAME nil check on purpose: a kind published beside no code would ask
-	// a reader to take «unknown» for the row's answer when the row has no
-	// answer at all.
+	// The mode and its kind are set together and are both absent when
+	// nobody said where the operation happened.
 	if o.TradingMode != nil {
 		out.TradingMode = nullable.NewNullableWithValue(*o.TradingMode)
 		out.TradingModeKind = nullable.NewNullableWithValue(
@@ -261,82 +172,37 @@ func toAPI(o Operation) apitypes.Operation {
 	return out
 }
 
-// rateKey identifies one memoized fx rate lookup: the currency being
-// converted, the currency it is converted INTO, and the date its rate must
-// come from. Unlike account's cache — which converts everything at today's
-// rate and can therefore key by currency alone — the journal resolves a rate
-// per operation DATE, so the date has to be part of the key. A single page of
-// the journal routinely holds the same currency on a dozen different dates
-// with a dozen different rates; keying by currency alone would silently reuse
-// the first operation's rate for all of them, producing wrong numbers that
-// look entirely plausible on screen. portfolio's cache (portfolio.rateKey) is
-// keyed the same way and for the same reason: its per-lot and
-// per-income-operation conversions are, like the journal's, valued at each
-// item's own date rather than one rate for everything — only account still
-// converts everything at today's rate.
-//
-// The date is held as its YYYY-MM-DD string rather than a time.Time so the
-// key is a value comparison on the calendar date itself, immune to two
-// otherwise-equal time.Time values differing in monotonic clock reading or
-// *time.Location pointer (which would merely cost extra lookups, but would
-// do so invisibly).
-//
-// The TARGET currency is in the key too, mirroring portfolio.rateKey, even
-// though this page converts into exactly one currency today: the space's base
-// currency, read once per request and handed to every lookup and every
-// prefetched query alike (see handleListByAccount). With a single target the
-// field never changes what any lookup finds — every entry here names the same
-// one — so leaving it out costs nothing YET. What it guards against is this
-// codebase's worst failure class: the day some future change converts one
-// figure into a second target (an account's own currency, say, instead of the
-// base) without also widening this key, that figure's lookup collides with an
-// unrelated row already cached under the same source currency and date, and
-// silently publishes THAT row's rate under a rate_on that reads like its own.
-// Before this, a comment was the only thing standing between that change and
-// merging clean. Now the same mistake also needs a second field added, not
-// just a currency passed to a second lookup.
+// rateKey identifies one memoized fx lookup: source currency, target currency
+// and the date the rate must come from. The journal values each row at its own
+// date, so the date is part of the key; keying by currency alone would reuse the
+// first row's rate for all of them. The date is a YYYY-MM-DD string so equal days
+// compare equal. The target is in the key, though the page converts into one
+// currency today, so a future second target cannot silently collide.
 type rateKey struct {
 	currency string
 	target   string
 	on       string
 }
 
-// newRateKey is the only place a lookup becomes a key. Both halves of the memo
-// build one — the loop asking for a rate (rateFor) and the prefetch filing the
-// answers before it (prewarmRates) — and a key spelled two ways would file
-// every prefetched answer where nothing looks for it: no wrong number, just a
-// batch paid for and then ignored, which is precisely the kind of failure that
-// leaves no trace.
+// newRateKey is the only place a lookup becomes a key, so rateFor and
+// prewarmRates cannot file one answer under two spellings.
 func newRateKey(currency, target string, on time.Time) rateKey {
 	return rateKey{currency: currency, target: target, on: on.Format("2006-01-02")}
 }
 
-// rateLookup memoizes one (currency, date) pair's resolved fx rate — the
-// rate itself, the date it actually came from, and the resolution error — so
-// handleListByAccount's per-operation conversion loop hits the fx rate store
-// at most once per distinct pair, not once per operation. Mirrors account's
-// and portfolio's identically named type; only the cache key differs (see
-// rateKey).
+// rateLookup memoizes one resolved fx rate: the rate, the date it came from,
+// and the resolution error.
 type rateLookup struct {
 	rate decimal.Decimal
 	date time.Time
 	err  error
 }
 
-// rateFor resolves currency->baseCurrency on date on, memoized in cache for
-// the rest of the request (see rateKey). The resolution error rides along in
-// the returned rateLookup rather than being returned, because callers have to
-// tell marketdata.ErrNoRate — an expected outcome that nulls in_base — apart
-// from a genuine failure, which fails the request. Mirrors portfolio's
-// identically named method.
-//
-// The cache is normally already full when this is called: handleListByAccount
-// prefetches every rate the page was expected to want in one round trip (see
-// prewarmRates). A MISS IS NOT AN ERROR — it is the whole safety net. Whatever
-// the enumeration failed to predict, or the batch failed to fetch, is resolved
-// here one pair at a time exactly as it was before any of that existed, so no
-// figure on the page depends on the prefetch being complete or even on its
-// having succeeded. Only the cost does.
+// rateFor resolves currency into baseCurrency on date on, memoized for the
+// request. The error rides in the result because callers must tell
+// marketdata.ErrNoRate (in_base goes null) from a genuine failure (the request
+// fails). A memo miss is not an error: whatever the prefetch missed is resolved
+// here, so only the cost depends on the prefetch.
 func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
 	key := newRateKey(currency, baseCurrency, on)
 	rl, ok := cache[key]
@@ -348,60 +214,33 @@ func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on
 	return rl
 }
 
-// inBaseGap names WHICH TERM stopped an operation's whole in_base object, and
-// is what the contract's Operation.in_base_gap publishes.
-//
-// It is the journal's twin of portfolio.inBaseGap and names terms for the same
-// reason: there is exactly one operation here, and the terms are the very
-// figures standing side by side in its row. The vocabulary differs because the
-// terms do — a journal row's amount is either money that moved on its own date
-// or a cost basis assembled from purchases on other days, and those are the two
-// kinds of date whose rate can be missing.
+// inBaseGap names which term stopped an operation's in_base object, published
+// as Operation.in_base_gap. The journal's counterpart of portfolio.inBaseGap.
 type inBaseGap uint8
 
 const (
-	// inBaseStruck: nothing was missing; there is an object.
+	// inBaseStruck: nothing was missing.
 	inBaseStruck inBaseGap = iota
-	// inBaseSameCurrency: the operation is already denominated in the base
-	// currency, so there is no object and nothing to explain either — its own
-	// amounts ARE the base-currency ones. Named separately from inBaseStruck
-	// purely for readability at the call site (see operationInBase's early
-	// return): nothing downstream tells the two apart — apiInBaseGap maps both
-	// to "no cause published" and handleListByAccount separates "struck" from
-	// "nothing to convert" by checking the *OperationInBase pointer, never this
-	// value.
+	// inBaseSameCurrency: the operation is already in the base currency. Kept
+	// apart from inBaseStruck only for readability; apiInBaseGap publishes
+	// neither.
 	inBaseSameCurrency
-	// inBaseUndatedLot: the amount is the cost basis of a transferred parcel
-	// and at least one piece of it does not know when it was bought (see
-	// amountTerms). The one member that never resolves on its own.
+	// inBaseUndatedLot: the amount is a transferred basis with at least one
+	// piece of unknown purchase date. The one gap that never closes on its own.
 	inBaseUndatedLot
-	// inBaseNoRateOperationDate: the amount is money that moved on the day the
-	// row is dated, and the fx table has no rate for that day nor for any
-	// earlier one.
+	// inBaseNoRateOperationDate: no rate for the day the money moved, nor any
+	// earlier day.
 	inBaseNoRateOperationDate
-	// inBaseNoRateLotDate: the amount is a basis assembled from a stored
-	// breakdown whose every piece IS dated, and the fx table has no rate for
-	// one of those PURCHASE days nor for any earlier one. The transfer's own
-	// day is not the day at issue and usually has a rate — it is just not one
-	// that may value shares bought on other days (#79).
+	// inBaseNoRateLotDate: no rate for one of the purchase days of a dated
+	// breakdown, nor any earlier day (#79).
 	inBaseNoRateLotDate
 )
 
-// apiInBaseGap maps a gap onto the contract's vocabulary. ok is false for the
-// two members that are not gaps at all (inBaseStruck, inBaseSameCurrency),
-// which publish no cause: one has a figure and the other has nothing to
-// convert, and the client tells those apart by comparing the operation's
-// currency with the base one.
-//
-// EXACTLY ONE CAUSE IS EVER PUBLISHED, and the order is load-bearing in one
-// place only. inBaseUndatedLot is settled before any rate is asked for (see
-// operationInBase), so a row that has both an undated piece and an unreachable
-// fx table reports the piece — the one cause no backfill will ever close, and
-// therefore the one that does not promise a figure that is not coming. The two
-// no-rate members need no order between them: they cannot both arise on one
-// row, because an amount is either money that moved on the operation's own date
-// or a basis assembled from a stored breakdown, never both, so its terms are
-// all dated the one way or all the other (see amountTerms).
+// apiInBaseGap maps a gap onto the contract; ok is false for inBaseStruck and
+// inBaseSameCurrency, which publish no cause. Only one cause is ever published.
+// inBaseUndatedLot is settled before any rate is asked for, so a row with both an
+// undated piece and a missing rate reports the one no backfill will fix. The two
+// no-rate gaps cannot both arise on one row.
 func apiInBaseGap(g inBaseGap) (apitypes.OperationInBaseGap, bool) {
 	switch g {
 	case inBaseUndatedLot:
@@ -415,125 +254,52 @@ func apiInBaseGap(g inBaseGap) (apitypes.OperationInBaseGap, bool) {
 	}
 }
 
-// rateDate is one date this conversion needs an fx rate for, carrying the gap
-// to publish if the fx table cannot reach it.
-//
-// THE GAP TRAVELS WITH THE DATE RATHER THAN BEING WORKED OUT BESIDE THE
-// FAILURE, which is the whole point of the second field. Whoever chooses the
-// date knows what kind of date it is — the day the money moved, or the day a
-// piece of a parcel was bought — and that is exactly what the caption has to
-// say. Deciding it again at the lookup, from the operation's type or from
-// whether a breakdown exists, would be a second computation of one answer, and
-// this codebase's own history says those drift: the caption would then name one
-// cause while the figure is missing for another.
+// rateDate is one date the conversion needs a rate for, with the gap to publish
+// if there is none. The gap travels with the date because whoever picks the date
+// knows what kind of date it is; working it out again at the failure would be a
+// second computation that could name the wrong cause.
 type rateDate struct {
 	on  time.Time
 	gap inBaseGap
 }
 
-// datedMinor is one amount denominated in the operation's own currency,
-// together with the date whose fx rate values it. An ordinary operation is a
-// single such amount dated on the day it happened; a transfer carrying a
-// breakdown is one per piece it moved (see operationInBase). Mirrors
-// portfolio's identically named type, which splits a position's basis the same
-// way and for the same reason.
+// datedMinor is one amount in the operation's currency with the date whose rate
+// values it: one per ordinary row, one per piece of a transfer's breakdown.
 type datedMinor struct {
 	minor int64
 	date  rateDate
 }
 
-// amountTerms decides what an operation's amount_minor is a sum OF, for the
-// purpose of expressing it in another currency, and which single date best
-// describes the result.
+// amountTerms splits amount_minor into the dated terms it is a sum of, for
+// conversion into another currency, and picks the headline date.
 //
-// Almost always the answer is trivial: the amount is one figure and it belongs
-// to the day the operation happened. A transfer that carries a FIFO breakdown
-// is the exception, and not a cosmetic one. Its amount_minor is not money that
-// moved on the transfer date at all — it is the cost basis of shares bought on
-// other days, carried across to another account of the same family, and the
-// breakdown is precisely the record of which days those were. Valuing that
-// number at the transfer day's rate prices a 2019 purchase at a 2026 rate and
-// makes the journal print, for the same shares, a figure the positions screen
-// contradicts (the positions screen having converted each lot at its own
-// purchase date's rate all along — see portfolio.Handler.positionInBase).
+// An ordinary row is one term on its own day. A transfer or conversion with a
+// breakdown is the basis of shares bought on other days, so each piece is valued
+// at its purchase day's rate, as the positions screen does; the transfer day's
+// rate would price a 2019 purchase at a 2026 rate. Both legs carry the breakdown
+// (see Store.attachTransferLots), so both journals agree.
 //
-// It applies to BOTH legs of a transfer pair. The breakdown is stored once,
-// next to the arriving leg, but it is read onto the departing one as well (see
-// Store.attachTransferLots), because both legs record one parcel: the same
-// shares, the same basis, the same purchases behind it. While only the arriving
-// leg carried it, the source account's journal was the last place in the system
-// still valuing that basis at the rate of the day the shares changed brokers —
-// the very figure README.md and the seed call an invented one — one screen away
-// from a destination journal and a destination position that both said
-// something else about the same shares.
+// The headline is the newest term date, the one rate_on can name;
+// AssembledFromLots says when it is one of several.
 //
-// The headline date is the newest date among the terms: the single date
-// rate_on can name. For an ordinary operation that is its own date, exactly as
-// before. For a transfer it is the most recent purchase in the parcel — one of
-// the several rates behind the figure rather than a rate that had no part in
-// it. No single date can describe a sum struck at several, and the API
-// contract says so; the alternative, publishing the transfer day, would name
-// the one rate deliberately NOT used. Because such a date reads exactly like an
-// ordinary rate_on and means something else, the operation says which of the
-// two it is (AssembledFromLots — see assembledFromLots) instead of leaving a
-// reader to infer it from a date comparison that cannot answer the question.
-//
-// A transfer with NO breakdown at all — a basis typed in by hand, or one
-// recorded before breakdowns were kept — used to fall back to o.OccurredOn,
-// on the reasoning that it is the only date the row contains. That reasoning
-// does not survive contact with the POSITION the same transfer produces: the
-// LOT it creates has never claimed a purchase date (see
-// portfolio.Lot.AcquiredOn and Compute's TypeTransferIn branch) — a lot's date
-// says when its shares were bought, and here nobody recorded that. Converting
-// the row on the transfer's own date published a ruble figure the position
-// built from that very basis refused to publish, so the journal and the
-// position disagreed about one undated parcel. A missing breakdown is now
-// treated as what it is — every piece of the parcel is dateless — the
-// smallest instance of the case below, and this function answers it the same
-// way: ok is false, on both legs alike.
-//
-// A dateless piece is the general case this function cannot answer at all:
-// ok is false and the caller publishes nothing. It covers a breakdown with no
-// pieces (the case just above) and a breakdown that mixes dated pieces with
-// dateless ones, which arises when a parcel already containing shares from an
-// earlier date-less transfer is moved on again. Converting the datable pieces
-// alone would understate the basis; converting the rest at the transfer's own
-// date would reintroduce exactly the invented figure this mechanism removed.
-// See amountTerms' body for where the whole row goes null instead.
-//
-// A breakdown that has drifted from the sum it must equal is refused before it
-// becomes a ruble figure, by checkStoredLots — the same check the store runs on
-// what it writes, which knows a spin-off's departing leg from a transfer's.
+// ok is false when any piece is dateless, including a transfer with no breakdown
+// at all: converting part, or using the transfer date, would publish an invented
+// figure the position refuses to publish. A breakdown that no longer sums to the
+// row is an error (checkStoredLots).
 func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, err error) {
 	if len(o.TransferLots) == 0 {
 		if carriesCostBasis(o) {
-			// No breakdown at all: the basis was given by hand, or the
-			// transfer predates breakdowns being kept. Either way there is no
-			// purchase date behind this figure — o.OccurredOn is the day the
-			// paperwork moved, not a claim about when the shares were bought
-			// — and the lot this transfer creates already says so (nil
-			// AcquiredOn, see portfolio's TypeTransferIn branch). Falling back
-			// to o.OccurredOn here would value that same undated basis at a
-			// rate the position built from it refuses to use. ok is false, on
-			// both legs, for the same reason a dateless piece below is false.
-			//
-			// A CONVERSION LEG NEVER REACHES THIS. Both of its breakdowns are
-			// built from a release of the account's own lots and neither can be
-			// given by hand, so an empty one would mean a parcel that came from
-			// nowhere — which portfolio.Compute refuses outright rather than
-			// folding (see its TypeExchangeIn branch). It is answered here all
-			// the same, and answered the same way: a figure with no purchase
-			// date behind it is not one this can date — unless it is nought,
-			// which needs no date (see costless).
+			// No breakdown: a basis given by hand or recorded before breakdowns
+			// were kept. There is no purchase date behind it, and the lot it created
+			// has none either, so ok is false on both legs, unless the basis is zero
+			// (see costless). A conversion leg never gets here; Compute refuses an
+			// empty breakdown on one.
 			if portfolio.DatelessBasis(nil, o.AmountMinor) {
 				return nil, rateDate{}, false, nil
 			}
 			return costless(o)
 		}
-		// The one term of an ordinary row, dated on the day its money moved:
-		// a missing rate for it is a missing rate for the operation's own date,
-		// which is the only row where that sentence is the true one.
-		// For a trade that is its settlement day when known (decision Р-3).
+		// For a trade the money moves on its settlement day when known (Р-3).
 		own := rateDate{on: portfolio.RateDay(o), gap: inBaseNoRateOperationDate}
 		return []datedMinor{{minor: o.AmountMinor, date: own}}, own, true, nil
 	}
@@ -543,29 +309,18 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 	terms = make([]datedMinor, 0, len(o.TransferLots))
 	for _, pc := range o.TransferLots {
 		if pc.AcquiredOn == nil && !portfolio.DatelessBasis(pc.AcquiredOn, pc.CostMinor) {
-			// Bought for nothing: nought at any day's rate, so it needs no
-			// date and adds no term (see portfolio.DatelessBasis).
+			// Bought for nothing: zero at any rate, so no term
+			// (see portfolio.DatelessBasis).
 			continue
 		}
 		if pc.AcquiredOn == nil {
-			// One piece of this parcel does not know when it was bought (see
-			// portfolio.Lot.AcquiredOn): the shares behind it arrived by an
-			// earlier transfer that carried no dates, and this move cannot
-			// invent what that one already lacked.
-			//
-			// ok is false, so the row publishes no base-currency figure at all
-			// — not the transfer date's rate applied to the undatable piece,
-			// and not a total assembled from the pieces that happen to have
-			// dates. Both would print a ruble amount that looks exactly like
-			// the correct ones on the rows above it. The position built from
-			// these same pieces goes null for the identical reason (see
-			// portfolio.Handler.positionInBase), so the two screens agree about
-			// what they do not know.
+			// A piece with no purchase date: the row publishes no base-currency
+			// figure at all, matching the position built from the same pieces (see
+			// portfolio.Handler.positionInBase).
 			return nil, rateDate{}, false, nil
 		}
-		// Every piece of a parcel is dated by the day it was BOUGHT, so a
-		// missing rate for any of them is a missing rate for a purchase date —
-		// never for the transfer's own, which is not asked about here at all.
+		// A piece is dated by its purchase, so a missing rate here is a
+		// purchase-date gap.
 		paidOn := *pc.AcquiredOn
 		if pc.RateOn != nil {
 			paidOn = *pc.RateOn
@@ -582,105 +337,33 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 	return terms, headline, true, nil
 }
 
-// costless answers for a parcel bought for nothing as a whole: no term, since
-// nought converts to nought, and the operation's own date for the one figure
-// left with a rate to strike — the fee, which belongs to the day it was paid —
-// and for rate_on, which then names the only rate the row was struck at (#226).
+// costless answers for a parcel bought for nothing: no term, and the
+// operation's own date for the fee and rate_on (#226).
 func costless(o Operation) ([]datedMinor, rateDate, bool, error) {
 	own := rateDate{on: portfolio.RateDay(o), gap: inBaseNoRateOperationDate}
 	return nil, own, true, nil
 }
 
-// operationInBase converts an operation's amount_minor and fee_minor from
-// its own currency into baseCurrency at the fx rate in effect ON THE DAY THE
-// OPERATION HAPPENED — not today's rate. This is the deliberate difference
-// from account.balanceInBase, which converts at time.Now(): that answers
-// "what is this worth now", the journal answers "what did this cost then". A
-// 2019 purchase must keep being reported at its 2019 rate however the ruble
-// moves afterwards.
+// operationInBase converts amount_minor and fee_minor into baseCurrency at the
+// rate of the day the money moved, not today's: the journal answers "what did
+// this cost then". For a transfer with a breakdown that means each piece at its
+// purchase day (see amountTerms), which keeps the row in step with its position.
 //
-// "The day the operation happened" is the day its money moved, which for a
-// transfer carrying a breakdown is not the day it is dated: that amount is a
-// basis assembled on other days, and each piece is converted at the rate of
-// the day it was bought. See amountTerms — that is the whole of the
-// difference, and it is what makes this row agree with the position built from
-// the very same pieces.
+// rate_on is the date of a rate actually used; CBR publishes nothing on weekends
+// and holidays, so it is often earlier than dated_on, the date the headline rate
+// was asked for (#80).
 //
-// portfolio.positionInBase now sits between the two rather than matching
-// either: its cost_minor and income_minor are historical exactly like this
-// function (each lot and each income operation at its own date's rate), but
-// its market_value_minor still converts at time.Now() like
-// account.balanceInBase, because a position — unlike a plain journal entry —
-// has an ongoing market value, and "what is it worth now" is a real question
-// for it. unrealized_pnl_minor is the difference between that today-valued
-// figure and the historical basis, so the position's own currency's
-// appreciation or depreciation since each purchase ends up baked into the
-// base-currency profit.
+// Amount and fee are converted and rounded separately, half away from zero, as
+// marketdata.Converter.Convert does. Several terms are summed as decimals and
+// rounded once, as portfolio.Handler.sumInBase does, so the two screens agree to
+// the minor unit.
 //
-// rate_on is the date of a rate ACTUALLY used, which is the date asked for only
-// when a rate exists for that exact day. The CBR publishes nothing on
-// weekends and holidays, so Store.FxRateOn resolves the nearest EARLIER date
-// and Rate reports it back here; publishing the date asked for instead would
-// claim a rate that never existed. For a transfer converted piece by piece it
-// is the newest of the several rates that make up the figure — see amountTerms.
-//
-// dated_on is the other half of that pair: the date the headline rate was asked
-// FOR, which is o.OccurredOn on an ordinary row and the newest purchase in the
-// parcel on a transfer. It is published because rate_on alone cannot be read as
-// a date anything happened on, and the journal's tooltip used to read it as
-// exactly that — naming a Friday for a Saturday purchase, about a third of the
-// calendar (#80). With both dates present the screen can say which day the
-// figure belongs to AND whether its rate came from an earlier one. Before this,
-// the only anchor a client had was o.OccurredOn, which is the right one for an
-// ordinary row and meaningless on a transfer, where it names the very day whose
-// rate was deliberately not used.
-//
-// The amount and the fee are converted and rounded independently
-// (decimal.Mul(rate).Round(0), the exact step marketdata.Converter.Convert
-// itself uses, so the result matches a per-amount Convert call bit for bit).
-// The fee is a figure of its own, not a term of the amount: converting their
-// sum and splitting it afterwards would round differently. Rounding is
-// half-away-from-zero, so the sign is preserved and a purchase's negative
-// amount never shrinks in magnitude. Within the amount, when it has several
-// terms, every term is multiplied as a decimal and only the total is rounded,
-// once — the same single final rounding, and the same rule
-// portfolio.Handler.sumInBase follows for a position's basis, so the two
-// figures land on the same minor unit rather than a unit apart. (The fee
-// follows rate_on's rate; a transfer carries no broker fee, so this term is in
-// practice zero times whatever rate names it.)
-//
-// It returns no object — render in_base as null, the WHOLE object, never
-// partially populated — in exactly three cases: the operation is already
-// denominated in baseCurrency (nothing to convert), no rate could be resolved
-// for one of the dates it needs nor any earlier one (marketdata.ErrNoRate), or
-// the amount cannot be split into dated terms at all because the parcel — or
-// a piece of it — does not know when it was bought (see amountTerms). An
-// operation with a converted amount but an unconverted fee, or a basis summed
-// from only the pieces that happened to convert, would be worse than an
-// honest "can't convert this one".
-//
-// EVERY RETURN NAMES THE GAP AND THE OBJECT AT ONCE, which is the point of the
-// second result rather than a flag computed beside the call: the sentence the
-// reader is shown and the figure they are not shown leave this function in one
-// statement, so the caption cannot come to describe a failure other than the one
-// that happened. Mirrors portfolio.Handler.positionInBase, and for the same
-// reason. The missing-rate branches take their value from the very date the
-// lookup was made for (rateDate.gap), so the two no-rate causes are told apart
-// by what the date IS rather than by re-reading the operation afterwards —
-// which is what makes «нет курса на дату операции» impossible to print over a
-// missing PURCHASE-date rate (#79). handleListByAccount closes the loop from the
-// other end: it publishes a cause only when this function reports one.
-//
-// A non-nil error means a genuine failure — a DB error, a canceled context,
-// or (see amountTerms) a transfer's stored breakdown no longer summing to
-// the operation it describes — that the caller must surface as a request
-// error, never silently rendered as null or, worse, as a wrong number built
-// from a broken breakdown. An outage read as "no rate that far back" and
-// corrupted data read as a plausible ruble figure are the same category of
-// mistake: both hide a genuine failure behind an answer that looks routine.
-// The gap returned beside such an error is inBaseStruck and means nothing: an
-// outage is not one of the causes this vocabulary describes, and
-// handleListByAccount reads the error first.
+// No object (in_base null as a whole) when the row is already in baseCurrency,
+// when a needed rate is missing, or when a piece is undated. Each return names
+// the object and the gap together, so the caption cannot describe a different
+// failure from the one that happened (#79). An error is a genuine failure (DB,
+// cancelled context, broken breakdown) and must fail the request; the gap beside
+// it means nothing.
 func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.OperationInBase, inBaseGap, error) {
 	if o.Currency == baseCurrency {
 		return nil, inBaseSameCurrency, nil
@@ -690,19 +373,12 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 		return nil, inBaseStruck, err
 	}
 	if !ok {
-		// The amount cannot be broken into terms that all carry a date, so
-		// there is no honest set of rates to strike it at (see amountTerms).
-		// That is the function's ONLY reason to answer ok=false, which is what
-		// lets one constant stand for it here: a parcel — or a piece of one —
-		// that does not know when it was bought. Nothing has been asked of the
-		// fx table at this point, and that is what settles a row where both
-		// this and a missing rate are true: the cause reported is the one no
-		// backfill will close (see apiInBaseGap).
+		// Settled before any rate is asked for, so this cause wins over a
+		// missing rate (see apiInBaseGap).
 		return nil, inBaseUndatedLot, nil
 	}
 
-	// The headline rate values the fee and supplies rate_on, so without it
-	// there is no object to publish at all.
+	// The headline rate values the fee and supplies rate_on.
 	rl := h.rateFor(ctx, o.Currency, baseCurrency, headline.on, cache)
 	if rl.err != nil {
 		if errors.Is(rl.err, marketdata.ErrNoRate) {
@@ -723,19 +399,8 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 		amount = amount.Add(decimal.NewFromInt(t.minor).Mul(tr.rate))
 	}
 
-	// rate_on alone cannot be read honestly without knowing whether it is THE
-	// rate behind the figure or merely the newest of several — that is
-	// assembledFromLots(o), published on the Operation this object sits
-	// inside of (Operation.AssembledFromLots), not repeated here: it is a fact
-	// about o.TransferLots, unchanged by whatever this function just computed,
-	// so duplicating it on this object would only be two places to keep in
-	// sync for a single answer that is the same at both (#67).
-	//
-	// Each figure is rounded once and refused rather than wrapped if it does
-	// not fit an int64 of minor units (money.ErrOverflow, #27). The refusal is
-	// an error and not one of the published gaps above: such a gap says this row has no
-	// rate yet, which the backfill fixes, and an amount too large to state is
-	// not waiting for anything.
+	// Each figure is refused rather than wrapped if it does not fit an int64
+	// (#27). That is an error, not a gap: nothing will fix it later.
 	amountMinor, err := money.Minor(amount)
 	if err != nil {
 		return nil, inBaseStruck, fmt.Errorf("%w: amount of operation %s in %s", err, o.ID, baseCurrency)
@@ -749,60 +414,19 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 		FeeMinor:    feeMinor,
 		Currency:    baseCurrency,
 		RateOn:      rl.date.Format("2006-01-02"),
-		// The date the headline rate was ASKED for, beside the date it came
-		// from. They are equal only when that very day had a rate; the CBR
-		// publishes none at weekends and holidays, so rate_on is routinely an
-		// earlier day, and a caption that read it as the day the money moved —
-		// or as the day a parcel was bought — would name a day nothing happened
-		// on (#80). Taken from the same headline the rate above was resolved
-		// for, so the pair cannot come to describe two different lookups.
+		// The date the headline rate was asked for, beside the one it came
+		// from (#80).
 		DatedOn: headline.on.Format("2006-01-02"),
 	}, inBaseStruck, nil
 }
 
-// rateQueries enumerates every fx rate the loop in handleListByAccount is
-// about to ask for, so one RatesOn call can resolve them all and every rateFor
-// below finds its answer already in the memo. A page of 200 operations on 200
-// different days costs one round trip for the lot, instead of one per distinct
-// date — and a date that needs a RUB bridge cost up to six on its own (#45).
-//
-// IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES, NEVER WRITTEN BESIDE
-// IT. Every date here comes out of amountTerms — the same function
-// operationInBase splits the amount with — so there is no second list of dates
-// to keep in step with the first, because there is no second list. This
-// codebase has been bitten more than once by two computations of one value
-// drifting apart, and a prefetch is the worst place for it: the two disagree in
-// silence. Calling amountTerms twice per operation is cheap and safe: it is a
-// pure function of the operation, reading nothing but the row and its stored
-// breakdown.
-//
-// ITS ERROR IS DELIBERATELY IGNORED. amountTerms fails when a transfer's
-// stored breakdown no longer sums to the operation carrying it — a genuine
-// failure that must reach the user as one, and it does: the loop calls the same
-// function on the same row moments later and returns the error from the place
-// that knows which figure it was building (see operationInBase). Surfacing it
-// here as well would put the same judgement in two places, and refusing to
-// prefetch is all this function can usefully do about it — which is what
-// happens anyway, since a failing amountTerms also answers ok=false.
-//
-// Completeness is an optimization, not a correctness condition, and the
-// asymmetry is deliberate. Asking for a rate the loop turns out not to need
-// costs one row in a query that was happening anyway. FAILING to ask for one
-// costs a round trip and nothing else, because rateFor resolves whatever it
-// does not find, exactly as it did before this existed. What would be dangerous
-// is naming a DIFFERENT date than the loop asks for and having its answer read
-// as the loop's — and that cannot happen, because the memo is keyed by the
-// currency and the day themselves (see rateKey), so a mis-enumerated rate is
-// filed where nothing looks for it.
-//
-// Duplicates are collapsed as they are collected rather than in a pass of their
-// own: one page routinely holds many operations on one day, and a transfer's
-// headline date is always one of its own term dates, so the same (currency,
-// day) arrives here several times over. Every repeat would be walked again by
-// prewarmRates and once more by RatesOn's own resolution, neither of which the
-// database is billed for but both of which are paid for in full. The seen set
-// is keyed with rateKey — the same identity the memo itself uses — rather than
-// a second, independent notion of "the same query" that could disagree with it.
+// rateQueries lists every rate the handleListByAccount loop is about to ask
+// for, so one RatesOn call fills the memo (#45). Dates come from amountTerms, the
+// same function operationInBase uses, so there is no second list to drift. Its
+// error is ignored: the loop calls it again and reports it where the figure is
+// built. A missed query only costs a round trip, since rateFor resolves misses,
+// and a wrong one is filed under a key nothing reads. Duplicates are dropped with
+// rateKey, the memo's own identity.
 func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 	var out []marketdata.RateQuery
 	seen := make(map[rateKey]bool, len(ops))
@@ -816,24 +440,16 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 	}
 	for _, o := range ops {
 		if o.Currency == baseCurrency {
-			// operationInBase short-circuits on this row without resolving
-			// anything: there is nothing to convert.
+			// operationInBase converts nothing for this row.
 			continue
 		}
 		terms, headline, ok, _ := amountTerms(o)
 		if !ok {
-			// Either the amount cannot be split into dated terms at all, or the
-			// breakdown is broken (the error ignored above). Both leave the loop
-			// publishing nothing for this row, and neither gives it a date worth
-			// asking about.
+			// Undatable or broken: the loop publishes nothing for this row.
 			continue
 		}
-		// The headline rate values the fee and supplies rate_on, and the loop
-		// asks for it in its own right (see operationInBase) — so this asks for
-		// it too, rather than relying on amountTerms picking it from among the
-		// terms. It does today, on both branches, which is why the seen set
-		// swallows this line's query every time; that is the redundancy being
-		// paid for, and it is a line of code, not a round trip.
+		// Asked for in its own right, as operationInBase does; the seen set
+		// drops it when it is already a term date.
 		add(o.Currency, headline.on)
 		for _, t := range terms {
 			add(o.Currency, t.date.on)
@@ -842,35 +458,11 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 	return out
 }
 
-// prewarmRates resolves queries in one round trip and files each answer in the
-// request's memo under the key rateFor will look it up by.
-//
-// NOTHING HERE FAILS THE REQUEST, and that is not laziness. This call buys
-// speed, not truth: every figure on the page is struck by rateFor, which
-// resolves whatever it does not find in the memo. A batch that fails leaves the
-// memo empty and the page is computed exactly as it was before any prefetch
-// existed. An outage is met again by the very next lookup and reported from the
-// code that knows which figure it was resolving and can tell a missing rate (a
-// gap in the journal) from an outage (a 500). Failing here would move that
-// judgement to a place that cannot make it, and would turn into an error page
-// every request the fallback could have served correctly.
-//
-// WHICH ANSWERS GET FILED IS NOT DECIDED HERE. Rates.Answered walks the
-// queries and hands back only the ones the batch resolved, so a query it never
-// answered leaves no entry and rateFor resolves it itself, while a query
-// answered with "no rate" arrives carrying marketdata.ErrNoRate and is filed as
-// the honest gap it is. That rule is one statement for all three screens that
-// warm a memo this way (see marketdata.Rates.Answered); only the key an answer
-// is filed under is this package's own.
-//
-// The error is dropped here and reported one layer down. A failure specific to
-// the BATCH statement leaves the page correct and slow — rateFor resolves every
-// figure per pair — so there is nothing for this handler to tell the user, and
-// an error page would be a worse outcome than a slow one. But there IS something
-// to tell whoever runs this: the optimization has stopped working and no request
-// will ever say so. That warning is written where the batch actually dies, which
-// is the only place all four survivors of such a failure pass through
-// (marketdata.Converter.fetchRates, #70).
+// prewarmRates resolves queries in one round trip and files each answer under
+// the key rateFor looks up. Nothing here fails the request: the batch buys speed
+// only, and rateFor resolves whatever is missing and tells a missing rate from an
+// outage. Which answers get filed is marketdata.Rates.Answered's rule; a batch
+// failure is logged in marketdata.Converter.fetchRates (#70).
 func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
 	if len(queries) == 0 {
 		return
@@ -884,9 +476,7 @@ func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQue
 	}
 }
 
-// parseDate parses a YYYY-MM-DD date, matching account.parseAsOf's format.
-// Business-rule checks (e.g. "not in the future") are left to the service,
-// which already enforces them when replaying the journal.
+// parseDate parses a YYYY-MM-DD date; business rules belong to the service.
 func parseDate(s string) (time.Time, error) {
 	d, err := time.Parse("2006-01-02", s)
 	if err != nil {
@@ -895,9 +485,8 @@ func parseDate(s string) (time.Time, error) {
 	return d, nil
 }
 
-// nullableDecimal is the same conversion without a response writer, for the
-// callers that build an operation away from an HTTP handler (see
-// OperationFromCreateRequest). One reading of the field, two doors.
+// nullableDecimal is the same conversion without a response writer, for
+// OperationFromCreateRequest.
 func nullableDecimal(n nullable.Nullable[string], field string) (*decimal.Decimal, error) {
 	if !n.IsSpecified() || n.IsNull() {
 		return nil, nil
@@ -918,17 +507,9 @@ func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// parsePage reads `limit` and `offset` and enforces the bounds the contract
-// states. See defaultListLimit for why anything outside them is a 400 rather
-// than a quietly different page.
-//
-// It is written the same way as the instrument catalog's parsePage
-// (internal/instrument/http.go) and the importer's
-// (internal/importer/tinvest/http.go) rather than shared with them, for the
-// reason the catalog's own comment gives: what the three have in common is a
-// shape, and what they do not have in common is the numbers. A shared parser
-// would hold one ceiling for all of them, so raising one endpoint's would
-// silently raise the others'.
+// parsePage reads limit and offset and refuses anything outside the bounds the
+// contract states (see defaultListLimit). The catalog and the importer have their
+// own copies on purpose: they share a shape, not the numbers.
 func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
 	limit = defaultListLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -1063,11 +644,8 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// hasMore comes back from the query rather than from anything measured
-	// here. A full page is the case it exists for: the page's own length cannot
-	// say whether the journal continues past it, and a client that took the
-	// length for that answer hid the only control that could have reached the
-	// older rows (#86).
+	// hasMore comes from the query: a full page cannot tell whether the
+	// journal continues (#86).
 	filter, ok := parseJournalFilter(w, r)
 	if !ok {
 		return
@@ -1112,13 +690,10 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 		return
 	}
 
-	// Scoped to this request only: see operationInBase/rateKey.
+	// Per request only.
 	rates := make(map[rateKey]*rateLookup)
 
-	// One round trip for every rate the loop below is about to want. It is a
-	// cache warm-up and nothing more: what it misses, and everything it would
-	// have resolved had it failed outright, the loop resolves for itself (see
-	// rateQueries, prewarmRates and rateFor).
+	// A warm-up only: the loop resolves whatever it misses.
 	h.prewarmRates(r.Context(), rateQueries(ops, sp.BaseCurrency), rates)
 
 	ids := make([]uuid.UUID, 0, len(ops))
@@ -1159,10 +734,7 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 		} else {
 			api.InBase = nullable.NewNullNullable[apitypes.OperationInBase]()
 		}
-		// The cause is published only when operationInBase reports one, so a
-		// row that HAS a figure — and a row that never needed one, being in the
-		// base currency already — carries no «not converted» caption at all
-		// (see apiInBaseGap).
+		// A cause is published only when operationInBase reports one.
 		if apiGap, missing := apiInBaseGap(gap); missing {
 			api.InBaseGap = nullable.NewNullableWithValue(apiGap)
 		} else {

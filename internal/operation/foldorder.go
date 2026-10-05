@@ -6,48 +6,23 @@ import (
 	"strings"
 )
 
-// SourceManual is a row a person entered. SourceRegistry, its counterpart for
-// rows the corporate-actions registry materializes, is declared beside the
-// journal's own types (see operation.go): the conversion pair landed it there
-// first, and one constant in two files is how the two eventually disagree.
+// SourceManual is a row a person entered. SourceRegistry is declared in
+// operation.go.
 const SourceManual = "manual"
 
-// foldRank orders operations WITHIN one day, ahead of their created_at.
+// foldRank orders operations within one day, ahead of their created_at.
 //
-// # Why a day needs an order at all
+// Same-day order decides real figures: a sale before its covering purchase is an
+// oversell, and ties in the FIFO queue break by it. A registry row is written long
+// after the trades it must precede (a 2022 split learned in 2026), so by
+// created_at it would fold last on its day, after trades already in the new
+// quantity, and multiply them again. EffectiveOn is the first day in the new
+// quantity, so the registry row folds at the start of it: rank 0. Everything else
+// is rank 1.
 //
-// The engine folds a journal in sequence, so two operations of the same date
-// are applied in whatever order the journal hands them over, and that order
-// decides real figures: a sale folded before the purchase that covers it is an
-// oversell the engine refuses, and among parcels bought on one day it is this
-// order the FIFO queue breaks ties by. Until the registry arrived, created_at
-// answered for all of it — the order things were written down in, which for a
-// person's own entries is the only order there is.
-//
-// # Why the registry cannot use it
-//
-// A registry row is written LONG AFTER the trades it must precede. The owner
-// buys Amazon in 2021, imports the history in 2026, and only then does the
-// registry learn about the 2022 split; the split row is stamped in 2026 and
-// dated 2022. By created_at it is the youngest row of its day and folds last —
-// after any trade dated the split day itself, which is a trade already made in
-// the NEW quantity and would be multiplied a second time.
-//
-// The event's own meaning settles it: EffectiveOn is the first day the paper
-// trades in the new quantity, so the multiplication belongs at the START of
-// that day, before anything else dated it. Rank 0 puts it there. Everything
-// else keeps rank 1 and goes on being ordered by when it was written down.
-//
-// # One rule, two spellings, held together by a test
-//
-// The engine reads a journal two ways — through SQL (the ORDER BY of
-// ListForEngine and its siblings) and in memory (sortJournal, used while a
-// write is being checked). Both must fold a day the same way or a journal is
-// accepted in one order and replayed in another, which is the exact fault this
-// package spends most of its care on. So the rank is defined ONCE, in
-// foldRanks below: this function reads it, and engineOrderSQL builds the SQL
-// CASE expression from the same map rather than restating it.
-// TestSQLAndMemoryFoldADayInTheSameOrder is what fails if they part.
+// The SQL order (engineOrderSQL) and the in-memory one (sortJournal) are both
+// built from foldRanks; TestSQLAndMemoryFoldADayInTheSameOrder fails if they
+// part.
 func foldRank(source string) int {
 	if rank, special := foldRanks[source]; special {
 		return rank
@@ -55,28 +30,20 @@ func foldRank(source string) int {
 	return defaultFoldRank
 }
 
-// foldRanks names every source that does NOT fold in the ordinary place, and
-// engineOrderSQL turns it into SQL. One entry today; the conversions and
-// spin-offs the registry will materialize carry the same source and so need no
-// entry of their own.
+// foldRanks names every source that does not fold in the ordinary place.
+// Conversions and spin-offs share SourceRegistry and need no entry.
 var foldRanks = map[string]int{SourceRegistry: 0}
 
-// defaultFoldRank is where a row folds when nothing special is said about its
-// source: after every ranked row of its day, in the order it was written down.
+// defaultFoldRank: after the ranked rows of the day, in the order written.
 const defaultFoldRank = 1
 
-// engineOrderSQL is the ORDER BY every query that feeds the engine uses,
-// written from foldRanks so the database and sortJournal cannot come to
-// disagree. The CASE arms are generated in a fixed order (sorted by source) so
-// the string is stable across runs and shows up unchanged in a diff.
-//
-// It orders by the date first, the rank within the date, the instant within the
-// rank (rows without one after those with one), and created_at last — the same
-// keys, in the same order, that foldsBefore compares.
+// engineOrderSQL is the ORDER BY of every query that feeds the engine, built
+// from foldRanks: date, rank, instant (rows without one last), created_at, the
+// keys foldsBefore compares. CASE arms are sorted by source so the string is
+// stable.
 func engineOrderSQL() string { return foldOrderSQL(false) }
 
-// listingOrderSQL is the journal screen's order: the engine's, newest first, so
-// a day reads from what happened last back to what happened first.
+// listingOrderSQL is the journal screen's order: the engine's, newest first.
 func listingOrderSQL() string { return foldOrderSQL(true) }
 
 // foldOrderSQL writes the engine's order, or its exact reverse.
@@ -90,43 +57,27 @@ func foldOrderSQL(reverse bool) string {
 		sources = append(sources, source)
 	}
 	sort.Strings(sources)
-	// No ranked source: every row folds in the ordinary place and the CASE
-	// would have no arms at all, which is not valid SQL. Written out rather
-	// than left to fail, so that emptying the table produces a journal ordered
-	// the old way — a wrong ANSWER a test can catch — instead of a syntax error
-	// every query dies on, which is a test going red for a reason that has
-	// nothing to do with what it checks.
+	// With no ranked source the CASE would have no arms, which is not valid
+	// SQL; this keeps an empty map a wrong order a test can catch rather than
+	// a syntax error.
 	if len(sources) == 0 {
 		return fmt.Sprintf("ORDER BY occurred_on %[1]s, occurred_at %[1]s %[2]s, created_at %[1]s", asc, nulls)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "ORDER BY occurred_on %s, CASE source", asc)
 	for _, source := range sources {
-		// The sources are this package's own constants, not anything a request
-		// carries, so quoting them is a matter of writing valid SQL rather than
-		// of defending against input. A source that somehow held a quote would
-		// produce a query that fails to parse — loudly, at once, in every test.
+		// Sources are package constants, not request data.
 		fmt.Fprintf(&b, " WHEN '%s' THEN %d", source, foldRanks[source])
 	}
 	fmt.Fprintf(&b, " ELSE %[2]d END %[1]s, occurred_at %[1]s %[3]s, created_at %[1]s", asc, defaultFoldRank, nulls)
 	return b.String()
 }
 
-// foldsBefore is the order the engine folds a journal in, for two rows: the
-// day; the rank the source gives a row within its day (foldRank); then the
-// instant the source says it happened, where it says one, with the rows that
-// carry one first; then when it was recorded.
-//
-// # Why the instant, and why rows without one go last
-//
-// A broker reports the moment of a trade, and the moment is what decides a day:
-// which of two same-day parcels a sale consumes, and whether a sale is covered
-// by a purchase made that morning. When a row reached the journal decides
-// nothing about either — a broker that reports one operation late used to put it
-// at the end of its day, after rows that happened later, and the realized
-// profit moved with it (#198). A row entered by hand carries a day and no
-// moment; it goes after the timed rows of its day, in the order rows without one
-// always went — the order they were written down.
+// foldsBefore is the engine's fold order for two rows: day, rank within the
+// day (foldRank), the source's instant with timed rows first, then created_at.
+// The broker's instant, not when a row arrived, decides which same-day parcel a
+// sale consumes (#198); a hand row has no instant and folds after the timed rows
+// of its day.
 func foldsBefore(a, b Operation) bool {
 	if !a.OccurredOn.Equal(b.OccurredOn) {
 		return a.OccurredOn.Before(b.OccurredOn)
@@ -140,9 +91,8 @@ func foldsBefore(a, b Operation) bool {
 	return a.CreatedAt.Before(b.CreatedAt)
 }
 
-// byInstant is foldsBefore's third key on its own: the instant the source gave,
-// rows that carry one ahead of rows that do not. decided is false when it does
-// not tell the two apart — the same instant, or neither has one.
+// byInstant is foldsBefore's third key: timed rows first, then by instant.
+// decided is false when it cannot tell the two apart.
 func byInstant(a, b Operation) (before, decided bool) {
 	switch {
 	case a.OccurredAt != nil && b.OccurredAt != nil:
@@ -158,8 +108,7 @@ func byInstant(a, b Operation) (before, decided bool) {
 	return false, false
 }
 
-// engineOrder is engineOrderSQL computed once. The map it is built from is a
-// package-level constant in all but name.
+// engineOrder is engineOrderSQL computed once.
 var engineOrder = engineOrderSQL()
 
 // listingOrder is listingOrderSQL computed once.

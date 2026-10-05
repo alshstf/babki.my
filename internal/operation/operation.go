@@ -1,13 +1,7 @@
-// Package operation owns the unified operations journal — the single source
-// of truth of the system. Positions and valuations are deterministic
-// projections computed from it. Table: operations.
-//
-// Operation and Type are aliases of the identically-named types defined in
-// package portfolio. They live there so the pure computation engine has no
-// dependency on this package's Store/Service, letting Service depend on
-// portfolio (to replay the journal through Compute for consistency checks)
-// without an import cycle. This package remains the canonical name for the
-// domain type; the split is a placement detail only.
+// Package operation owns the operations journal, the system's single source of
+// truth; positions and valuations are projections of it. Operation and Type are
+// aliases of portfolio's types, so the engine needs nothing from this package and
+// Service can replay journals through it without an import cycle.
 package operation
 
 import "babki.my/babki/internal/portfolio"
@@ -42,20 +36,11 @@ const (
 	TypeConversion   = portfolio.TypeConversion
 )
 
-// SourceRegistry is the writer of the rows the corporate-actions registry
-// materializes into journals: splits, and the two legs of a conversion or of a
-// spin-off.
-//
-// IT IS A SOURCE OF ITS OWN rather than "manual", and the distinction is what
-// the delete rule already reads (see Service.Delete): a registry row is a
-// projection of a fact recorded elsewhere — what happened to the PAPER, which
-// is true for every account that held it — so deleting the row on one account
-// would be undone the next time the registry is applied, exactly as an imported
-// row is written back by its importer. The fact is edited in the registry, and
-// the journals follow.
-//
-// The set of sources is closed by a CHECK constraint on the column, so adding
-// one is a migration (0022) as well as a constant.
+// SourceRegistry writes the rows the corporate-actions registry materializes:
+// splits and the legs of conversions and spin-offs. Like an imported row, a
+// registry row is a projection of a fact recorded elsewhere and would be written
+// back if deleted, so it is edited in the registry. The column's CHECK constraint
+// closes the set of sources (migration 0022).
 const SourceRegistry = "registry"
 
 // SourceTable is the writer of rows loaded from a table a person uploaded

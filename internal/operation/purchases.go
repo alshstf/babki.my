@@ -16,38 +16,28 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// StatePurchases records what the shares of an arrival from another broker
-// cost and when they were bought, and returns the arrival as stored.
+// StatePurchases records what the shares of an arrival from another broker cost
+// and when they were bought, and returns the arrival as stored.
 //
-// Such an arrival — a transfer_in with no sibling — comes with no purchases
-// behind it: the broker that sent the shares does not pass them on. Until they
-// are stated the shares count as bought for nothing (see
-// portfolio.UnknownCost), which overstates every profit on them by what was
-// really paid. The pieces stated here become the arrival's breakdown, exactly
-// as a transfer between the owner's own accounts carries the purchases of the
-// account it left, and its basis becomes their sum.
+// Such an arrival (a transfer_in with no sibling) comes with no purchases; until
+// they are stated the shares count as bought for nothing (portfolio.UnknownCost).
+// The stated pieces become its breakdown and their sum its basis. A transfer
+// between the owner's own accounts is refused: its purchases belong where the
+// shares first arrived.
 //
-// A transfer between two of the owner's accounts is refused: its purchases are
-// the source account's, and the place to state them is wherever the shares
-// first arrived.
-//
-// Stating them again replaces what was stated before. Shares of the arrival
-// may since have moved on to the owner's other accounts, each move carrying a
-// breakdown released from the old basis; every such later move made by hand is
-// released again from the restated history, in the order the moves happened,
-// and written with the statement in one transaction (issue #227). A move whose
-// basis was given by hand carries no breakdown and stays as it is; a move an
-// importer recorded is the importer's, and when the restated history can no
-// longer take it the statement is refused with the engine's reason.
+// Stating again replaces the previous statement. Later hand-made moves of those
+// shares to the owner's other accounts are released again from the restated
+// history, in order, in the same transaction (#227). A move with a hand-given
+// basis stays as it is; an imported move is the importer's, and if the restated
+// history cannot take it the statement is refused with the engine's reason.
 func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.UUID, stated []StatedPurchase) (Operation, error) {
 	pieces, err := piecesOf(stated)
 	if err != nil {
 		return Operation{}, err
 	}
-	// Which accounts to lock cannot be learned under the lock, so the row and
-	// the accounts its shares went on to are read once on the pool and read
-	// again inside; an account that turns up only the second time means the
-	// shares moved meanwhile, and the request is refused rather than half done.
+	// The accounts to lock are read on the pool and again inside; an account
+	// that appears only the second time means the shares moved meanwhile, and
+	// the request is refused.
 	first, err := s.store.ByID(ctx, spaceID, operationID)
 	if err != nil {
 		return Operation{}, err
@@ -105,9 +95,8 @@ func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.
 				return err
 			}
 		}
-		// Every account touched, read back as stored and folded once more
-		// before the commit: the pieces' quantities come back from a column
-		// with a scale (see writeTransferLots).
+		// Every touched account, read back as stored and folded once more before
+		// the commit.
 		for accountID := range journals {
 			journal, err := st.ListForEngine(ctx, spaceID, accountID)
 			if err != nil {
@@ -126,9 +115,8 @@ func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.
 }
 
 // onwardJournals reads the journal of the arrival's account and of every
-// account its shares went on to after it: each later transfer of the paper out
-// of an account already read is followed to the account it went into, until
-// none is left. The journals are keyed by account.
+// account its shares went on to, following each later transfer of the paper until
+// none is left. Keyed by account.
 func onwardJournals(ctx context.Context, st *Store, spaceID uuid.UUID, arrival Operation) (map[uuid.UUID][]Operation, error) {
 	journals := make(map[uuid.UUID][]Operation)
 	queue := []uuid.UUID{arrival.AccountID}
@@ -161,33 +149,25 @@ func onwardJournals(ctx context.Context, st *Store, spaceID uuid.UUID, arrival O
 	return journals, nil
 }
 
-// movesOnward reports whether o moves shares of the arrival's paper from one of
-// the owner's accounts to another and folds after the arrival: only such a
-// move can carry the arrival's shares, wherever they have got to by then.
+// movesOnward reports whether o moves the arrival's paper between the owner's
+// accounts and folds after the arrival.
 func movesOnward(o, arrival Operation) bool {
 	return o.Type == TypeTransferOut && o.TransferGroupID != nil &&
 		o.InstrumentID != nil && arrival.InstrumentID != nil && *o.InstrumentID == *arrival.InstrumentID &&
 		foldsAfter(o, arrival)
 }
 
-// foldsAfter reports whether a folds after b in the engine's order (see
-// foldsBefore), whichever accounts the two belong to.
+// foldsAfter reports whether a folds after b (see foldsBefore).
 func foldsAfter(a, b Operation) bool { return foldsBefore(b, a) }
 
 // move is one transfer between the owner's accounts, both legs.
 type move struct{ out, in Operation }
 
-// releaseOnward releases again, from the restated history, every later move of
-// the arrival's paper made by hand with a breakdown — in the order the moves
-// happened, so that a move out of an account the shares reached by an earlier
-// move is released from that account as the earlier one left it — exactly as
-// CreateTransfer released it when it was made: the FIFO front of the source
-// account's position at the move's place in its journal. journals is updated
-// in place; the moves whose breakdown changed are returned.
-//
-// A move whose basis was given by hand has no breakdown and nothing to
-// release, and a move an importer wrote is the importer's own record; both are
-// left as they are, for the caller's fold to accept or refuse.
+// releaseOnward releases again, from the restated history, every later hand
+// move of the arrival's paper that has a breakdown, in the order the moves
+// happened and as CreateTransfer released it. journals is updated in place; moves
+// whose breakdown changed are returned. Moves with a hand-given basis and imported
+// moves are left for the caller's fold to accept or refuse.
 func releaseOnward(journals map[uuid.UUID][]Operation, arrival Operation) ([]move, error) {
 	var outs []Operation
 	for _, journal := range journals {
@@ -252,10 +232,9 @@ func sameLots(a, b []ReleasedLot) bool {
 	})
 }
 
-// setMoveBreakdown writes a move's breakdown released again: the basis on both
-// legs and the pieces beside the arriving one, where every read takes them
-// from for both (see attachTransferLots). A savepoint inside the caller's
-// transaction.
+// setMoveBreakdown writes a move's re-released breakdown: the basis on both legs,
+// the pieces beside the arriving one (see attachTransferLots). A savepoint inside
+// the caller's transaction.
 func (s *Store) setMoveBreakdown(ctx context.Context, spaceID uuid.UUID, out, in Operation) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -294,10 +273,9 @@ type StatedPurchase struct {
 	AcquiredOn *time.Time
 }
 
-// piecesOf turns stated purchases into the pieces of a breakdown. The cost of a
-// piece priced per share is struck here, by the same rounding a buy's amount
-// is (TradeAmountMinor), so the figure recorded is never one a browser worked
-// out; the commission is added to it, as it is to every purchase's lot.
+// piecesOf turns stated purchases into breakdown pieces. A per-share price is
+// struck by TradeAmountMinor's rounding, and the commission is added, as for any
+// purchase's lot.
 func piecesOf(stated []StatedPurchase) ([]ReleasedLot, error) {
 	pieces := make([]ReleasedLot, 0, len(stated))
 	for i, sp := range stated {
@@ -337,14 +315,9 @@ func piecesOf(stated []StatedPurchase) ([]ReleasedLot, error) {
 }
 
 // checkStatedPurchases checks what an owner states about an arrival and returns
-// the basis it adds up to.
-//
-// The pieces must account for exactly the shares that arrived — no more, no
-// fewer — because they become the lots those shares are held as. A date is
-// optional: a price known without its day is still a price, and the shares then
-// carry it undated (see portfolio.DatelessBasis for what that costs). A date
-// given cannot be after the day the shares arrived, since they were bought
-// before they were moved.
+// the basis it adds up to. The pieces must account for exactly the shares that
+// arrived. A date is optional (an undated piece is DatelessBasis) but cannot be
+// after the arrival.
 func checkStatedPurchases(op Operation, pieces []ReleasedLot) (int64, error) {
 	if len(pieces) == 0 {
 		return 0, fmt.Errorf("%w: state at least one purchase", family.ErrValidation)
@@ -389,10 +362,8 @@ func checkStatedPurchases(op Operation, pieces []ReleasedLot) (int64, error) {
 	return cost, nil
 }
 
-// journalReplacing is the journal with one row restated under its own moment
-// of recording, in the order the engine folds it: on its own day it folds
-// exactly where the row it replaces did, and an edit that moves it to another
-// day puts it among that day's rows by the same moment.
+// journalReplacing is the journal with one row restated under its own created_at,
+// in fold order: on its own day it folds where the original did.
 func journalReplacing(journal []Operation, op Operation) []Operation {
 	out := make([]Operation, len(journal))
 	copy(out, journal)
@@ -414,10 +385,10 @@ const (
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 )
 
-// setPurchases writes an arrival's stated purchases: the basis on the row, the
-// pieces as its breakdown and, for a row an importer rebuilds, a copy under the
-// row's own name for the importer to find (see StatedPurchases). One
-// transaction — a savepoint, when the caller already holds one.
+// setPurchases writes an arrival's stated purchases: basis on the row, pieces as
+// its breakdown, and, for an imported row, a copy under the row's own name for the
+// importer to restore (see StatedPurchases). A savepoint when the caller already
+// holds a transaction.
 func (s *Store) setPurchases(ctx context.Context, spaceID uuid.UUID, op Operation, cost int64, pieces []ReleasedLot) (Operation, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -464,10 +435,9 @@ type StatedKey struct {
 	ExternalID string
 }
 
-// StatedPurchases returns what the owner stated about the arrivals an importer
-// wrote into these accounts, by row, each row's pieces in order. An importer
-// that rebuilds its rows from the broker's record reads this to put the pieces
-// back (see StatePurchases).
+// StatedPurchases returns, by row, what the owner stated about arrivals an
+// importer wrote into these accounts, pieces in order, so the importer can put
+// them back after a rebuild.
 func (s *Store) StatedPurchases(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, source string) (
 	map[StatedKey][]ReleasedLot, error,
 ) {

@@ -18,69 +18,44 @@ import (
 )
 
 // ErrImportContract means the delta itself is wrong, as opposed to one broker
-// operation in it being unrecordable.
-//
-// The difference is the whole reason this file has two kinds of failure. A
-// candidate that cannot be applied is NEWS ABOUT THE BROKER'S DATA — an
-// operation this program does not know how to record — and it must not stop the
-// rest of a history from loading; it comes back in refused, with its real
-// reason, to be shown to the owner. A delta that names one broker record twice,
-// or asks to remove a row that is not there, or a row a person entered by hand,
-// is instead NEWS ABOUT THE CALLER: it computed its difference wrongly, so the
-// rest of that difference cannot be trusted either and none of it is written.
-// Swallowing that as a refusal would leave the journal holding half of a
-// mistaken decision, with nothing to tell anyone it happened.
+// operation in it being unrecordable. An unrecordable candidate is news about the
+// broker's data: it comes back in refused and the rest still loads. A delta that
+// names a record twice, or removes a missing or hand-entered row, is news about
+// the caller: its whole difference is suspect, so none of it is written.
 var ErrImportContract = errors.New("import delta contradicts what the journal expects of an importer")
 
-// ImportDelta is one importer's difference against the journal: the operations
-// it wants recorded and the rows it wants gone, applied together or not at all.
+// ImportDelta is one importer's difference against the journal: operations to
+// record and rows to remove, applied together or not at all.
 //
-// Every operation in Add must name a Source that is not a person's own entry
-// and carry the ExternalID of the record it was projected from — that string is
-// the only link back to the mirror, and the journal's unique index over
-// (account, source, external id) is what keeps one broker record from becoming
-// two journal rows.
+// Every operation in Add names a non-manual Source and the ExternalID of the
+// record it was projected from; the unique index over (account, source, external
+// id) keeps one broker record from becoming two rows.
 //
-// THE TWO LEGS OF A TRANSFER ARRIVE ALREADY PAIRED, sharing a TransferGroupID
-// the caller computed. They are accepted or refused as one event: half a
-// transfer would leave shares in an account nothing ever sent them from. What
-// the caller must NOT supply is the parcel itself — TransferLots and the basis
-// in AmountMinor are worked out here, from the source account's own journal, by
-// the same release the manual transfer path uses. The caller cannot know them:
-// a FIFO basis is a property of the history, not of the broker's message.
+// Transfer legs arrive paired by a caller-computed TransferGroupID and are taken
+// or refused as one event. The caller does not supply the parcel: TransferLots
+// and the basis are released here from the source account's journal, as the hand
+// transfer does.
 //
-// AN OPERATION MAY CARRY A CreatedAt, AND EXACTLY ONE THING MAY BE MEANT BY IT:
-// this row replaces one this same delta removes, and keeps its place. Rows of
-// one date and one instant (or of one date and none) fold by created_at, and
-// that order is the order the FIFO queue breaks ties in — so a row restated by
-// the broker and stamped afresh would move behind its neighbours and change
-// which parcel a later sale consumes, which is a tax figure moving because a
-// description was reworded.
-//
-// AN OPERATION MAY ALSO CARRY AN OccurredAt — the instant its source gave — and
-// within its date it folds by that first (see foldsBefore).
-// The stamp is therefore checked against the rows being removed (see
-// checkInheritedStamps) rather than trusted: a caller free to invent one would
-// be free to choose where in a day an operation folds. A zero CreatedAt is the
-// ordinary case and is stamped here.
+// A non-zero CreatedAt means only one thing: this row replaces one the delta
+// removes and keeps its place, so a reworded broker record does not move in the
+// FIFO tie-break and change a tax figure. It is checked against the removed rows
+// (checkInheritedStamps). OccurredAt, the source's instant, orders rows within a
+// date (see foldsBefore).
 type ImportDelta struct {
 	Add    []Operation
 	Remove []uuid.UUID
 }
 
-// ImportRefusal is one candidate the journal would not take, named by the
-// broker record behind it and carrying the REAL reason — an ErrValidation for
-// an operation this program cannot record, an ErrInconsistent for one the
-// engine will not replay. The caller shows it to the owner as an unparsed
-// operation; a stand-in reason would be shown just as confidently.
+// ImportRefusal is one candidate the journal would not take, named by its broker
+// record and carrying the real reason: ErrValidation for an operation this
+// program cannot record, ErrInconsistent for one the engine will not replay.
 type ImportRefusal struct {
 	ExternalID string
 	Err        error
 }
 
-// externalID is the string a refusal is named by. Every candidate has one by
-// the time refusals can be produced (checkImportContract runs over the whole
-// delta first), so the empty fallback is for messages about the delta itself.
+// externalID is the string a refusal is named by; the empty fallback is for
+// messages about the delta itself.
 func externalID(op Operation) string {
 	if op.ExternalID == nil {
 		return ""
@@ -95,61 +70,32 @@ type candidate struct {
 	at   int // position in Add, so that same-day events keep the caller's order
 }
 
-// ApplyImportDelta records an importer's difference in ONE transaction: the
-// removals, then every insertion, over as many of the space's accounts as the
-// difference touches.
+// ApplyImportDelta records an importer's difference in one transaction across
+// every account it touches: the removals, then every insertion.
 //
-// WHAT IS REFUSED AND WHAT IS FATAL is the distinction ErrImportContract
-// describes. A candidate the journal will not take comes back in refused and
-// the rest of the delta still applies — a broker operation nobody has taught
-// this program to record must not cost the owner the other four thousand. A
-// delta that contradicts its own contract, or a removal that leaves an account
-// unable to replay, or any failure of the write itself, takes the whole call
-// down and writes nothing.
+// A candidate the journal will not take is refused and the rest still applies;
+// a broken contract, removals that leave an account unable to replay, or a write
+// failure take the whole call down.
 //
-// WHAT IS JUDGED IS THE JOURNAL THIS DELTA WOULD LEAVE, never a state that
-// only stands halfway through it, and that is the difference between an import
-// that survives a broker correcting its own history and one that wedges on it.
-// A correction is expressed as a removal and an insertion of the same record
-// (see Store.ApplyDelta), so asking whether the removals alone replay asks what
-// this account would be if a purchase were simply gone — and the answer, for
-// any purchase a later sale rests on, is that it does not replay at all. That
-// question is asked here only after the real one has failed:
+// What is judged is the journal the delta would leave, never a halfway state:
+// a correction is a removal plus an insertion of the same record, and the removal
+// alone may not replay.
 //
-//  1. the candidates are offered TOGETHER, over the journal the removals leave.
-//     If the engine takes that whole journal, every candidate the per-operation
-//     contract allows is accepted and nothing is isolated: no operation is at
-//     fault, so none is blamed.
-//  2. failing that, the removals have to replay on their own. If they do not,
-//     the candidates did not put right whatever they broke, and the delta is
-//     refused whole — blamed on the removals, or on a journal that would not
-//     replay before this delta touched it, exactly as it was before this order
-//     existed.
-//  3. failing only step 1, the candidates are offered ONE AT A TIME over that
-//     same ground, which is the only way to learn WHICH of them a journal
-//     cannot hold: the engine answers about a whole journal, not about a row.
+//  1. All candidates are offered together over the journal the removals leave.
+//     If the engine takes it, every candidate passes and none is blamed.
+//  2. Otherwise the removals must replay on their own, or the delta is refused
+//     whole.
+//  3. Otherwise candidates are offered one at a time over that ground, to find
+//     which ones the journal cannot hold.
 //
-// Either way they are offered in the order the engine folds them — by date, then
-// by the instant the source gave, and otherwise in the order the caller listed
-// them — so a sell listed before the buy that covers it is still judged against
-// the position it actually had.
+// Candidates are offered in fold order (date, source instant, then the caller's
+// order), and created_at is stated on each row in that same order so the stored
+// journal reads back as checked (see Store.ApplyDelta); a replacement keeps the
+// removed row's stamp. applied comes back in that order, as stored.
 //
-// The order they are checked in is then the order they are WRITTEN with:
-// created_at is stated on every row rather than left to the statement's clock,
-// because a delta's rows are written back to back in one batch and rows of the
-// same date that happened to share an instant would leave every later read free
-// to fold them in another order than the one that was checked (see
-// Store.ApplyDelta). A row replacing one this delta removes keeps that row's
-// stamp instead (see ImportDelta).
-//
-// applied comes back in that same order, as the database stored the rows.
-//
-// THE WHOLE OF IT RUNS UNDER THE JOURNAL LOCK of every account the delta touches
-// (Store.WithAccountsLocked), read and write alike — the same lock a hand entry
-// takes. The registry writes into every account and an explanation writes hand
-// rows into imported ones, so an import and a hand entry do meet on one account,
-// and a delta judged against a journal read outside the lock can be accepted
-// beside a write it never saw (#186).
+// All of it runs under the journal lock of every touched account, the lock a hand
+// entry takes: the registry and explanations write into imported accounts too
+// (#186).
 func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
 	applied []Operation, refused []ImportRefusal, err error,
 ) {
@@ -195,9 +141,8 @@ func (s *Service) ApplyImportDeltaWith(ctx context.Context, spaceID uuid.UUID, d
 var errDryRun = errors.New("operation: dry run")
 
 // CheckImportDelta is ApplyImportDelta that writes nothing: the same judgement
-// over the same journals, under the same locks, inside a transaction that is
-// rolled back at the end. What it answers is what applying the delta now would
-// answer — a preview of an import is this.
+// under the same locks, in a transaction rolled back at the end. It is the import
+// preview.
 func (s *Service) CheckImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
 	accepted []Operation, refused []ImportRefusal, err error,
 ) {
@@ -226,15 +171,10 @@ func (s *Service) CheckImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	return accepted, refused, nil
 }
 
-// BuildAndApplyImportDelta is ApplyImportDelta for a writer that has to SEE the
-// journal to know what to write: it locks one account, hands build that
-// account's journal as read under the lock, and applies the delta build returns
-// — one lock around the read, the decision and the write. The registry needs
-// it: its rows are worked out from the holding, and a holding read before the
-// lock describes a journal that may have moved.
-//
-// The delta may touch that one account only; anything else is the caller's
-// mistake and refuses the whole call. delta comes back as build returned it.
+// BuildAndApplyImportDelta is ApplyImportDelta for a writer that must see the
+// journal to know what to write (the registry, which works from the holding): it
+// locks one account, hands build the journal read under the lock, and applies
+// build's delta. The delta may touch that account only.
 func (s *Service) BuildAndApplyImportDelta(ctx context.Context, spaceID, accountID uuid.UUID,
 	build func(journal []Operation) (ImportDelta, error),
 ) (delta ImportDelta, applied []Operation, refused []ImportRefusal, err error) {
@@ -273,11 +213,9 @@ func (s *Service) BuildAndApplyImportDelta(ctx context.Context, spaceID, account
 	return delta, applied, refused, nil
 }
 
-// deltaAccounts names the accounts a delta touches, which is what has to be
-// locked before anything about it is judged. It is read outside the lock and
-// that is safe: a candidate names its own account and a stored row never
-// changes its. A row that vanishes in between is found missing again under the
-// lock, by importRemovals, and refused there.
+// deltaAccounts names the accounts to lock. It runs outside the lock safely:
+// a candidate names its own account and a stored row never changes its. A row
+// gone meanwhile is caught by importRemovals under the lock.
 func (s *Service) deltaAccounts(ctx context.Context, spaceID uuid.UUID, candidates []candidate, remove []uuid.UUID) ([]uuid.UUID, error) {
 	var ids []uuid.UUID
 	for _, c := range candidates {
@@ -324,20 +262,14 @@ func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID,
 		}
 	}
 
-	// kept is every touched account's journal as the removals leave it — the
-	// ground the candidates are judged against, and the ground the stored rows
-	// are confirmed against inside the transaction. before is the same journal
-	// as it stands NOW, held only for the accounts this delta takes rows from,
-	// because the one thing it is read for is telling "the removals broke this"
-	// apart from "this was already broken".
+	// kept is each touched account's journal as the removals leave it: what
+	// candidates are judged against and stored rows are confirmed against.
+	// before is the current journal of accounts that lose rows, kept only to
+	// tell "the removals broke this" from "this was already broken".
 	//
-	// youngest is tracked over the survivors: a row this delta is about to
-	// delete will not be in any journal by the time the write commits, so its
-	// created_at must not go on raising the floor new rows are numbered from
-	// (see base below) — that would number them after a row that no longer
-	// exists to share a date with anything. A stamp a replacement INHERITS is
-	// counted in below, for the opposite half of the same reason: that row is
-	// coming back, so nothing may be numbered on top of it.
+	// youngest counts survivors only: a row about to be deleted must not raise
+	// the floor new stamps start from. An inherited stamp is counted, since
+	// that row is coming back.
 	kept := make(map[uuid.UUID][]Operation, len(accounts))
 	before := make(map[uuid.UUID][]Operation, len(losing))
 	var youngest time.Time
@@ -369,26 +301,14 @@ func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID,
 		}
 	}
 
-	// One microsecond apart, from a base taken before any of them is checked:
-	// distinct is what the read path needs (see Store.ApplyDelta), and
-	// increasing in this order is what makes the order it reads back the order
-	// that was checked here.
-	// The base starts after the youngest row that SURVIVES this delta in the
-	// touched journals, not merely at the current time, so that a candidate
-	// always folds AFTER everything its date and instant already hold — the
-	// same place journalWith puts one.
-	// The clock alone does not guarantee that: a delta spreads its rows a
-	// microsecond apart, so a large one reaches milliseconds past the moment it
-	// began, and a sync that follows it closely would otherwise start numbering
-	// underneath rows the previous sync had just written. A journal ordered one
-	// way when it is checked and another way when it is read is the fault this
-	// whole path is built to avoid.
+	// New rows are stamped one microsecond apart from a base after the
+	// youngest surviving row, so they are distinct, read back in the checked
+	// order, and fold after everything already on their date (as journalWith
+	// places a candidate) even when a previous sync ran ahead of the clock.
 	//
-	// IT CAN THEREFORE REACH A SHADE PAST THE PRESENT — one microsecond per row
-	// stamped, so milliseconds for a delta of thousands. A hand entry made in
-	// that window, on the same day and account, is stamped by its own insert's
-	// clock and can land beneath the rows this delta wrote. The journal lock
-	// keeps the two writes apart; it does not order their stamps.
+	// So a large delta can stamp slightly into the future, and a hand entry
+	// made in that window on the same day can land beneath its rows. The lock
+	// keeps the writes apart; it does not order their stamps.
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	if !youngest.Before(base) {
 		base = youngest.UTC().Truncate(time.Microsecond).Add(time.Microsecond)
@@ -396,11 +316,8 @@ func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID,
 
 	accepted, refused, whole := offerTogether(candidates, kept, base)
 	if !whole {
-		// Step 2: the candidates could not carry the whole journal, so the
-		// ground they stand on has to hold on its own. Until this runs, every
-		// refusal below would name a cause that is not the cause: the first
-		// candidate would be blamed for damage the removals did, or for damage
-		// that was already there.
+		// Step 2: the removals must replay on their own, or the first candidate
+		// below would be blamed for damage that is not its own.
 		for accountID := range accounts {
 			if _, err := portfolio.Compute(kept[accountID]); err != nil {
 				if journal, ok := before[accountID]; ok {
@@ -421,13 +338,9 @@ func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID,
 	}
 
 	stored, err := s.store.ApplyDelta(ctx, spaceID, accepted, d.Remove, func(stored []Operation) error {
-		// The same fold again, over the rows the database actually kept: the
-		// quantities are on the column's scale now, and a departing leg replays
-		// the pieces the lot table gave back rather than the ones computed
-		// above. One fold per touched account — including an account that only
-		// lost rows, whose journal has to go on replaying without them.
-		// Not wrapped in ErrInconsistent: everything here was checked and
-		// accepted a moment ago, so reaching this is a bug in this program.
+		// The same fold over the rows as stored, per touched account. Not
+		// wrapped in ErrInconsistent: everything was accepted a moment ago, so a
+		// failure here is this program's bug.
 		byAccount := make(map[uuid.UUID][]Operation, len(accounts))
 		for _, o := range stored {
 			byAccount[o.AccountID] = append(byAccount[o.AccountID], o)
@@ -447,33 +360,14 @@ func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID,
 	return stored, refused, nil
 }
 
-// offerTogether is step 1 of ApplyImportDelta's order: every candidate written
-// over the journal the removals leave, and the engine asked about the RESULT.
+// offerTogether is step 1: every candidate written over the journal the
+// removals leave, and the engine asked about the result. That is not weaker than
+// one at a time: the engine stops at the first operation it cannot fold, so an
+// accepted journal has every prefix accepted too.
 //
-// ACCEPTING THEM WHOLESALE IS NOT A WEAKER TEST THAN OFFERING THEM ONE BY ONE.
-// The engine folds a journal in order and stops at the first operation it
-// cannot fold, so a journal it accepts is one every prefix of which it would
-// have accepted too — a sale of shares nothing bought still fails when it is
-// surrounded by four thousand others. What the two differ on is only which
-// candidates are PRESENT while a given one is judged, and being judged among
-// all of them is the truer question: that is the journal this delta leaves.
-// (It is also the cheaper one — one fold per account rather than one per
-// candidate — but that is a side effect and not the reason.)
-//
-// It reports whole == false the moment that result is unknowable or unusable —
-// a parcel that cannot be released, an account whose final journal the engine
-// refuses — and reports nothing about WHY. That is deliberate: a failure here
-// says only that the difference is not good as a whole, which is not yet a
-// statement about any one candidate, and inventing one would name the first
-// operation the loop happened to reach. Whose fault it is, if it is anyone's,
-// is what offerOneAtATime finds out afterwards.
-//
-// A candidate refused by normalizeCandidate is a different matter and is
-// refused here as well as there. That check reads nothing but the operation
-// itself — a quantity finer than the journal records, a split an import may not
-// write — so its answer is the same whatever journal the row is offered
-// against, and letting one such row take the whole difference down to the
-// slower path would only reach the same refusal by a longer road.
+// whole is false whenever the result is unusable, with no blame assigned:
+// offerOneAtATime finds out whose fault it is. A candidate normalizeCandidate
+// refuses is refused here directly, since that check reads no journal.
 func offerTogether(candidates []candidate, kept map[uuid.UUID][]Operation, base time.Time) (
 	accepted []Operation, refused []ImportRefusal, whole bool,
 ) {
@@ -502,11 +396,10 @@ func offerTogether(candidates []candidate, kept map[uuid.UUID][]Operation, base 
 	return accepted, refused, true
 }
 
-// offerOneAtATime is step 3: the same candidates in the same order, each judged
-// against the journal the ones already accepted leave, so that the operation a
-// journal cannot hold is named on its own and the rest of a history still
-// loads. It is reached only when the whole difference was refused together and
-// the removals were shown to be blameless.
+// offerOneAtATime is step 3: the same candidates in the same order, each against
+// the journal the accepted ones leave, so the one a journal cannot hold is named
+// and the rest still loads. Reached only when the whole was refused and the
+// removals were shown blameless.
 func offerOneAtATime(candidates []candidate, kept map[uuid.UUID][]Operation, base time.Time) (
 	accepted []Operation, refused []ImportRefusal,
 ) {
@@ -527,13 +420,9 @@ func offerOneAtATime(candidates []candidate, kept map[uuid.UUID][]Operation, bas
 	return accepted, refused
 }
 
-// stamped settles one candidate's created_at: the stamp a replacement inherited
-// from the row it replaces, or the next of this delta's own sequence.
-//
-// seq advances only where a stamp is handed out, and the candidates are walked
-// in one order, so the two passes above hand the same row the same stamp — the
-// order that was checked has to be the order that is written whichever pass did
-// the checking.
+// stamped settles a candidate's created_at: the inherited stamp of the row it
+// replaces, or the next in this delta's sequence. Both passes walk candidates in
+// the same order, so a row gets the same stamp whichever pass checked it.
 func stamped(c candidate, base time.Time, seq *int) []Operation {
 	legs := slices.Clone(c.legs)
 	for i := range legs {
@@ -556,9 +445,9 @@ func absorb(pending map[uuid.UUID][]Operation, legs []Operation) {
 	}
 }
 
-// refusalsFor names one event's refusal on every leg it has. failed is the leg
-// the error is about; the other one is told the cause rather than a stand-in of
-// its own, because this leg was fine and a transfer is one event.
+// refusalsFor names one event's refusal on every leg. failed is the leg the
+// error is about; the other leg is told that cause, since a transfer is one
+// event.
 func refusalsFor(legs []Operation, failed int, err error) []ImportRefusal {
 	out := make([]ImportRefusal, 0, len(legs))
 	for i, leg := range legs {
@@ -571,30 +460,12 @@ func refusalsFor(legs []Operation, failed int, err error) []ImportRefusal {
 	return out
 }
 
-// checkInheritedStamps holds a supplied created_at to a place the account's
-// journal ALREADY HOLDS and this delta is about to vacate: it must be the stamp
-// of a row being removed from that same account.
-//
-// Anything else is refused as the caller's own mistake rather than as a
-// property of a broker record, because that is what it would be. A created_at
-// decides where within a date and instant an operation folds, that order is the order
-// the FIFO queue breaks ties in, and the queue decides which parcel a sale
-// consumes — so a caller free to state one is a caller free to set the realized
-// profit of an account by choosing a number. A stamp already in that journal
-// chooses nothing: putting a row back where one stood is the whole point.
-//
-// WHAT IT DOES NOT CHECK is that the stamp came from the very row this one
-// replaces, and it cannot: which stored row a candidate replaces is the
-// importer's own matching (by external id, see the tinvest rebuild's
-// difference), and nothing here can see it. What it does keep out is the case
-// that matters — a stamp conjured from nowhere, which is the only way to reach
-// a position in a day that no row of this account occupies.
-//
-// The comparison is by UnixNano rather than by the time.Time itself: what the
-// database gives back carries a location and no monotonic reading, and equality
-// on time.Time is equality of those too. UnixNano is one number per instant
-// over any date this program will meet, so two stamps of one moment cannot miss
-// each other and two of different moments cannot collide.
+// checkInheritedStamps requires a supplied created_at to be the stamp of a row
+// being removed from the same account. A free stamp would let a caller choose
+// where in a day a row folds, and so which parcel a sale consumes. It cannot check
+// that the stamp came from the very row being replaced; that matching is the
+// importer's. Stamps compare by UnixNano, since a time.Time from the database
+// carries a location.
 func checkInheritedStamps(candidates []candidate, removals []Operation) error {
 	type stamp struct {
 		accountID uuid.UUID
@@ -619,14 +490,11 @@ func checkInheritedStamps(candidates []candidate, removals []Operation) error {
 	return nil
 }
 
-// importCandidates groups the delta's operations into the events they describe
-// and refuses everything about the delta that is the CALLER's mistake rather
-// than a candidate's — see ErrImportContract.
+// importCandidates groups the delta's operations into events and refuses
+// everything that is the caller's mistake (see ErrImportContract).
 func importCandidates(add []Operation) ([]candidate, error) {
-	// The key the journal's unique index is built on. Naming the same broker
-	// record twice in one delta means the difference was computed wrongly; the
-	// database would refuse the second row anyway, and doing it here says so
-	// before anything is written and names the record.
+	// The unique index's key. A record named twice means the difference is
+	// wrong; refusing here names the record before anything is written.
 	type recordKey struct {
 		accountID       uuid.UUID
 		source, foreign string
@@ -666,11 +534,8 @@ func importCandidates(add []Operation) ([]candidate, error) {
 		}
 		out[i].legs = legs
 	}
-	// The order the engine folds them in: by date, then by the instant the
-	// source gave, rows without one after those with one. Stable, so that
-	// operations of one day and one instant keep the order the caller listed
-	// them in — which is the only order there is for events a broker reports
-	// with a date and no time.
+	// Fold order: date, then source instant (rows without one last), then the
+	// caller's order, which is the only order for events with no time.
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].legs[0], out[j].legs[0]
 		if !a.OccurredOn.Equal(b.OccurredOn) {
@@ -685,9 +550,7 @@ func importCandidates(add []Operation) ([]candidate, error) {
 }
 
 // checkImportContract is what an importer promises about every operation it
-// hands over, whatever the broker said. All of it is the caller's own doing —
-// none of these can be a property of a broker record — so a failure is fatal to
-// the delta rather than a refusal of the candidate.
+// hands over. A failure is the caller's doing, so it is fatal to the delta.
 func checkImportContract(op Operation) error {
 	if op.Source == "" || op.Source == "manual" {
 		return fmt.Errorf("%w: an imported operation must name the source it came from, and %q is not one",
@@ -719,19 +582,11 @@ func checkImportContract(op Operation) error {
 				ErrImportContract, op.Type)
 		}
 	}
-	// The basis of a parcel taken from this journal is this journal's to state.
-	// A number supplied for it would be a guess, and one that is overwritten
-	// here would be a guess nobody was told about; only a leg with no sibling —
-	// shares arriving from a broker outside this program — declares its own.
-	//
-	// A CORPORATE ACTION'S LEGS ARE NOT IN THIS RULE and must carry their basis:
-	// this path does not compute it for them (see releaseBasis), because it
-	// cannot — a conversion's is a release the registry's ratio decides the size
-	// of, and a spin-off's is a share of the basis that exists nowhere but in the
-	// registry's own record. What keeps a supplied number honest there is the
-	// engine, which holds every piece against the row carrying it on every fold
-	// and matches a spin-off's pieces to the very parcels they name (see
-	// checkStoredLots).
+	// The basis of a parcel taken from this journal is computed here; only a
+	// lone arriving leg (shares from another broker) declares its own.
+	// Corporate-action legs carry theirs: a conversion's size and a spin-off's
+	// share come from the registry, and the engine checks the pieces on every
+	// fold.
 	if op.AmountMinor != 0 && (op.Type == TypeTransferOut || (op.Type == TypeTransferIn && op.TransferGroupID != nil)) {
 		return fmt.Errorf("%w: the cost basis of %s is released from the source account's journal, not supplied",
 			ErrImportContract, op.Type)
@@ -740,17 +595,13 @@ func checkImportContract(op Operation) error {
 }
 
 // isTransferLeg and isCorporatePairLeg name the two kinds of pair this path
-// knows, kept as predicates rather than as `switch` arms repeated at each of the
-// five places that ask: a list restated at every call site is a list that
-// eventually differs between them.
+// knows, so the five places that ask share one list.
 func isTransferLeg(t Type) bool {
 	return t == TypeTransferIn || t == TypeTransferOut
 }
 
-// isCorporatePairLeg reports whether this is one leg of a corporate action the
-// registry materializes — a conversion or a spin-off. Both are written as a pair
-// on ONE account (unlike a transfer, which is one parcel across two), and both
-// arrive with the breakdown their own leg carries.
+// isCorporatePairLeg reports a leg of a registry-materialized conversion or
+// spin-off: a pair on one account, each leg with its own breakdown.
 func isCorporatePairLeg(t Type) bool {
 	switch t {
 	case TypeExchangeOut, TypeExchangeIn, TypeSpinoffOut, TypeSpinoffIn:
@@ -759,28 +610,18 @@ func isCorporatePairLeg(t Type) bool {
 	return false
 }
 
-// carriesRegistryBreakdown reports whether this operation is allowed to arrive
-// with its FIFO breakdown already worked out.
-//
-// IT IS THE ONE HOLE IN "the parcel is computed here, not supplied", AND IT IS
-// NARROW ON PURPOSE: only the corporate-actions registry, and only on the four
-// leg types it writes. Everything else keeps the old refusal, because everything
-// else CAN have its parcel computed here from the journal — a broker's transfer
-// names a quantity and the FIFO queue answers the rest. A conversion cannot: how
-// much leaves is the registry's ratio applied to a holding, and a spin-off's
-// share of the basis is a number published by a fund manager that appears in no
-// journal at all. Letting any caller supply a parcel would let it name a cost
-// basis, which is a tax figure; letting this one supply it puts the registry's
-// own record where it belongs and leaves the engine to check it on every fold.
+// carriesRegistryBreakdown reports whether op may arrive with its breakdown
+// already worked out: only the registry's four leg types. Everything else has its
+// parcel computed here, because a supplied parcel is a supplied cost basis, a tax
+// figure; the registry's is its own record, and the engine checks it on every
+// fold.
 func carriesRegistryBreakdown(op Operation) bool {
 	return op.Source == SourceRegistry && isCorporatePairLeg(op.Type)
 }
 
-// arrivesFromOutside reports whether op is shares arriving from a broker this
-// program does not hold: a transfer_in with no sibling. Its basis and its
-// breakdown are the ones the owner stated for it (see Service.StatePurchases),
-// which an importer puts back on every rebuild — there is no source account in
-// this journal for them to be worked out from.
+// arrivesFromOutside reports a transfer_in with no sibling: shares from a broker
+// this program does not hold. Its basis and breakdown are what the owner stated
+// (see Service.StatePurchases); there is no source journal to compute them from.
 func arrivesFromOutside(op Operation) bool {
 	return op.Type == TypeTransferIn && op.TransferGroupID == nil
 }
@@ -808,9 +649,8 @@ func pairedLegs(legs []Operation) ([]Operation, error) {
 		return nil, fmt.Errorf("%w: transfer group %s leaves and arrives at the same account",
 			ErrImportContract, group)
 	}
-	// One parcel: the same instrument, the same day, the same quantity and the
-	// same currency on both sides. The basis is deliberately not among them —
-	// it is computed here for both legs (see checkImportContract).
+	// One parcel: same instrument, day, quantity and currency. The basis is
+	// computed here for both legs.
 	if out.InstrumentID == nil || in.InstrumentID == nil || *out.InstrumentID != *in.InstrumentID {
 		return nil, fmt.Errorf("%w: transfer group %s moves one instrument out and another in", ErrImportContract, group)
 	}
@@ -828,17 +668,10 @@ func pairedLegs(legs []Operation) ([]Operation, error) {
 	return []Operation{out, in}, nil
 }
 
-// corporatePairLegs is pairedLegs for a conversion or a spin-off, whose pair is
-// the opposite shape from a transfer's in every respect that matters: ONE
-// account and TWO papers, where a transfer is two accounts and one paper. So the
-// checks are the mirror image — the accounts must match and the instruments must
-// differ — and the quantities are deliberately not compared, because a
-// conversion restates the count (N old for M new) and a spin-off's departing leg
-// carries no count at all.
-//
-// What IS held to be equal is the basis: the two legs describe one parcel of
-// money under two names, and a pair whose halves disagree about how much moved
-// would put a number into a journal that no single fact stands behind.
+// corporatePairLegs is pairedLegs for a conversion or spin-off: one account and
+// two papers, the mirror of a transfer. Quantities are not compared (a conversion
+// restates the count; a spin-off's out leg has none), but the basis must match:
+// both legs describe one sum of money.
 func corporatePairLegs(group uuid.UUID, legs []Operation) ([]Operation, error) {
 	out, in := legs[0], legs[1]
 	if in.Type == TypeExchangeOut || in.Type == TypeSpinoffOut {
@@ -885,8 +718,8 @@ func (s *Service) importRemovals(ctx context.Context, spaceID uuid.UUID, ids []u
 		return nil, err
 	}
 	if len(rows) != len(ids) {
-		// Either an id that is not in this space, or the same id twice. Both
-		// mean the difference was computed against a journal this is not.
+		// An id outside the space or named twice: the difference was computed
+		// against another journal.
 		return nil, fmt.Errorf("%w: asked to remove %d operations, found %d in this space",
 			ErrImportContract, len(ids), len(rows))
 	}
@@ -904,10 +737,8 @@ func (s *Service) importRemovals(ctx context.Context, spaceID uuid.UUID, ids []u
 			groups[*o.TransferGroupID] = true
 		}
 	}
-	// A pair is removed whole. The engine would not complain about a leg left
-	// behind — a lone arrival is exactly what shares from another broker look
-	// like — so nothing downstream could ever tell that the shares in the
-	// destination account came from a transfer whose source half is gone.
+	// A pair is removed whole: a lone arrival looks like shares from another
+	// broker, so nothing could tell its source half is gone.
 	for group := range groups {
 		siblings, err := s.store.ByTransferGroup(ctx, spaceID, group)
 		if err != nil {
@@ -923,17 +754,10 @@ func (s *Service) importRemovals(ctx context.Context, spaceID uuid.UUID, ids []u
 	return rows, nil
 }
 
-// prepareCandidate brings one event onto the journal's own terms — quantities
-// on the stored scale, the parcel of a departing leg released from the source
-// account's history — and offers it to the engine. It reports WHICH leg the
-// refusal is about, so that the other leg of a pair is not told a reason that
-// is not about it.
-//
-// The three stages are separate functions because the two passes over the
-// candidates need different amounts of it: offerTogether runs the first two and
-// asks the engine once, about the journal they all leave, while this runs all
-// three per event. Splitting them is what keeps the two passes from being two
-// statements of one rule.
+// prepareCandidate brings one event onto the journal's terms (stored scale, the
+// departing leg's parcel released) and offers it to the engine, reporting which
+// leg a refusal is about. offerTogether runs the first two stages and folds once;
+// this runs all three per event.
 func prepareCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
 	if failed, err := normalizeCandidate(legs); err != nil {
 		return failed, err
@@ -944,10 +768,8 @@ func prepareCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int,
 	return replayCandidate(legs, pending)
 }
 
-// normalizeCandidate is everything about one event that can be settled from the
-// event alone: quantities brought onto the scale the journal stores, and the
-// import path's per-operation contract. It reads no journal, so its answer is
-// the same wherever the event is offered.
+// normalizeCandidate settles what one event alone decides: quantities on the
+// stored scale and the per-operation import contract. It reads no journal.
 func normalizeCandidate(legs []Operation) (int, error) {
 	for i := range legs {
 		if err := normalizeForStorage(&legs[i]); err != nil {
@@ -960,29 +782,18 @@ func normalizeCandidate(legs []Operation) (int, error) {
 	return -1, nil
 }
 
-// releaseBasis fills in the parcel a departing leg moves — the pieces of the
-// source account's FIFO queue and the basis they carry — and puts the same
+// releaseBasis fills in the parcel a departing leg moves and puts the same
 // parcel on the arriving leg.
 func releaseBasis(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
 	for i := range legs {
-		// A CORPORATE ACTION'S LEGS PASS THROUGH UNTOUCHED. Their parcels arrived
-		// with them and could not have been worked out here: the registry decides
-		// how much of the holding a conversion consumes, and what share of the
-		// basis a spin-off carves out is a figure no journal holds. See
-		// carriesRegistryBreakdown for what keeps that narrow.
+		// Corporate-action legs arrive with their parcels; see
+		// carriesRegistryBreakdown.
 		if legs[i].Type != TypeTransferOut {
 			continue
 		}
-		// The same release the manual transfer path makes, for the same
-		// reasons: against the journal as it stood at the transfer's own place
-		// rather than at the end (a backdated transfer is replayed at its
-		// chronological place, where the queue's front is different — and an
-		// imported one at its instant, which can be the middle of its day),
-		// quantized
-		// before the basis is summed (a piece too small to store merges into
-		// its neighbour, and the amount must be the sum of the pieces actually
-		// written), and the basis taken from those very pieces rather than
-		// computed a second way.
+		// As in CreateTransfer: released at the leg's own place in the journal
+		// (its instant can be mid-day), quantized before the basis is summed, and
+		// the basis taken from those pieces.
 		lots, err := portfolio.ReleasedLots(foldedAhead(pending[legs[i].AccountID], legs[i]),
 			*legs[i].InstrumentID, *legs[i].Quantity)
 		if err != nil {
@@ -991,17 +802,12 @@ func releaseBasis(legs []Operation, pending map[uuid.UUID][]Operation) (int, err
 		lots = quantizeLots(lots, *legs[i].Quantity)
 		cost := portfolio.LotsCost(lots)
 		if cost < 0 || cost > money.MaxAmountMinor {
-			// A basis is not a cash movement and has no sign to speak of, so the
-			// bound it has to fall inside is 0..max and not ±max. The manual
-			// transfer path says it that way (see Service.CreateTransfer), and
-			// one rule described two ways is one rule a reader has to guess at.
+			// A basis has no sign, so its range is 0..max, as CreateTransfer says.
 			return i, fmt.Errorf("%w: the basis this transfer would move is %d, outside 0..%d",
 				family.ErrValidation, cost, money.MaxAmountMinor)
 		}
 		legs[i].TransferLots, legs[i].AmountMinor = lots, cost
-		// The arriving leg is the same parcel: same pieces, same basis. It is
-		// never released a second time — one release, two legs, so they cannot
-		// come to describe two different parcels.
+		// The arriving leg gets the same parcel; it is never released twice.
 		for j := range legs {
 			if legs[j].Type == TypeTransferIn {
 				legs[j].TransferLots, legs[j].AmountMinor = lots, cost
@@ -1014,8 +820,7 @@ func releaseBasis(legs []Operation, pending map[uuid.UUID][]Operation) (int, err
 // replayCandidate offers one event to the engine, account by account, over the
 // journal each of them already holds.
 func replayCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
-	// Each touched account folds its own journal with this event in it. A pair's
-	// legs live on two accounts and each is checked against its own history.
+	// Each leg is checked against its own account's journal.
 	for i := range legs {
 		if slices.ContainsFunc(legs[:i], func(o Operation) bool { return o.AccountID == legs[i].AccountID }) {
 			continue // already folded with every leg on that account
@@ -1034,58 +839,26 @@ func replayCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int, 
 	return -1, nil
 }
 
-// validateImported is the import path's per-operation contract, and it differs
-// from the hand-entry path's (validate) on exactly two points. Everything else
-// is the same rule, from the same helpers, so that the two cannot drift.
+// validateImported is the import path's per-operation contract. It shares
+// validateFields and validateByType with validate and differs in three ways:
 //
-//   - A TRANSFER LEG MAY STAND ALONE. Shares that arrive from a broker this
-//     program knows nothing about have no second leg in existence, and shares
-//     that leave for one have none either; refusing them would make the whole
-//     history unimportable. A person entering a transfer by hand still cannot
-//     write one leg — both of their accounts are in here, so both legs are
-//     knowable, and the pair endpoint is how they say so.
+//   - A transfer leg may stand alone: shares arriving from or leaving for a
+//     broker this program does not know have no second leg.
+//   - A split is never imported: no broker reports one. Only the registry writes
+//     splits through this path.
+//   - A tax may be positive: a broker's tax correction returns money (seven of
+//     nine on the owner's account). Hand entry still refuses it as a likely typo.
+//     A zero is refused on both paths.
 //
-//   - A SPLIT IS NEVER IMPORTED. Corporate actions do not arrive as operations
-//     at all, so an importer cannot know a split happened; a split row with a
-//     broker's name on it would be this program's invention wearing the
-//     broker's authority.
-//
-//   - A TAX MAY BE MONEY GIVEN BACK. A broker's tax CORRECTION arrives with a
-//     positive amount, and it is an ordinary event: of the nine on the owner's
-//     own account seven are positive. The hand-entry path keeps refusing one,
-//     and should: there a positive tax is a sign somebody typed wrong, and the
-//     refusal catches it at the moment it can still be fixed. Here the sign is
-//     the broker's own statement about money that actually moved, and refusing
-//     it left seven real credits out of the journal for as long as the account
-//     existed. Nothing downstream needs teaching: a tax is folded into income
-//     by its signed amount, so a refund restores exactly what the withholding
-//     took (see portfolio.Compute), and the account's withheld total nets it
-//     off (see taxWithheldFromAccount).
-//
-//     A ZERO stays refused on both paths and by the same rule below: money that
-//     did not move is not a correction of anything.
-//
-// What it does NOT check is the delta's own contract — that an operation names
-// a source and the record it came from, and does not arrive with a parcel it
-// could not have computed. Those are checkImportContract's, run over the whole
-// delta before any of this, because they are the caller's mistakes and are
-// fatal rather than refusals (see ErrImportContract). By the time an operation
-// reaches here they hold.
+// The delta-level contract is checkImportContract's, run before this.
 func validateImported(o Operation) error {
 	if err := validateFields(o); err != nil {
 		return err
 	}
 	switch o.Type {
 	case TypeSplit:
-		// A BROKER IMPORT STILL DOES NOT RECORD SPLITS — corporate actions do
-		// not arrive as operations, and a split row wearing a broker's name
-		// would be this program's invention wearing the broker's authority.
-		// What changed is that the registry now writes through this same path:
-		// its rows are not a person's own entry, so they cannot go through
-		// validate, and they carry the id of the registry event they came from
-		// exactly as an imported row carries the broker record's. Their source
-		// is what tells the two apart, and validateByType holds the rest of the
-		// rule (an instrument, a positive ratio, a zero amount).
+		// Only the registry writes splits; validateByType holds the rest of the
+		// rule.
 		if o.Source != SourceRegistry {
 			return fmt.Errorf("%w: an import does not record splits — corporate actions do not arrive as operations",
 				family.ErrValidation)
@@ -1103,11 +876,8 @@ func validateImported(o Operation) error {
 		if o.Quantity == nil || !o.Quantity.IsPositive() {
 			return fmt.Errorf("%w: %s requires positive quantity", family.ErrValidation, o.Type)
 		}
-		// A transfer's amount is a cost basis, not a cash movement, so it has no
-		// sign to speak of and cannot be below zero. A leg whose basis this
-		// method computes carries 0 here and is given the released one after
-		// (see prepareCandidate); a leg standing alone carries the one its
-		// caller declared, which is all anyone will ever know about it.
+		// A transfer's amount is a basis and cannot be negative. A leg whose
+		// basis is computed here carries 0 until prepareCandidate fills it in.
 		if o.AmountMinor < 0 {
 			return fmt.Errorf("%w: %s amount_minor is a cost basis and must be >= 0", family.ErrValidation, o.Type)
 		}
@@ -1116,11 +886,8 @@ func validateImported(o Operation) error {
 	return validateByType(o)
 }
 
-// mapImportWriteError translates the one constraint an import can trip that
-// means something specific: a broker record already in the journal. It is the
-// same mistake as naming one twice in a single delta — the difference was
-// computed against a journal this is not — so it is the same error, whichever
-// of the two ways it is found.
+// mapImportWriteError maps a duplicate broker record to ErrImportContract, the
+// same mistake as naming one twice in a delta.
 func mapImportWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == "operations_dedup_idx" {
