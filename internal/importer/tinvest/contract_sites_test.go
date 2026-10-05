@@ -316,7 +316,7 @@ func TestTheContractStatesTheVocabulariesTheServerUses(t *testing.T) {
 		{"TinvestSyncTrigger", goConstantValues(t, "SyncTrigger", 4, "store.go")},
 		{"TinvestSyncRunStatus", goConstantValues(t, "RunStatus", 3, "store.go")},
 		{"TinvestReconcileStatus", goConstantValues(t, "ReconcileStatus", 3, "store.go", "reconcile.go")},
-		{"TinvestUnparsedReason", goConstantValues(t, "UnparsedReason", 18, "projection.go")},
+		{"TinvestUnparsedReason", goConstantValues(t, "UnparsedReason", 19, "projection.go")},
 	} {
 		declared := append([]string(nil), doc.Components.Schemas[site.schema].Enum...)
 		sort.Strings(declared)

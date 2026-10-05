@@ -3073,7 +3073,11 @@ components:
         position because a matured bond retires the whole holding; a fund's
         payout retires units the broker does not name while the holder keeps
         the rest, so the money is shown here and the units are the owner's to
-        name. `commission_refund`: a
+        name — unless the withdrawal of those units pairs with it, and then the
+        two are one redemption. `foreign_currency_no_rate`: an operation on a
+        paper in a currency other than its position's (bought in roubles, kept
+        in dollars), on a day whose official rate is not known yet; it is
+        restated at that rate as soon as the rates arrive. `commission_refund`: a
         negative commission on the operation, i.e. money coming back.
         `projection_incomplete`: this program has a rule for the broker's
         operation type and the rule produced nothing — a gap in this program,
@@ -3103,6 +3107,7 @@ components:
         - transfer_without_quantity
         - transfer_quantity_contradicted
         - fund_payout_units_unknown
+        - foreign_currency_no_rate
         - commission_refund
         - projection_incomplete
         - broker_fee_parent_missing
