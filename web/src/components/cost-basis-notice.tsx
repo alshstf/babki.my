@@ -4,37 +4,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { countryName } from "@/lib/country";
 import type { CostBasisRules } from "@/api/tax-residencies";
 
-// States, in Russian, whether the cost basis behind the figures on screen is
-// the one the owner's country actually requires — and, when it is not, every
-// way in which it is not.
-//
-// The application always computes one rule: the earliest purchases are
-// released first, queued per account. Whether that rule IS the country's is
-// decided by a table in the server (internal/family/taxresidency.go) and
-// published on the session and on the positions response as `supported` plus
-// a list of `notices`. This component is the whole of the interface's part in
-// that: it turns those codes into sentences and adds nothing of its own. The
-// SET of divergences is the server's to define — a new kind of notice appears
-// in ru.json (npm run i18n:check fails until it does), never as a condition
-// invented here.
-//
-// Everything technical stays in the tooltip, never in the visible text: the
-// method and perimeter codes, and the sentence naming exactly what the
-// application computes. That is the owner's standing rule about dates and
-// internals being visual noise — the reader gets the consequence, and the
-// mechanics only if they ask for them.
-// The same statement CostBasisNotice makes, folded into one tooltip string for
-// a place that has no room for a block of text: a single money cell whose
-// figure the caveat describes. The journal needs exactly that — a transferred
-// parcel's amount is a cost basis and the rows above and below it are not, so
-// the caveat has to travel with the one figure it is true of rather than sit
-// over a table of fifty rows it mostly is not.
-//
-// It opens by saying what the figure is, because unlike the notice it has no
-// heading and no table under it to supply the referent, and closes with the
-// same sentences the notice shows. Returns undefined when the country's rule
-// IS what this application computes — the same silence the notice keeps, so a
-// caller can pass the result straight through without repeating the rule.
+// costBasisCaveat is CostBasisNotice's statement as one tooltip string, for a
+// single money cell whose figure is a cost basis (a transferred parcel in the
+// journal). It opens by saying what the figure is, then the notice's sentences.
+// Undefined when the country's rule is what is computed.
 export function costBasisCaveat(
   t: (key: string, opts?: Record<string, string>) => string,
   rules: CostBasisRules,
@@ -47,21 +20,21 @@ export function costBasisCaveat(
   ].join("\n");
 }
 
+// CostBasisNotice says whether the cost basis on screen is the one the owner's
+// country requires and, when not, every way it differs. The application always
+// releases earliest purchases first per account; whether that is the country's
+// rule is the server's table (internal/family/taxresidency.go), published as
+// `supported` and `notices`, and this only turns the codes into sentences. The
+// visible text gives the consequence; the mechanics are in the tooltip.
 export function CostBasisNotice({
   rules,
-  // Whether to name the country above the sentences. The sentences say "в
-  // этой стране", which needs a referent: the positions screen never
-  // mentions the residency otherwise, so it names it; the settings screen
-  // shows this directly under the country selector, where repeating it is
-  // noise.
+  // Whether to name the country: the sentences say «в этой стране», which the
+  // positions screen needs a referent for; settings shows it beside the
+  // selector.
   namesCountry = false,
-  // Whether to also say something when there is nothing to warn about. The
-  // settings screen does: the owner just picked a country and the answer to
-  // "what does that mean for my figures" must be visible either way, and
-  // "our computation is this country's rule" is a claim the server actually
-  // makes (see TaxRules.Supported). Every other screen stays silent when
-  // supported — a banner on every visit for a reader with nothing to be
-  // warned about is the noise that makes real warnings invisible.
+  // Whether to speak when there is nothing to warn about: settings does,
+  // right after the country is picked; everywhere else a permanent banner would
+  // drown real warnings.
   confirmWhenSupported = false,
 }: {
   rules: CostBasisRules;
@@ -70,13 +43,8 @@ export function CostBasisNotice({
 }) {
   const { t } = useTranslation();
   if (rules.supported && !confirmWhenSupported) return null;
-  // The mechanics, disclosed on demand rather than as text: what the
-  // application computes, plus the country's own method and perimeter. Both
-  // enums are translated rather than printed as the codes they travel as —
-  // "average"/"owner" in a tooltip would be the interface speaking the wire
-  // format at the reader — and both are cross-checked against the generated
-  // schema by npm run i18n:check, so a value the server adds cannot show up
-  // here as a blank.
+  // The mechanics in the tooltip, with method and perimeter translated (and
+  // checked by i18n:check), never shown as wire codes.
   const title =
     t("costBasis.howWeCompute") +
     "\n" +

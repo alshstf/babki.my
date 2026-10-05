@@ -43,18 +43,14 @@ export function AccountDetailPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
   const { data: session } = useSession();
   const accounts = useAccounts();
-  // The space's base currency comes from the session, which is already
-  // loaded app-wide, rather than from GET /api/v1/summary: that endpoint
-  // computes a space-wide total this screen never shows, and gating on it
-  // meant one failing request replaced the whole account — balance,
-  // positions and journal — with an error page.
+  // The base currency from the session, not GET /summary, whose failure
+  // would replace the whole account with an error.
   const baseCurrency = session?.base_currency ?? "";
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
-  // An archived account's journal is read-only until it is brought back from
-  // the archive (the server refuses hand entries into it); a viewer's is
-  // read-only always.
+  // Archived accounts are read-only until restored (the server refuses hand
+  // entries); viewers always.
   const readOnly = isViewer || account?.status === "archived";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
@@ -67,20 +63,11 @@ export function AccountDetailPage() {
     instrument: Instrument | null;
   } | null>(null);
 
-  // Reports the currencies in play on this screen so the header's toggle
-  // can hide itself when there's nothing to convert (see
-  // lib/screen-currencies.tsx): the account's own currency, every
-  // position's currency, and the space's base currency (the toggle's
-  // conversion target — see the analogous comment in accounts/index.tsx for
-  // why that belongs in the set too). The operations journal reports its own
-  // currencies separately — it owns its query, including the "show more"
-  // window — and the provider counts the union of both reports, so a mode
-  // this screen settles on from its own set alone can still change once the
-  // journal has spoken. It is handed down to the journal rather than read
-  // there, so the two halves of the screen always print in the same currency.
-  // Effective, not stored: it only applies while the header toggle is on
-  // screen to switch it back off. Must run unconditionally, before any of the
-  // early returns below, per the Rules of Hooks.
+  // The screen's currencies (the account's, every position's and the base
+  // currency) for the header toggle (see lib/screen-currencies.tsx). The journal
+  // reports its own; the provider counts the union. The mode is handed to the
+  // journal so both halves print in one currency. Effective, not stored. Before the
+  // early returns (Rules of Hooks).
   const mode = useScreenCurrencies([
     ...(account ? [account.currency] : []),
     ...(positions.data?.positions ?? []).map((p) => p.currency),
@@ -125,18 +112,13 @@ export function AccountDetailPage() {
           {account.institution && `${account.institution} · `}
           {account.currency}
         </div>
-        {/* THE BIGGEST NUMBER ON THE SCREEN ANSWERS THE BIGGEST QUESTION —
-            «сколько я тут заработал». It used to be the free cash, which is a
-            fact about the account rather than an answer, and which now sits
-            with the holdings below. */}
+        {/* The biggest number answers «сколько я тут заработал»; the free cash
+           sits with the holdings below. */}
         {positions.data && (
           <AccountTotal total={positions.data.account_total} mode={mode} />
         )}
-        {/* One half of the figure above, on its own: what the closed deals
-            locked in, which is final and will never move again. It arrives
-            added up from the server with the positions it stands over (see
-            RealizedTotal in the API contract), and renders nothing at all for
-            an account that has neither deals nor a withholding. */}
+        {/* The closed deals' part of the figure above, final; nothing at all
+           for an account with no deals and no withholding. */}
         {positions.data && (
           <RealizedTotal total={positions.data.realized_total} mode={mode} />
         )}
@@ -197,20 +179,13 @@ export function AccountDetailPage() {
         {positionsState !== "ready" ? (
           <QueryGate state={positionsState} />
         ) : positions.data &&
-          // Money counts as something to show. An account holding nothing but
-          // cash used to say «пусто» over a real balance — which was true of
-          // its papers and false of the account.
+          // Money counts as something to show, or a cash-only account read
+          // «пусто».
           (positions.data.positions.length > 0 ||
             positions.data.cash.some((c) => c.amount_minor !== 0)) ? (
           <>
-            {/* Whether the cost and profit in the table below are the ones
-                the owner's country's rules produce. It sits ABOVE the table
-                rather than in the session-wide header because it qualifies
-                these figures specifically, and it is rendered only when
-                there are figures to qualify: over an empty table it would be
-                a caveat about nothing. The response carries the statement
-                even for an empty account (see the API contract) so that a
-                client which needs it earlier still has it. */}
+            {/* Whether cost and profit below follow the owner's country's rules,
+               over the table it qualifies and only when it has figures. */}
             <CostBasisNotice
               rules={positions.data.cost_basis_rules}
               namesCountry
@@ -246,21 +221,10 @@ export function AccountDetailPage() {
             {t("operations.export")}
           </a>
         </div>
-        {/* The cost basis statement comes from the session, which this screen
-            has already loaded, and not from the journal response — which since
-            #86 does have an envelope to carry one, and deliberately does not:
-            a third copy of one truth is a third place to forget it (see
-            SessionInfo.cost_basis_rules in the API contract).
-            Deliberately NOT positions.data.cost_basis_rules, which is the same
-            statement about the same space but reaches this screen only if the
-            positions request succeeded: the journal renders on its own and
-            must qualify its own figures on its own.
-
-            The table hangs it on the individual amounts that are a cost basis
-            rather than over the whole journal — the caveat has to sit on the
-            figure it describes, and above a table of fifty rows it would
-            describe forty-nine it is not true of. That is also why the notice
-            over the positions above is not repeated here word for word. */}
+        {/* The cost-basis statement comes from the session, not the journal or
+           positions response, so the journal qualifies its own figures even if
+           positions failed. The table hangs it on the amounts that are a cost
+           basis, not over the whole journal. */}
         <OperationsTable
           accountId={accountId}
           canDelete={!readOnly}

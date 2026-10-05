@@ -20,28 +20,17 @@ import { isConflict } from "@/api/operations";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 
-// The two shapes this dialog can enter. Both take an instrument, a quantity
-// and money that comes IN, which is what every corporate event seen live so
-// far amounts to on the owner's side — a fund's units retired for a payment, a
-// holding sold. They are offered as two types rather than one because they are
-// two different statements about what happened, and the journal keeps them
-// apart: a redemption is the paper being retired by its issuer, a sale is the
-// owner selling it.
-//
-// A shape this list does not cover is entered on the account's own screen and
-// then... not linked — which is the honest limit of this dialog and is stated
-// on it, rather than being papered over with a type picker that offers fields
-// half of which are refused.
+// The two shapes this dialog enters, redemption and sale: an instrument, a
+// quantity and incoming money, which covers every corporate event seen live. Two
+// types because the journal keeps them apart. Anything else is entered on the
+// account's screen and is not linked, a limit the dialog states.
 const EXPLAIN_TYPES = ["redemption", "sell"] as const;
 type ExplainType = (typeof EXPLAIN_TYPES)[number];
 
-// ExplainDialog enters the one manual operation that accounts for the broker
-// rows the owner picked, and links the two.
-//
-// It sends the JOURNAL'S OWN create shape (see TinvestExplainRequest.operation),
-// so the operation is validated and replayed by the journal's own rules —
-// this dialog invents no rule of its own and checks only what it must to keep
-// from sending a request it already knows is malformed.
+// ExplainDialog enters the one manual operation accounting for the picked
+// broker rows and links them. It sends the journal's own create shape, so the
+// journal's rules apply; it checks only what would make the request
+// malformed.
 export function ExplainDialog({
   open,
   onOpenChange,
@@ -53,9 +42,7 @@ export function ExplainDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connectionId: string;
-  // The linked broker account whose rows these are. The server puts the
-  // operation on THAT account whatever this client says, so no account is
-  // asked for here.
+  // The linked broker account; the server puts the operation there.
   linkId: string;
   contentKeys: string[];
   onExplained: () => void;
@@ -70,9 +57,7 @@ export function ExplainDialog({
   const explain = useExplainRows(connectionId);
 
   const amountMinor = parseToMinor(amount);
-  // The same refusal the journal's own dialogs show, read from the raw text
-  // rather than re-derived here: what counts as an unreadable or too-large
-  // amount is one rule, and this screen is not the place for a second.
+  // The journal dialogs' amount rule, not a second one.
   const refusal = amountRefusal(amount);
   const ready =
     instrument !== null &&
@@ -90,17 +75,14 @@ export function ExplainDialog({
         body: {
           content_keys: contentKeys,
           operation: {
-            // The server overwrites this with the linked account's id and says
-            // so in the contract. It is sent because the shape requires it, and
-            // it is deliberately not something this screen tries to know.
+            // Overwritten by the server with the linked account; sent because the
+            // shape requires it.
             account_id: linkId,
             instrument_id: instrument.id,
             type,
             occurred_on: occurredOn,
             quantity,
-            // Money that came IN: both types this dialog offers are refused by
-            // the journal with a non-positive amount, so the sign is not a
-            // choice to offer.
+            // Incoming money: both types refuse a non-positive amount.
             amount_minor: amountMinor,
             currency: instrument.currency,
             note,
@@ -192,9 +174,8 @@ export function ExplainDialog({
               onChange={(e) => setNote(e.target.value)}
             />
           </div>
-          {/* The date hint is about WHICH date, because the two broker rows this
-              operation replaces have two different ones and neither has to be
-              the day the owner means. */}
+          {/* The hint is about which date: the two broker rows have different
+             ones. */}
           <p className="text-xs text-muted-foreground">
             {t("connections.detail.explain.dateHint")}
           </p>

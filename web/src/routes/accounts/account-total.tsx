@@ -4,24 +4,11 @@ import { cn } from "@/lib/utils";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import type { AccountTotal as AccountTotalPayload } from "@/api/positions";
 
-// The account's headline figure: WHAT IT HAS MADE, ALL IN — the closed deals,
-// the payments the papers made, the revaluation of what is still held, and the
-// account's own charges beside them (interest, standalone commissions, the tax
-// taken from the account rather than from a payment).
-//
-// It replaced the free-cash balance that used to be the biggest number here.
-// Cash is a fact about the account, not an answer to «сколько я тут заработал»,
-// and it now sits above the positions where the rest of the holdings are.
-//
-// DEPOSITS AND WITHDRAWALS ARE NOT IN IT: putting money in is not earning it.
-// Neither is the revaluation of idle cash — no position covers it and this
-// figure does not claim it, which the tooltip says rather than leaving a reader
-// to find out by adding things up.
-//
-// TWO MODES, TWO SHAPES. In the base currency there is one number, which is the
-// only form in which an account holding rubles, dollars and yuan has a single
-// answer. In the positions' own currencies there are several — one per currency
-// — because adding them would produce an integer denominated in nothing.
+// The account's headline: what it has made, all in (closed deals, payments,
+// revaluation of holdings, and the account's own charges). Deposits and
+// withdrawals are not in it, nor the revaluation of idle cash, which the tooltip
+// says. One number in base currency; one per currency in native mode, since a
+// sum across currencies is denominated in nothing.
 export function AccountTotal({
   total,
   mode,
@@ -31,11 +18,9 @@ export function AccountTotal({
 }) {
   const { t } = useTranslation();
 
-  // In base mode the server publishes either the figure or the reason there is
-  // none. In native mode every bucket is published, and a bucket can still be
-  // null — a position that realized into another currency has no own-currency
-  // total to add — which is shown as its own line rather than dropped, or the
-  // account would silently have one fewer currency than it holds.
+  // In base mode the figure or its gap. In native mode a bucket can be null
+  // (realized into another currency) and is shown as its own line rather
+  // than dropped.
   const figures =
     mode === "base"
       ? total.in_base == null
@@ -52,16 +37,11 @@ export function AccountTotal({
       ? []
       : total.by_currency.filter((entry) => entry.amount_minor == null);
 
-  // The two assumptions the figure rests on, each published as a count by the
-  // server. They are not gaps — the number IS there — so they are said beside
-  // it rather than in place of it, and they pull it in opposite directions:
-  // a paper written off makes the total too low, a paper whose price nobody
-  // recorded makes it too high.
+  // Two assumptions, counted by the server and said beside the figure: a
+  // written-off paper makes it too low, an unpriced purchase too high.
   const zeroValued = total.zero_valued_positions;
-  // Papers left out of the base figure because nobody knows when they were
-  // bought. Unlike a missing rate this never closes, which is why the figure is
-  // published without them rather than withheld for ever (see
-  // AccountTotal.undated_positions).
+  // Papers left out of the base figure for want of a purchase date, which
+  // never closes (AccountTotal.undated_positions).
   const undated = total.undated_positions;
   const unknownCost = total.unknown_cost_positions;
   const zeroValuedCost = total.zero_valued_cost_by_currency
@@ -100,10 +80,8 @@ export function AccountTotal({
                 : undefined
             }
           >
-            {/* WHICH MONEY, when the server could name it. «Нет курса» alone
-                sends a reader to wait for a backfill, and a source that does not
-                quote a currency at all has nothing to fetch — the Bank of Russia
-                publishes none for XAU, the code the broker uses for gold. */}
+            {/* Which currency, when the server could name it: the Bank of Russia
+               quotes no XAU (the broker's gold), so there is nothing to wait for. */}
             {total.no_rate_currencies.length > 0
               ? t("positions.accountTotalGapCurrencies", {
                   currencies: total.no_rate_currencies.join(", "),
@@ -119,10 +97,8 @@ export function AccountTotal({
       >
         {t("positions.accountTotalTitle")}
       </div>
-      {/* The currency's share of the figure, named (decision Р-5): a
-          revaluation of money, not a trade's result, so it is said apart
-          rather than left inside a number that reads as profit. Base mode
-          only — in its own currency money earns nothing. */}
+      {/* The currency's share of the figure, named (Р-5): a revaluation of
+         money, not a trade's result. Base mode only. */}
       {mode === "base" && total.cash_fx_in_base != null && total.cash_fx_in_base !== 0 && (
         <div
           data-testid="account-total-cash-fx"

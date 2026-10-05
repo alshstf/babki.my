@@ -34,9 +34,8 @@ import { ReconcilePanel } from "./reconcile-panel";
 import { RunsTable } from "./runs-table";
 import { UnparsedList } from "./unparsed-list";
 
-// The same switch the settings list draws its badge from, and for the same
-// reason: three states that are three different pieces of news, so a fourth
-// added to the contract lands here as a type error rather than as a colour.
+// The same switch as the settings list's badge: a fourth status becomes a
+// type error.
 function statusVariant(status: TinvestConnectionStatus): "default" | "secondary" | "destructive" {
   switch (status) {
     case "active":
@@ -48,23 +47,11 @@ function statusVariant(status: TinvestConnectionStatus): "default" | "secondary"
   }
 }
 
-// WHAT «ПОСЛЕДНЯЯ УДАЧНАЯ СИНХРОНИЗАЦИЯ» IS ALLOWED TO CLAIM. The field is the
-// moment the last successful run STARTED, and it is keyed by the connection
-// while runs are made one per broker account (see TinvestConnection in the API
-// contract, and Store.LastSuccessfulSyncAt behind it). Two things follow, both
-// of them easy to state the other way round by accident:
-//
-//   - «началась», not «завершилась»: the mirror was not current at this
-//     instant, it started becoming current then.
-//   - for a connection importing more than one broker account it means AT
-//     LEAST ONE of them synced then — never all of them — so the sentence says
-//     so out loud instead of leaving the reader to assume the whole connection
-//     was up to date.
-//
-// Null is «удачных синхронизаций ещё не было», which is exactly what null
-// means. An instant that will not parse is neither of those: it is a
-// successful sync whose time this screen could not read, and saying «ещё не
-// было» about it would be inventing a fact from a formatting failure.
+// What «последняя удачная синхронизация» may claim: the field is when the
+// last successful run started, per connection while runs are per account. So
+// «началась», and with several accounts "at least one of them". Null is «удачных
+// синхронизаций ещё не было»; an unparseable instant is a sync whose time could
+// not be read, not "none".
 function lastSyncLine(
   t: (key: string, vars?: Record<string, string>) => string,
   connection: TinvestConnection,
@@ -78,11 +65,8 @@ function lastSyncLine(
     : t("connections.detail.lastSyncOne", { time });
 }
 
-// One linked pair: the babki account the import feeds, and the broker account
-// it is fed from. Both are named, and neither is named with the other's name —
-// the two are separate facts and the broker's label is frozen at the moment the
-// link was made (see TinvestLinkedAccount.broker_account_name), so it can
-// differ from what either side calls the account today.
+// One linked pair, each side under its own name; the broker's label is
+// frozen when the link was made.
 function LinkedAccountRow({
   link,
   accountName,
@@ -100,29 +84,20 @@ function LinkedAccountRow({
           params={{ accountId: link.account_id }}
           className="font-medium text-primary underline underline-offset-4"
         >
-          {/* The babki account's own name when the accounts list holds it, and
-              a plain «open it» when it does not — while that list is loading,
-              or if it failed. The broker's name is NOT borrowed for the link:
-              it names the other end of the pair. */}
+          {/* The babki account's name when the accounts list has it, else a plain
+             «open it»; the broker's name names the other end. */}
           {accountName ?? t("connections.detail.accountFallback")}
         </Link>
-        {/* The label is frozen at the moment the link was made and is not
-            re-read on every sync (see TinvestLinkedAccount.broker_account_name),
-            so «у брокера» is qualified rather than left to read as the name the
-            broker uses today. */}
+        {/* The broker's label is frozen when the link is made, so «у брокера» is
+           qualified. */}
         <span
           className="text-xs text-muted-foreground"
           title={t("connections.detail.brokerAccountNameFrozen")}
         >
           {t("connections.detail.brokerAccount", { name: link.broker_account_name })}
         </span>
-        {/* The broker's own classification word, kept verbatim as the evidence
-            of what was connected (ACCOUNT_TYPE_TINKOFF_IIS and the like). Not
-            translated: it is the broker's vocabulary, not ours. FROZEN EXACTLY
-            AS THE NAME ABOVE IS — both are written when the link is made and
-            neither is re-read on any sync (nothing updates tinvest_account_links
-            at all) — so it carries the same warning rather than reading as
-            today's classification because only its neighbour was qualified. */}
+        {/* The broker's account type, verbatim and untranslated, frozen like the
+           name above, and qualified the same way. */}
         <span
           className="text-xs text-muted-foreground"
           title={t("connections.detail.brokerAccountTypeFrozen")}
@@ -139,10 +114,9 @@ function LinkedAccountRow({
   );
 }
 
-// ConnectionDetailPage is everything one T-Invest connection has to say for
-// itself: whether it still works, which accounts it feeds, what the last check
-// against the broker found, what every sync run did, and which of the broker's
-// operations this program could not read.
+// ConnectionDetailPage: whether the connection works, the accounts it feeds,
+// the last check against the broker, the run log and the unreadable
+// operations.
 export function ConnectionDetailPage() {
   const { t } = useTranslation();
   const { connectionId } = useParams({ from: "/app/settings/connections/$connectionId" });
@@ -150,16 +124,13 @@ export function ConnectionDetailPage() {
   const { data: session } = useSession();
   const isOwner = session?.role === "owner";
 
-  // Every hook before the owner gate below, per the Rules of Hooks. The empty
-  // id keeps a non-owner's browser from asking for something the server would
-  // refuse anyway (useConnection is disabled on an empty id).
+  // Hooks before the owner gate; an empty id keeps a non-owner from asking
+  // (useConnection is disabled on it).
   const connection = useConnection(isOwner ? connectionId : "");
   const accounts = useAccounts();
   const triggerSync = useTriggerSync();
-  // Two independent mutation states over one endpoint on purpose: switching the
-  // connection off and pasting a new token fail in different ways and are
-  // captioned differently, and a single shared state would let one action's
-  // refusal appear under the other's button.
+  // Two mutation states over one endpoint, so one action's error never
+  // appears under the other's button.
   const toggleConnection = useUpdateConnection();
   const replaceToken = useUpdateConnection();
   const deleteConnection = useDeleteConnection();
@@ -194,13 +165,8 @@ export function ConnectionDetailPage() {
   const accountName = (accountId: string) =>
     accounts.data?.find((account) => account.id === accountId)?.name;
 
-  // WHAT THE «СИНХРОНИЗАЦИЯ ПОСТАВЛЕНА В ОЧЕРЕДЬ» LINE IS ABOUT: the press
-  // that produced it, and nothing after. react-query keeps a mutation's result
-  // until something resets it, so the line used to stay on screen for the rest
-  // of the visit — over a new token, over the connection being switched off,
-  // over a queue that had long since emptied — saying «поставлена» about a
-  // state of affairs that had moved on. Every other action on this card clears
-  // it, and the run log below is where the sync itself is then reported.
+  // The "queued" line is about the press that produced it; every other
+  // action on the card clears it, and the run log reports the sync.
   const forgetSyncMessage = () => triggerSync.reset();
 
   const submitToken = () => {
@@ -235,10 +201,8 @@ export function ConnectionDetailPage() {
             <span>{lastSyncLine(t, data)}</span>
           </div>
 
-          {/* Each banner is drawn from the status that means it, and neither is
-              drawn for the other: a token the broker refused waits for the
-              owner to paste a new one, a switched-off connection waits for
-              nobody. */}
+          {/* Each banner from the status that means it: a refused token waits for
+             a new one, a switched-off connection for nobody. */}
           {data.status === "token_revoked" && (
             <Alert variant="destructive">
               <AlertDescription>{t("connections.detail.revokedBanner")}</AlertDescription>
@@ -251,23 +215,17 @@ export function ConnectionDetailPage() {
           )}
 
           <div className="flex flex-wrap gap-2">
-            {/* Only an active connection is synced at all — the scheduler
-                passes over the other two and this endpoint answers them 409 —
-                so the button is dead for them, and the line below the row says
-                why. NOT a `title`: a disabled button carries
-                `pointer-events-none`, so a tooltip on it is a sentence nobody
-                can reach. */}
+            {/* Only active connections sync, so the button is disabled for the rest
+               and the line below says why; not a title, which a disabled button
+               cannot show. */}
             <Button
               disabled={data.status !== "active" || triggerSync.isPending}
               onClick={() => triggerSync.mutate(data.id)}
             >
               {t("connections.detail.syncNow")}
             </Button>
-            {/* No on/off switch at token_revoked. Switching such a connection
-                «on» would set active on a token the broker has already refused:
-                the next run fails, the server parks it back, and the button
-                will have promised a repair it cannot make. The repair is the
-                new token beside it. */}
+            {/* No on/off at token_revoked: switching on would set active on a token
+               the broker refused; the repair is the new token. */}
             {data.status === "active" && (
               <Button
                 variant="outline"
@@ -302,10 +260,7 @@ export function ConnectionDetailPage() {
             >
               {t("connections.detail.newToken")}
             </Button>
-            {/* The screen's own destructive look, the one the confirmation
-                dialog's button already uses — not a colour class painted onto
-                an outline button, which is the same intent said in a way
-                nothing else on the page shares. */}
+            {/* The destructive button style the confirmation dialog already uses. */}
             <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
               {t("connections.detail.delete")}
             </Button>
@@ -316,12 +271,8 @@ export function ConnectionDetailPage() {
             </p>
           )}
 
-          {/* WHAT `queued: false` IS ALLOWED TO SAY. It means a sync was
-              already in the queue — and «in the queue» covers one waiting out a
-              failed attempt's backoff, which River grows into the hours (see
-              TinvestSyncAcceptedResponse in the API contract). «Уже идёт» would
-              therefore be false for as long as that wait lasts, so the sentence
-              claims only what is true of both. */}
+          {/* queued=false means already in the queue, possibly waiting out a
+             backoff of hours, so the sentence does not say «уже идёт». */}
           {triggerSync.data && (
             <Alert>
               <AlertDescription>
@@ -331,10 +282,7 @@ export function ConnectionDetailPage() {
               </AlertDescription>
             </Alert>
           )}
-          {/* By status, never by the server's own sentence. 409 here says one
-              thing only: the connection is not active — which, with the button
-              disabled for the other two states, means the status moved under
-              this screen since it loaded. */}
+          {/* By status: 409 means the connection is no longer active. */}
           {triggerSync.isError && (
             <Alert variant="destructive">
               <AlertDescription>
@@ -365,9 +313,8 @@ export function ConnectionDetailPage() {
                   replaceToken.reset();
                 }}
               />
-              {/* The same two answers the wizard's token step branches on, by
-                  the same statuses: 400 is the broker refusing this token, 502
-                  is this server failing to reach the broker at all. */}
+              {/* The wizard's two answers, by status: 400 the broker refused the
+                 token, 502 the broker could not be reached. */}
               {replaceToken.isError && (
                 <Alert variant="destructive">
                   <AlertDescription>
@@ -389,10 +336,8 @@ export function ConnectionDetailPage() {
               </div>
             </div>
           )}
-          {/* Said only where it was witnessed: the server stores a replacement
-              token only after the broker has accepted it (PATCH
-              .../connections/{id} in the contract), so a successful answer to
-              this request IS the broker's acceptance. */}
+          {/* A replacement is stored only after the broker accepted it, so a
+             success is the broker's acceptance. */}
           {replaceToken.isSuccess && !tokenFormOpen && (
             <Alert>
               <AlertDescription>{t("connections.detail.newTokenAccepted")}</AlertDescription>
@@ -406,11 +351,8 @@ export function ConnectionDetailPage() {
           <CardTitle>{t("connections.detail.accountsTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
-          {/* A connection is created with at least one account and can end up
-              with none: deleting a babki account takes its link with it
-              (migration 0014's ON DELETE CASCADE on account_id) while leaving
-              the connection standing. An empty list is that, and it is said
-              rather than drawn as blank space. */}
+          {/* Deleting a babki account removes its link (ON DELETE CASCADE) and
+             leaves the connection; an empty list says so. */}
           {data.accounts.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {t("connections.detail.accountsEmpty")}
@@ -446,14 +388,9 @@ export function ConnectionDetailPage() {
           <DialogHeader>
             <DialogTitle>{t("connections.detail.deleteTitle")}</DialogTitle>
           </DialogHeader>
-          {/* WHAT ACTUALLY GOES AND WHAT STAYS, from the contract and from
-              migration 0014's cascade: the token, the links, the mirror of the
-              broker's operations, the instrument map and the run log are
-              deleted; the babki accounts this connection created and the
-              journal operations the projection wrote into them are not touched
-              — they carry no foreign key back to the connection. Saying so is
-              the point of this dialog: «удалить подключение» reads like «удалить
-              всё, что оно принесло» unless the difference is spelled out. */}
+          {/* What goes (token, links, mirror, instrument map, run log) and what
+             stays (the accounts and their operations), since «удалить
+             подключение» reads like «удалить всё». */}
           <p className="text-sm text-muted-foreground">
             {t("connections.detail.deleteConfirm")}
           </p>
@@ -477,10 +414,8 @@ export function ConnectionDetailPage() {
               disabled={deleteConnection.isPending}
               onClick={() =>
                 deleteConnection.mutate(data.id, {
-                  // Away from a screen whose subject no longer exists. Without
-                  // it the invalidation this mutation fires would refetch the
-                  // connection, meet a 404 and leave the owner looking at «нет
-                  // такого подключения» where a moment ago there was one.
+                  // Leave a screen whose connection is gone, rather than refetch into a
+                  // 404.
                   onSuccess: () => void navigate({ to: "/settings" }),
                 })
               }

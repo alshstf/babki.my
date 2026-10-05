@@ -12,27 +12,11 @@ import { Button } from "@/components/ui/button";
 import { useSession, useSetupStatus } from "@/api/session";
 import { AppLayout } from "@/routes/app-layout";
 
-// EVERY SCREEN IS FETCHED WHEN IT IS FIRST VISITED, not with the application
-// (#15). Built as one file the bundle had passed 660 kB — every dialog of every
-// screen, the whole T-Invest connection wizard and its run log included — and
-// all of it had to arrive before the login form could be drawn. Split by route
-// nobody pays for a screen they do not open, and the first paint carries the
-// gate, the shell and one screen.
-//
-// THE SHELL IS NOT AMONG THEM, deliberately: AppLayout is on the way to every
-// signed-in screen, so deferring it would only add a second round trip in front
-// of the first one that matters. Same for Gate below, which decides which screen
-// to ask for in the first place.
-//
-// lazyRouteComponent rather than React.lazy, because the router is what knows a
-// navigation has started: it loads a route's component as part of matching the
-// route, so the chunk is in hand by the time the screen renders rather than
-// being discovered while React is already drawing. Nothing here turns link
-// preloading on, so a chunk is fetched when a route is actually visited and not
-// when a link happens to be hovered.
-//
-// The second argument names the export, since none of these screens is a
-// default export.
+// Every screen is fetched on first visit (#15); one bundle had passed 660 kB,
+// all of it needed before the login form. The shell and Gate are not split: they
+// are on the way to every screen. lazyRouteComponent rather than React.lazy, so
+// the router loads the chunk while matching; no link preloading. The second
+// argument names the export.
 const LoginPage = lazyRouteComponent(
   () => import("@/routes/login"),
   "LoginPage",
@@ -87,9 +71,8 @@ function FullScreenLoader() {
   );
 }
 
-// What the gate shows instead of a screen, when it has no screen it may
-// honestly show. A message, and — where asking again can help — a button that
-// asks again.
+// What the gate shows when it has no screen it may honestly show: a message,
+// and a retry where asking again can help.
 function StartupNotice({
   message,
   onRetry,
@@ -106,18 +89,11 @@ function StartupNotice({
   );
 }
 
-// Gate decides between setup wizard, login and the app shell.
-//
-// Up to two answers are needed for that: whether this instance has been set up
-// and — only if it has been — whether this browser is signed in. Until the
-// answer it actually needs is in, the gate shows that it is waiting; it may not
-// fall back to a default, because every default here is a claim about the
-// server. `setup_needed ?? false` was one: it said "no setup
-// needed" about an instance nobody had managed to ask, and a brand-new instance
-// answered a login form for an account that does not exist yet, with nothing on
-// screen to suggest the setup wizard was the screen wanted (#88).
-//
-// Exported for its tests; the routes below are its only other caller.
+// Gate decides between setup, login and the app. It needs whether the instance
+// is set up and, only then, whether this browser is signed in, and shows that it
+// is waiting until the needed answer is in: every default is a claim about the
+// server (`setup_needed ?? false` showed a login form on a brand-new instance,
+// #88). Exported for its tests.
 export function Gate({
   children,
   wants,
@@ -129,18 +105,10 @@ export function Gate({
   const setupStatus = useSetupStatus();
   const session = useSession();
 
-  // The two questions are asked in order, because the answer to the first can
-  // make the second beside the point — and a gate that waits for, or gives up
-  // over, an answer it does not need is guessing in its own way: it says it does
-  // not know when it does.
+  // The two questions in order: the first can make the second moot.
 
-  // FIRST: has this instance been set up? Until that is in, no screen here can
-  // be shown honestly. "paused" is react-query holding the request because the
-  // browser reports itself offline (networkMode "online", the default): it has
-  // not been sent, no server has failed, and it will go out on its own when the
-  // connection returns. It is also invisible to isLoading, which is
-  // isPending && isFetching and therefore FALSE while paused — so the gate this
-  // one replaced fell straight past it into the guess.
+  // First: is the instance set up? "paused" is react-query holding the request
+  // offline; it is invisible to isLoading, so this checks isPending.
   if (setupStatus.isPending) {
     return setupStatus.fetchStatus === "paused" ? (
       <StartupNotice message={t("app.startupOffline")} />
@@ -149,10 +117,8 @@ export function Gate({
     );
   }
 
-  // Read out rather than inferred from the check above: react-query's result is
-  // a union discriminated by `status`, and the pending check narrows it only
-  // for this exact expression. Past it, an undefined means the query failed
-  // (useSetupStatus throws unless the body arrived).
+  // An undefined here means the query failed (useSetupStatus throws unless
+  // a body arrived).
   const status = setupStatus.data;
   if (status === undefined) {
     return (
@@ -166,17 +132,14 @@ export function Gate({
     );
   }
 
-  // An instance nobody has set up yet has exactly one screen it can show: the
-  // wizard. There is no account to sign in to, so whether this browser is
-  // signed in is a question with no bearing — and the gate must not stall, or
-  // give up, over the answer to it. Reaching /setup ITSELF is the one case that
-  // renders rather than redirects.
+  // An instance not set up has one screen, the wizard; whether this browser
+  // is signed in does not matter. /setup itself renders rather than
+  // redirects.
   if (status.setup_needed) {
     return wants === "setup" ? <>{children}</> : <Navigate to="/setup" />;
   }
 
-  // SECOND: is this browser signed in? Only now does it matter — and only now
-  // may not knowing stop anything.
+  // Second: is this browser signed in? Only now does it matter.
   if (session.isPending) {
     return session.fetchStatus === "paused" ? (
       <StartupNotice message={t("app.startupOffline")} />
@@ -185,25 +148,12 @@ export function Gate({
     );
   }
 
-  // "We could not ask whether you are signed in" is not "you are not signed
-  // in", and answering it with a login form would be the same guess in the
-  // other direction. Only the session is asked again: the setup status has
-  // already answered.
-  //
-  // `isError` alone is not "we never learned the answer" — react-query sets
-  // it whenever the LAST attempt failed, even when an earlier one already
-  // succeeded and the cache still holds it (`session.data` survives a failed
-  // refetch untouched). `data === undefined` is what "never answered" looks
-  // like; `null` already means "answered: nobody is signed in". Without the
-  // second half, a signed-in reader's background refresh failing — the
-  // laptop waking from sleep, `online` firing while the server is still
-  // coming up, or the owner restarting the docker stand with the tab open —
-  // replaced the whole app with this notice, and the notice would have been
-  // false: the client did know a moment ago and still holds the answer, it
-  // just failed to refresh it. This was a regression: the guard this
-  // replaced, `isLoading`, is `isPending && isFetching` and so goes false
-  // once data exists, which let a failed refresh fall through and render
-  // from cache correctly, by accident, on the base commit.
+  // "We could not ask" is not "not signed in". Only the session is retried.
+  // isError alone also covers a failed refresh of an answer still cached
+  // (data survives); data === undefined is "never answered", while null is
+  // "nobody signed in". Without the second half, a background refresh failing
+  // (a laptop waking, a server restarting) replaced the app with this
+  // notice.
   if (session.isError && session.data === undefined) {
     return (
       <StartupNotice
@@ -217,8 +167,7 @@ export function Gate({
 
   const authed = Boolean(session.data);
 
-  // Past the branch above the instance IS set up, so the wizard has nothing
-  // left to do here whoever is asking for it.
+  // The instance is set up, so the wizard has nothing to do.
   if (wants === "setup") return <Navigate to="/login" />;
   if (!authed && wants === "app") return <Navigate to="/login" />;
   if (authed && wants === "login") return <Navigate to="/" />;
@@ -282,8 +231,7 @@ const importRoute = createRoute({
   component: ImportPage,
 });
 
-// One paper across the family's accounts: its price and every account's
-// position in it.
+// One paper across the family's accounts.
 const instrumentDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/instruments/$instrumentId",
@@ -302,38 +250,32 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-// Static segments ("new") take precedence over the sibling dynamic one
-// ($connectionId) regardless of declaration order — TanStack Router ranks a
-// literal path segment above a param segment when matching.
-// The instrument catalog, and the only place a row of it can be corrected. It
-// lives under the settings rather than under an account because the catalog is
-// instance-wide: the same row backs every account that holds the paper.
+// The instrument catalog, the only place a row can be corrected; under
+// settings because it is instance-wide.
 const instrumentsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/settings/instruments",
   component: InstrumentsPage,
 });
 
+// "new" outranks the sibling $connectionId whatever the declaration order:
+// TanStack Router ranks a literal segment above a param.
 const connectWizardRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/settings/connections/new",
   component: ConnectWizardPage,
 });
 
-// One connection's own screen: its state and the buttons that change it, the
-// accounts it feeds, the last check against the broker, the run log and the
-// operations the import could not read (see ConnectionDetailPage).
+// One connection's screen: its state and controls, accounts, last check,
+// run log and unreadable operations (see ConnectionDetailPage).
 const connectionDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/settings/connections/$connectionId",
   component: ConnectionDetailPage,
 });
 
-// Exported for the test that walks it. The application builds one router from
-// it, right below; a test needs its own, with a history it controls, and it has
-// to be THIS tree rather than a stand-in — the thing being checked is that a
-// screen fetched on demand really arrives, which a hand-built tree of eager
-// components cannot show.
+// Exported for the test that walks it: it must be this tree, since the
+// check is that on-demand screens really arrive.
 export const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
@@ -351,14 +293,9 @@ export const routeTree = rootRoute.addChildren([
   ]),
 ]);
 
-// What any route shows when its screen throws. The case it exists for: the
-// server was upgraded while the tab stayed open, the screen being navigated to
-// lives in a chunk that has been replaced, and fetching it fails (the server
-// answers 404 for a hashed file that is gone). Without this React unmounts the
-// whole application and leaves a blank page with nothing to do about it (#201).
-//
-// It reloads on the reader's click, never by itself: a reload that did not help
-// would otherwise loop.
+// What a route shows when its screen throws: typically a stale tab after an
+// upgrade, whose screen chunk is gone (404) (#201). It reloads only on a click,
+// so a reload that does not help cannot loop.
 export function ScreenCrashed() {
   const { t } = useTranslation();
   return (

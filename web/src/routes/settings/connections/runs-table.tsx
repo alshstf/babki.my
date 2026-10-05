@@ -19,9 +19,7 @@ import {
   type TinvestSyncRunStatus,
 } from "@/api/connections";
 
-// A switch over the contract's own three values rather than a two-way test, so
-// a fourth one added there arrives here as a type error instead of quietly
-// drawing as «всё хорошо».
+// A switch over the three statuses, so a fourth is a type error.
 function runVariant(status: TinvestSyncRunStatus): "default" | "secondary" | "destructive" {
   switch (status) {
     case "ok":
@@ -33,23 +31,14 @@ function runVariant(status: TinvestSyncRunStatus): "default" | "secondary" | "de
   }
 }
 
-// WHAT A RUN'S COUNTERS MEAN DEPENDS ON HOW IT ENDED, and the three columns of
-// the sync_runs table say so plainly (migration 0014): every count defaults to
-// zero at INSERT and is written only when the run is closed.
+// A run's counters depend on how it ended; they default to zero and are
+// written at close (migration 0014).
 //
-//   - `running`: nothing has been written to any of them. Their zero is the
-//     column default — a placeholder, not a measurement — so this cell says the
-//     run has not finished instead of printing four zeros that would read as
-//     «прочитано ноль операций». A run stuck here for good is a process that
-//     died mid-sync, and «не закончился» is true of that too.
-//   - `ok`: all four were measured and all four are shown.
-//   - `failed`: the first three were measured — the mirror pass either wrote
-//     its rows or rolled back, and a pass that recorded nothing genuinely read,
-//     added and lost nothing (see syncWorker.failed). The FOURTH is not of that
-//     kind: it is a count taken at the moment of failure that falls back to
-//     zero when the count itself fails, and the row has nowhere to say which of
-//     the two a zero is. So the failed run shows why it failed instead — a
-//     drawn zero would be a measurement nobody can vouch for.
+//   - running: nothing written; "not finished" rather than zeros.
+//   - ok: all four measured and shown.
+//   - failed: the first three are real (a rolled-back pass read nothing); the
+//     fourth may be a failed count's zero, so the failure reason is shown
+//     instead.
 function RunWork({ run }: { run: TinvestSyncRun }) {
   const { t } = useTranslation();
   if (run.status === "running") {
@@ -74,13 +63,8 @@ function RunWork({ run }: { run: TinvestSyncRun }) {
   );
 }
 
-// RunsTable is the connection's sync log, newest first, one page at a time.
-//
-// `links` comes from the connection this screen already loaded, so the broker
-// account behind a run is named by joining the run's own link_id against it —
-// the contract publishes the link rather than the account for exactly that, so
-// the answer is read off the row instead of being assembled from a second query
-// whose data could have moved on.
+// RunsTable is the sync log, newest first, paged. The broker account is named
+// by joining the run's link_id against the connection's links.
 export function RunsTable({
   connectionId,
   links,
@@ -92,9 +76,8 @@ export function RunsTable({
   const runs = useSyncRuns(connectionId);
   const list = runs.data?.pages.flatMap((page) => page.runs) ?? [];
 
-  // A dash rather than an invented name: a run whose link is not among the
-  // connection's own is not something this screen can name, and naming it
-  // after some other account would be worse than saying nothing.
+  // A dash for a link not among the connection's, never another account's
+  // name.
   const brokerAccountName = (linkId: string) =>
     links.find((link) => link.link_id === linkId)?.broker_account_name ?? "—";
 
@@ -118,9 +101,7 @@ export function RunsTable({
             <TableHeader>
               <TableRow>
                 <TableHead>{t("connections.detail.runs.columns.startedAt")}</TableHead>
-                {/* Qualified for the reason the connection screen's own list
-                    qualifies it: the name was taken when the link was made and
-                    is not re-read on every sync. */}
+                {/* Qualified: the name was taken when the link was made. */}
                 <TableHead title={t("connections.detail.brokerAccountNameFrozen")}>
                   {t("connections.detail.runs.columns.account")}
                 </TableHead>
@@ -147,13 +128,8 @@ export function RunsTable({
                     <RunWork run={run} />
                   </TableCell>
                   <TableCell className="text-xs">
-                    {/* «Не проверено» is one of the three and is drawn as
-                        itself: a run that reconciled nothing says so, and an
-                        empty mismatch list beside it is not agreement. The
-                        count is shown only where the list means «what was
-                        found», which the contract says is `mismatched` alone —
-                        the same empty list means «nobody looked» under the
-                        other two. */}
+                    {/* «Не проверено» is drawn as itself; the count only for `mismatched`,
+                       where an empty list means "found nothing". */}
                     <div className="grid gap-0.5">
                       <span>{t(`connections.reconcileStatuses.${run.reconcile_status}`)}</span>
                       {run.reconcile_status === "mismatched" && (
@@ -170,9 +146,7 @@ export function RunsTable({
             </TableBody>
           </Table>
         )}
-        {/* The server's own answer, never the page's length: an over-large
-            `limit` is refused rather than clamped here, so a short page cannot
-            be read as the end of the log (#86 on the journal). */}
+        {/* The server's answer, not the page length (#86). */}
         {runs.hasNextPage && (
           <div>
             <Button
