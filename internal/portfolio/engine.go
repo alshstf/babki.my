@@ -162,6 +162,11 @@ type Lot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
 	AcquiredOn *time.Time
+	// RateOn is the day whose official rate prices this lot's cost in another
+	// currency: the purchase's settlement day when it is known (decision Р-3,
+	// НК РФ ст. 210 п. 5 — the day the expense was actually incurred), nil to
+	// take AcquiredOn.
+	RateOn *time.Time
 }
 
 // CurrencyMinor is an amount of minor units together with the currency they
@@ -497,6 +502,8 @@ type ReleasedLot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
 	AcquiredOn *time.Time
+	// RateOn is the source lot's (see Lot.RateOn), carried with it.
+	RateOn *time.Time
 }
 
 // Realization is one disposal recorded as WHAT IT WAS MADE OF rather than as
@@ -532,6 +539,10 @@ type Realization struct {
 	// OccurredOn is the day of the disposal. It dates the proceeds and the fee,
 	// and it dates NONE of the released basis — those days are the pieces' own.
 	OccurredOn time.Time
+	// RateOn is the day whose official rate prices the proceeds and the fee:
+	// the sale's settlement day when it is known (decision Р-3), nil to take
+	// OccurredOn.
+	RateOn *time.Time
 	// ProceedsMinor is what came in: a sale's amount, an amortization's returned
 	// principal. Positive.
 	ProceedsMinor int64
@@ -623,7 +634,7 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 			// have been: real shares, from a real lot, really left, and the
 			// lot really has no date. Suppressing it here to avoid that
 			// silence would trade an honest gap for a corrupted transfer.
-			pieces = append(pieces, ReleasedLot{Quantity: l.Quantity, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn})
+			pieces = append(pieces, ReleasedLot{Quantity: l.Quantity, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn, RateOn: l.RateOn})
 			released += l.CostMinor
 			remaining = remaining.Sub(l.Quantity)
 			p.Lots = p.Lots[1:]
@@ -633,7 +644,7 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 		// with its acquisition date — what is left was bought on the same
 		// day as the part just released.
 		share := lotShare(*l, remaining)
-		pieces = append(pieces, ReleasedLot{Quantity: remaining, CostMinor: share, AcquiredOn: l.AcquiredOn})
+		pieces = append(pieces, ReleasedLot{Quantity: remaining, CostMinor: share, AcquiredOn: l.AcquiredOn, RateOn: l.RateOn})
 		l.CostMinor -= share
 		l.Quantity = l.Quantity.Sub(remaining)
 		released += share
@@ -662,7 +673,7 @@ func (p *Position) sweepShareless() []ReleasedLot {
 		if l.CostMinor == 0 {
 			continue
 		}
-		pieces = append(pieces, ReleasedLot{Quantity: decimal.Zero, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn})
+		pieces = append(pieces, ReleasedLot{Quantity: decimal.Zero, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn, RateOn: l.RateOn})
 		p.CostMinor -= l.CostMinor
 	}
 	p.Lots = nil
@@ -925,7 +936,7 @@ func SpinoffPieces(lots []Lot, share decimal.Decimal) []ReleasedLot {
 	pieces := make([]ReleasedLot, len(lots))
 	var total int64
 	for i, l := range lots {
-		pieces[i] = ReleasedLot{Quantity: l.Quantity, CostMinor: 0, AcquiredOn: l.AcquiredOn}
+		pieces[i] = ReleasedLot{Quantity: l.Quantity, CostMinor: 0, AcquiredOn: l.AcquiredOn, RateOn: l.RateOn}
 		total += l.CostMinor
 	}
 	if total <= 0 {
@@ -1214,12 +1225,12 @@ func sameAcquisition(a, b *time.Time) bool {
 // first comparison and appends. Only a lot that arrives out of order — a
 // transfer carrying older shares, the case this exists for — walks, and only as
 // far as it must.
-func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn *time.Time) {
+func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn, rateOn *time.Time) {
 	at := len(p.Lots)
 	for at > 0 && acquiredBefore(acquiredOn, p.Lots[at-1].AcquiredOn) {
 		at--
 	}
-	p.Lots = slices.Insert(p.Lots, at, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn})
+	p.Lots = slices.Insert(p.Lots, at, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn, RateOn: rateOn})
 	p.Quantity = p.Quantity.Add(qty)
 	p.CostMinor += costMinor
 	p.heldALot = true
@@ -1349,7 +1360,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			// itself records. The local copy is what the lot points at, so the
 			// lot never aliases the journal entry it came from.
 			boughtOn := o.OccurredOn
-			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn)
+			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn, settledCopy(o))
 			if err := p.addFee(o.Currency, o.FeeMinor); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
@@ -1367,6 +1378,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			}
 			p.realize(Realization{
 				OccurredOn:    o.OccurredOn,
+				RateOn:        settledCopy(o),
 				ProceedsMinor: o.AmountMinor,
 				Currency:      o.Currency,
 				FeeMinor:      o.FeeMinor,
@@ -1545,7 +1557,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				// the release queue sorted the parcel by a day that describes
 				// paperwork rather than a purchase. Absence is the only truthful
 				// value here, and everything downstream now has to face it.
-				p.addLot(*o.Quantity, o.AmountMinor, nil)
+				p.addLot(*o.Quantity, o.AmountMinor, nil, nil)
 				break
 			}
 			if err := CheckTransferLots(o); err != nil {
@@ -1567,7 +1579,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			// were checked to sum to the quantity and basis their own row
 			// carries.
 			for _, pc := range o.TransferLots {
-				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn)
+				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn, pc.RateOn)
 			}
 		case TypeSpinoffOut:
 			if o.AmountMinor < 0 {
@@ -1693,6 +1705,27 @@ func CheckTransferLots(o Operation) error {
 	return nil
 }
 
+// settledCopy is the operation's settlement day as a value of its own, so a
+// lot or a realization never aliases the journal entry it came from; nil when
+// the settlement day is not known.
+func settledCopy(o Operation) *time.Time {
+	if o.SettledOn == nil {
+		return nil
+	}
+	day := *o.SettledOn
+	return &day
+}
+
+// RateDay is the day whose official rate prices an operation's money in
+// another currency: its settlement day when known (decision Р-3), else the day
+// it occurred.
+func RateDay(o Operation) time.Time {
+	if o.SettledOn != nil {
+		return *o.SettledOn
+	}
+	return o.OccurredOn
+}
+
 // drainLotsCost subtracts amount from lot costs front-to-back (amortization
 // keeps quantities intact; only the cost basis shrinks) and REPORTS which lots
 // gave up which part of it, in queue order.
@@ -1756,7 +1789,7 @@ func drainLotsCost(p *Position, amount int64) []ReleasedLot {
 		p.Lots[i].CostMinor -= take
 		amount -= take
 		pieces = append(pieces, ReleasedLot{
-			Quantity: decimal.Zero, CostMinor: take, AcquiredOn: p.Lots[i].AcquiredOn,
+			Quantity: decimal.Zero, CostMinor: take, AcquiredOn: p.Lots[i].AcquiredOn, RateOn: p.Lots[i].RateOn,
 		})
 	}
 	return pieces

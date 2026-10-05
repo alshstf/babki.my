@@ -575,3 +575,22 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 		t.Errorf("one-pair fallback lookups = %d, want 0 — every date this page needs was enumerated and prewarmed", got)
 	}
 }
+
+// Decision Р-3: a purchase that says when it settled is converted at that day's
+// rate — the day its money actually moved — and rate_on says so.
+func TestListOperationInBaseConvertsATradeAtItsSettlementDay(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	seedFxRate(t, mdStore, "2019-03-12", "65")
+	seedFxRate(t, mdStore, "2019-03-14", "70")
+
+	acc := mkAccount(t, url, c, "US брокер", "USD")
+	share := mkInstrument(t, url, c, `{"type":"share","name":"Apple","ticker":"AAPL","currency":"USD"}`)
+	buy := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2019-03-12","settled_on":"2019-03-14","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc, share))
+
+	op := findOperation(t, listJournal(t, url, c, acc), buy)
+	if op.InBase == nil || op.InBase.AmountMinor != -7000000 || op.InBase.RateOn != "2019-03-14" {
+		t.Errorf("in_base = %+v, want -7000000 at the 2019-03-14 rate — the settlement day", op.InBase)
+	}
+}

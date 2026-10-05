@@ -221,7 +221,11 @@ func lotTerms(lots []Lot, currency string) (terms []datedMinor, dated bool) {
 		// the paper, and Position.Currency is exactly the currency that was paid
 		// (every operation that adds a lot settles it — see
 		// Type.mustMatchPositionCurrency).
-		terms = append(terms, datedMinor{minor: l.CostMinor, from: currency, on: *l.AcquiredOn})
+		on := *l.AcquiredOn
+		if l.RateOn != nil {
+			on = *l.RateOn
+		}
+		terms = append(terms, datedMinor{minor: l.CostMinor, from: currency, on: on})
 	}
 	return terms, true
 }
@@ -299,9 +303,13 @@ func realizedTerms(events []Realization, currency string) (terms []datedMinor, d
 		// own-currency figure does not: nothing here ever subtracts one currency
 		// from another — every term is converted first, at its own date, and only
 		// then summed.
+		on := e.OccurredOn
+		if e.RateOn != nil {
+			on = *e.RateOn
+		}
 		terms = append(terms,
-			datedMinor{minor: e.ProceedsMinor, from: e.Currency, on: e.OccurredOn},
-			datedMinor{minor: -e.FeeMinor, from: e.Currency, on: e.OccurredOn},
+			datedMinor{minor: e.ProceedsMinor, from: e.Currency, on: on},
+			datedMinor{minor: -e.FeeMinor, from: e.Currency, on: on},
 		)
 		for _, r := range e.Released {
 			if r.AcquiredOn == nil {
@@ -309,7 +317,11 @@ func realizedTerms(events []Realization, currency string) (terms []datedMinor, d
 				// to convert, and the whole proceeds above are the result.
 				continue
 			}
-			terms = append(terms, datedMinor{minor: -r.CostMinor, from: currency, on: *r.AcquiredOn})
+			paid := *r.AcquiredOn
+			if r.RateOn != nil {
+				paid = *r.RateOn
+			}
+			terms = append(terms, datedMinor{minor: -r.CostMinor, from: currency, on: paid})
 		}
 	}
 	return terms, true

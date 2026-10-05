@@ -533,7 +533,8 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 		// The one term of an ordinary row, dated on the day its money moved:
 		// a missing rate for it is a missing rate for the operation's own date,
 		// which is the only row where that sentence is the true one.
-		own := rateDate{on: o.OccurredOn, gap: inBaseNoRateOperationDate}
+		// For a trade that is its settlement day when known (decision Р-3).
+		own := rateDate{on: portfolio.RateDay(o), gap: inBaseNoRateOperationDate}
 		return []datedMinor{{minor: o.AmountMinor, date: own}}, own, true, nil
 	}
 	if err := checkStoredLots(o); err != nil {
@@ -565,7 +566,11 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 		// Every piece of a parcel is dated by the day it was BOUGHT, so a
 		// missing rate for any of them is a missing rate for a purchase date —
 		// never for the transfer's own, which is not asked about here at all.
-		bought := rateDate{on: *pc.AcquiredOn, gap: inBaseNoRateLotDate}
+		paidOn := *pc.AcquiredOn
+		if pc.RateOn != nil {
+			paidOn = *pc.RateOn
+		}
+		bought := rateDate{on: paidOn, gap: inBaseNoRateLotDate}
 		terms = append(terms, datedMinor{minor: pc.CostMinor, date: bought})
 		if len(terms) == 1 || bought.on.After(headline.on) {
 			headline = bought
@@ -582,7 +587,7 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 // left with a rate to strike — the fee, which belongs to the day it was paid —
 // and for rate_on, which then names the only rate the row was struck at (#226).
 func costless(o Operation) ([]datedMinor, rateDate, bool, error) {
-	own := rateDate{on: o.OccurredOn, gap: inBaseNoRateOperationDate}
+	own := rateDate{on: portfolio.RateDay(o), gap: inBaseNoRateOperationDate}
 	return nil, own, true, nil
 }
 

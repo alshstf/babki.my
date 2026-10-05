@@ -748,3 +748,89 @@ func TestARubleBondSoldForDollarsStillPublishesItsResult(t *testing.T) {
 		t.Errorf("in_base.cost_minor = %d, want 0 — everything was sold", p.InBase.CostMinor)
 	}
 }
+
+// Decision Р-3 (НК РФ ст. 210 п. 5): the rate is the one of the day the money
+// actually moved — the settlement day — when the operation says it. The same
+// purchase and sale as above, each settled the next day across a change of
+// rate:
+//
+//	buy  on 2026-04-30, settled 2026-05-01 -> basis at 80, not 50
+//	sell on 2026-06-30, settled 2026-07-01 -> proceeds and fee at 90, not 80
+//
+//	in_base.realized_pnl_minor = 120_000*90 - 500*90 - 100_000*80 = 2_755_000
+//	(by the trade days it would be 4_560_000)
+func TestPositionInBaseRealizedUsesTheSettlementDays(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-04-30","settled_on":"2026-05-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":"2026-06-30","settled_on":"2026-07-01","quantity":"10","price":"120",
+		"amount_minor":120000,"fee_minor":500,"currency":"USD"}`, acc.ID, share.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.InBase == nil || p.InBase.RealizedPnlMinor == nil {
+		t.Fatalf("in_base.realized_pnl_minor = nil, want 2755000")
+	}
+	switch got := *p.InBase.RealizedPnlMinor; got {
+	case 4_560_000:
+		t.Errorf("in_base.realized_pnl_minor = 4560000 — the trade days' rates; the settlement days were given")
+	case 2_755_000:
+	default:
+		t.Errorf("in_base.realized_pnl_minor = %d, want 2755000 (120000*90 - 500*90 - 100000*80)", got)
+	}
+}
+
+// The rest of decision Р-3 on one account: shares still held are valued at the
+// rate of the day their purchase settled, and they keep that day when they move
+// to another of the family's accounts.
+//
+//	buy on 2026-04-30 (rate 50), settled 2026-05-01 (rate 80)
+//	in_base.cost_minor = 100_000 * 80 = 8_000_000, here and after the move
+func TestPositionInBaseCostUsesTheSettlementDayAndKeepsItOnAMove(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	other := createAccount(t, c, url, `{"name":"Другой","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-04-30","settled_on":"2026-05-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
+
+	if p := onlyPosition(t, c, url, acc.ID); p.InBase == nil || p.InBase.CostMinor != 8_000_000 {
+		t.Fatalf("in_base = %+v, want cost 8000000 — the settlement day's rate, not the trade day's 5000000", p.InBase)
+	}
+	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
+		"quantity":"10","occurred_on":"2026-06-01"}`, acc.ID, other.ID, share.ID))
+	if p := onlyPosition(t, c, url, other.ID); p.InBase == nil || p.InBase.CostMinor != 8_000_000 {
+		t.Errorf("after the move in_base = %+v, want cost 8000000 — the parcel keeps its settlement day", p.InBase)
+	}
+}
+
+// And the money: dollars that arrived at 50 and left for a purchase that
+// settled at 80 banked the dollar's move up to the settlement day.
+func TestCashResultUsesTheSettlementDayOfWhatSpentIt(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":100000,"currency":"USD"}`, acc.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-04-30","settled_on":"2026-05-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
+
+	usd := cashOf(t, accountPositions(t, c, url, acc.ID), "USD")
+	if usd.InBase.RealizedPnlMinor == nil || *usd.InBase.RealizedPnlMinor != 3_000_000 {
+		t.Errorf("the dollars' banked result is %v, want 3000000 — they left at the settlement day's 80, having arrived at 50", usd.InBase.RealizedPnlMinor)
+	}
+}
