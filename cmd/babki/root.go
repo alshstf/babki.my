@@ -91,10 +91,11 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	opSvc := operation.NewService(opStore)
 	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).
 		WithDividendCalendar(mdStore, instStore).Mount(srv)
-	positions := portfolio.NewService(opStore, instStore, mdStore, converter, famStore)
+	accStore := account.NewStore(r.pool)
+	// The accounts tell the valuation whose broker trades abroad (Р-20).
+	positions := portfolio.NewService(opStore, instStore, mdStore, converter, famStore).WithAccounts(accStore)
 	portfolio.NewHandler(positions, famAuth, famSM).Mount(srv)
 	background.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
-	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log)), instStore, famAuth, famSM).Mount(srv)

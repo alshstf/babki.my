@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -61,6 +62,7 @@ export function AccountDialog({
   const [customCurrency, setCustomCurrency] = useState("");
   const [institution, setInstitution] = useState("");
   const [personal, setPersonal] = useState(false);
+  const [tradesAbroad, setTradesAbroad] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -70,6 +72,7 @@ export function AccountDialog({
       setCustomCurrency(account && !COMMON_CURRENCIES.includes(account.currency) ? account.currency : "");
       setInstitution(account?.institution ?? "");
       setPersonal(Boolean(account?.owner_user_id));
+      setTradesAbroad(account?.trades_abroad ?? false);
       create.reset();
       update.reset();
     }
@@ -97,6 +100,7 @@ export function AccountDialog({
             name,
             institution,
             owner_user_id: ownerUserId,
+            ...(account.type === "brokerage" ? { trades_abroad: tradesAbroad } : {}),
           },
         },
         { onSuccess: () => onOpenChange(false) },
@@ -109,6 +113,7 @@ export function AccountDialog({
           currency: effectiveCurrency,
           institution,
           owner_user_id: ownerUserId,
+          ...(type === "brokerage" ? { trades_abroad: tradesAbroad } : {}),
         },
         { onSuccess: () => onOpenChange(false) },
       );
@@ -199,6 +204,20 @@ export function AccountDialog({
               </SelectContent>
             </Select>
           </div>
+          {/* Only a broker's account trades anywhere (decision Р-20). */}
+          {(isEdit ? account?.type : type) === "brokerage" && (
+            <div className="grid gap-1">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="acc-trades-abroad"
+                  checked={tradesAbroad}
+                  onCheckedChange={(checked) => setTradesAbroad(checked === true)}
+                />
+                <Label htmlFor="acc-trades-abroad">{t("accounts.dialog.tradesAbroad")}</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">{t("accounts.dialog.tradesAbroadHint")}</p>
+            </div>
+          )}
           {/* Two sentences, because this dialog does two things and only one of
               them was attempted: «не удалось создать» over a form that was
               editing an existing account would name an event nobody asked for.

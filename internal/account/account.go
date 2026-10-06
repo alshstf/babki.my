@@ -64,8 +64,11 @@ type Account struct {
 	// by its operations by its balance rather than by its journal (see
 	// Handler.valuations).
 	ValuedByBalance bool
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// TradesAbroad is whether the account's broker trades on foreign exchanges,
+	// where a foreign share sells at its home exchange's price (decision Р-20).
+	TradesAbroad bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type BalancePoint struct {
@@ -93,4 +96,5 @@ type Update struct {
 	OwnerUserID     **uuid.UUID
 	Status          *Status
 	ValuedByBalance *bool
+	TradesAbroad    *bool
 }

@@ -42,7 +42,7 @@ type Store struct{ db db.Executor }
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const accCols = `a.id, a.space_id, a.owner_user_id, a.name, a.type, a.currency,
-	a.institution, a.status, a.valued_by_balance, a.created_at, a.updated_at`
+	a.institution, a.status, a.valued_by_balance, a.trades_abroad, a.created_at, a.updated_at`
 
 // withBalanceQuery joins the latest balance mark per account.
 const withBalanceQuery = `
@@ -58,7 +58,7 @@ func scanWithBalance(row pgx.Row) (WithBalance, error) {
 	var asOf *time.Time
 	var amount *int64
 	err := row.Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
-		&a.Institution, &a.Status, &a.ValuedByBalance, &a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
+		&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
 	if err != nil {
 		return WithBalance{}, err
 	}
@@ -81,10 +81,10 @@ func (s *Store) Create(
 		INSERT INTO accounts (space_id, owner_user_id, name, type, currency, institution)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, space_id, owner_user_id, name, type, currency, institution, status,
-			valued_by_balance, created_at, updated_at`,
+			valued_by_balance, trades_abroad, created_at, updated_at`,
 		spaceID, ownerUserID, name, t, currency, institution).
 		Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
-			&a.Institution, &a.Status, &a.ValuedByBalance, &a.CreatedAt, &a.UpdatedAt)
+			&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.CreatedAt, &a.UpdatedAt)
 	return a, wrapOwnerFK(err)
 }
 
@@ -120,10 +120,11 @@ func (s *Store) Update(ctx context.Context, spaceID, id uuid.UUID, upd Update) (
 			owner_user_id = CASE WHEN $5 THEN $6 ELSE owner_user_id END,
 			status        = COALESCE($7, status),
 			valued_by_balance = COALESCE($8, valued_by_balance),
+			trades_abroad = COALESCE($9, trades_abroad),
 			updated_at    = now()
 		WHERE space_id = $1 AND id = $2`,
 		spaceID, id, upd.Name, upd.Institution,
-		upd.OwnerUserID != nil, ownerValue(upd.OwnerUserID), upd.Status, upd.ValuedByBalance)
+		upd.OwnerUserID != nil, ownerValue(upd.OwnerUserID), upd.Status, upd.ValuedByBalance, upd.TradesAbroad)
 	if err != nil {
 		return WithBalance{}, wrapOwnerFK(err)
 	}

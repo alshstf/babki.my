@@ -136,6 +136,7 @@ func toAPI(a WithBalance) apitypes.AccountWithBalance {
 		CreatedAt:   a.CreatedAt,
 		// Overwritten wherever the account is valued.
 		ValuedByBalance: a.ValuedByBalance,
+		TradesAbroad:    a.TradesAbroad,
 		CountedBy:       apitypes.AccountWithBalanceCountedByBalance,
 		Journal:         nullable.NewNullNullable[apitypes.AccountJournal](),
 	}
@@ -294,7 +295,14 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
-	httpjson.Write(w, http.StatusCreated, toAPI(WithBalance{Account: a}))
+	created := WithBalance{Account: a}
+	if req.TradesAbroad != nil && *req.TradesAbroad {
+		if created, err = h.store.Update(r.Context(), p.SpaceID, a.ID, Update{TradesAbroad: req.TradesAbroad}); err != nil {
+			family.WriteError(w, err)
+			return
+		}
+	}
+	httpjson.Write(w, http.StatusCreated, toAPI(created))
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +342,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upd.ValuedByBalance = req.ValuedByBalance
+	upd.TradesAbroad = req.TradesAbroad
 	a, err := h.store.Update(r.Context(), p.SpaceID, id, upd)
 	if err != nil {
 		family.WriteError(w, err)

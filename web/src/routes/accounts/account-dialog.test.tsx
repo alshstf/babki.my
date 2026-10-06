@@ -54,6 +54,7 @@ const account: AccountWithBalance = {
   status: "active",
   created_at: "2026-01-01T00:00:00Z",
   valued_by_balance: false,
+  trades_abroad: false,
   counted_by: "balance",
 };
 
@@ -112,5 +113,34 @@ describe("AccountDialog — every field is named", () => {
       expect(field).toHaveAccessibleName();
     }
     expect(screen.getByRole("combobox", { name: "Тип" })).toBeInTheDocument();
+  });
+});
+
+// Decision Р-20: whether the broker trades on foreign exchanges is said once,
+// on a broker's account only.
+describe("AccountDialog — a broker trading abroad", () => {
+  it("sends the switch with an edited broker's account", async () => {
+    serve(200, { ...account, trades_abroad: true });
+    open(account);
+
+    fireEvent.click(screen.getByLabelText("Брокер торгует на зарубежных биржах"));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    const patch = () =>
+      fetchMock.mock.calls.map((call) => call[0] as Request).find((request) => request.method === "PATCH");
+    await vi.waitFor(() => expect(patch()).toBeDefined());
+    expect(await patch()!.clone().json()).toMatchObject({ trades_abroad: true });
+  });
+
+  it("shows the switch as the account has it", () => {
+    open({ ...account, trades_abroad: true });
+
+    expect(screen.getByLabelText("Брокер торгует на зарубежных биржах")).toHaveAttribute("data-state", "checked");
+  });
+
+  it("does not offer it on a bank account", () => {
+    open({ ...account, type: "checking" });
+
+    expect(screen.queryByLabelText("Брокер торгует на зарубежных биржах")).toBeNull();
   });
 });

@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/oapi-codegen/nullable"
 
+	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
@@ -49,10 +51,37 @@ type Service struct {
 	quotes      quoteStore
 	conv        marketdata.RateSource
 	spaces      spaceStore
+	accounts    accountStore
+}
+
+// accountStore reads whether an account's broker trades on foreign exchanges
+// (decision Р-20); *account.Store satisfies it.
+type accountStore interface {
+	ByID(ctx context.Context, spaceID, id uuid.UUID) (account.WithBalance, error)
 }
 
 func NewService(ops journalStore, instruments instrumentStore, quotes quoteStore, conv marketdata.RateSource, spaces spaceStore) *Service {
 	return &Service{ops: ops, instruments: instruments, quotes: quotes, conv: conv, spaces: spaces}
+}
+
+// WithAccounts lets the valuation read an account's broker's reach (see
+// tradesAbroad); without it every account is valued as a Russian broker's.
+func (s *Service) WithAccounts(accounts accountStore) *Service {
+	s.accounts = accounts
+	return s
+}
+
+// tradesAbroad reports whether the account's broker trades on foreign
+// exchanges. An account the store does not find is not one.
+func (s *Service) tradesAbroad(ctx context.Context, spaceID, accountID uuid.UUID) (bool, error) {
+	if s.accounts == nil {
+		return false, nil
+	}
+	a, err := s.accounts.ByID(ctx, spaceID, accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return a.TradesAbroad, err
 }
 
 // journalDoesNotCompute is the engine refusing a stored journal.
@@ -97,7 +126,11 @@ func (s *Service) Positions(ctx context.Context, spaceID, accountID uuid.UUID) (
 	// One "today" for the whole request, shared by valuations, their conversions
 	// and the prefetch.
 	now := time.Now().UTC()
-	book, err := s.pricesOn(ctx, instrumentIDs, now, sp.FullValuation, todayWindows)
+	abroad, err := s.tradesAbroad(ctx, spaceID, accountID)
+	if err != nil {
+		return apitypes.PositionsResponse{}, 0, err
+	}
+	book, err := s.pricesOn(ctx, instrumentIDs, now, sp.FullValuation, todayWindows, abroad)
 	if err != nil {
 		return apitypes.PositionsResponse{}, 0, err
 	}

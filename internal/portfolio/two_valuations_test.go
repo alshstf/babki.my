@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
@@ -32,6 +33,7 @@ type twoValuations struct {
 	papers  map[string]uuid.UUID
 	h       *portfolio.Service
 	fam     *family.Store
+	pool    *pgxpool.Pool
 }
 
 func setupTwoValuations(t *testing.T) twoValuations {
@@ -78,7 +80,7 @@ func setupTwoValuations(t *testing.T) twoValuations {
 	}
 	fam := family.NewStore(pool)
 	h := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), md, conv, fam)
-	return twoValuations{url: url, c: c, account: acc.ID, space: space, papers: papers, h: h, fam: fam}
+	return twoValuations{url: url, c: c, account: acc.ID, space: space, papers: papers, h: h, fam: fam, pool: pool}
 }
 
 func (f twoValuations) positions(t *testing.T) map[uuid.UUID]apitypes.Position {
@@ -180,5 +182,46 @@ func TestTheFullValuationCanLeaveForeignExchangesOut(t *testing.T) {
 	}
 	if p := got[f.papers["fxit"]]; value(p.MarketValueMinor) != "180000" {
 		t.Errorf("FinEx full = %s, want its NAV 180000", value(p.MarketValueMinor))
+	}
+}
+
+// On an account whose broker trades on foreign exchanges, a foreign share's
+// home-exchange close is what it sells for, so it counts in the liquid worth
+// when no market price is known here (decision Р-20). On a Russian broker's
+// account the same close stays in the full worth only.
+func TestAForeignBrokersAccountSellsAtTheHomeExchangesClose(t *testing.T) {
+	f := setupTwoValuations(t)
+	nvda := uuid.MustParse(createInstrument(t, f.c, f.url,
+		`{"type":"share","name":"NVIDIA","ticker":"NVDA","isin":"US67066G1040","currency":"USD"}`).ID)
+	createOperation(t, f.c, f.url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2024-06-03","quantity":"2","price":"120","amount_minor":-24000,"currency":"USD"}`, f.account, nvda))
+	md := marketdata.NewStore(f.pool)
+	if err := md.UpsertReferencePrices(t.Context(), []marketdata.ReferencePrice{{
+		InstrumentID: nvda, Kind: marketdata.ReferenceForeign, On: time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1),
+		Price: decimal.NewFromInt(180), Currency: "USD", Source: "yahoo",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	p := f.positions(t)[nvda]
+	if value(p.LiquidValueMinor) != "null" || value(p.MarketValueMinor) != "36000" {
+		t.Fatalf("on a Russian broker's account: liquid %s, full %s; want null and 2 × 180 $", value(p.LiquidValueMinor), value(p.MarketValueMinor))
+	}
+
+	resp := do(t, f.c, http.MethodPatch, f.url+"/api/v1/accounts/"+f.account, `{"trades_abroad":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("switch the account: %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	p = f.positions(t)[nvda]
+	source, _ := p.PriceSource.Get()
+	if value(p.LiquidValueMinor) != "36000" || value(p.MarketValueMinor) != "36000" || source != apitypes.PriceSourceForeign {
+		t.Errorf("on a foreign broker's account: liquid %s, full %s, source %q; want 36000 both, from the home exchange",
+			value(p.LiquidValueMinor), value(p.MarketValueMinor), source)
+	}
+	// Microsoft has a market price here, which stays first.
+	if m := f.positions(t)[f.papers["msft"]]; value(m.LiquidValueMinor) != "18025000" {
+		t.Errorf("Microsoft liquid = %s, want its market price here, 18025000", value(m.LiquidValueMinor))
 	}
 }

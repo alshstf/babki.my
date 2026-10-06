@@ -93,6 +93,7 @@ function account(id: string, name: string, status = "active") {
     status,
     created_at: "2026-01-01T00:00:00Z",
     valued_by_balance: false,
+    trades_abroad: false,
     counted_by: "journal",
     balance: null,
   };

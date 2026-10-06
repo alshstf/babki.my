@@ -131,7 +131,8 @@ func (s *Service) parcelWorth(ctx context.Context, setting family.FullValuation,
 	if !ok {
 		return 0, "", false, errInstrumentNotInCatalog
 	}
-	book, err := s.pricesOn(ctx, []uuid.UUID{*o.InstrumentID}, o.OccurredOn, setting, pastWindows)
+	// The full price, which an account's foreign exchanges do not change.
+	book, err := s.pricesOn(ctx, []uuid.UUID{*o.InstrumentID}, o.OccurredOn, setting, pastWindows, false)
 	if err != nil {
 		return 0, "", false, err
 	}

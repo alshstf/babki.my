@@ -67,8 +67,12 @@ type priceStore interface {
 
 // pricesOn is the prices of ids on day under the space's setting. A store
 // keeping only the latest prices (a test's) is read as if every price were a
-// market one on its own day.
-func (s *Service) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, setting family.FullValuation, windows priceWindows) (priceBook, error) {
+// market one on its own day. abroad is an account whose broker trades on
+// foreign exchanges: there a foreign share's home-exchange close is a market
+// price when no fresher one is known (decision Р-20).
+func (s *Service) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, setting family.FullValuation,
+	windows priceWindows, abroad bool,
+) (priceBook, error) {
 	book := priceBook{
 		liquid:     make(map[uuid.UUID]marketdata.Quote, len(ids)),
 		full:       make(map[uuid.UUID]pricedQuote, len(ids)),
@@ -89,7 +93,7 @@ func (s *Service) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, 
 		if market, err = ps.MarketQuotesOn(ctx, ids, day); err != nil {
 			return priceBook{}, err
 		}
-		if setting != family.FullValuationLiquid {
+		if setting != family.FullValuationLiquid || abroad {
 			if refs, err = ps.ReferencePricesOn(ctx, ids, day); err != nil {
 				return priceBook{}, err
 			}
@@ -114,6 +118,13 @@ func (s *Service) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, 
 			book.lastMarket[id] = q
 			if within(q, windows.liquid) {
 				book.liquid[id] = q
+			}
+		}
+		if _, priced := book.liquid[id]; !priced && abroad {
+			if r, ok := refs[id][marketdata.ReferenceForeign]; ok && within(referenceQuote(r), windows.liquid) {
+				book.liquid[id] = referenceQuote(r)
+				book.full[id] = pricedQuote{Quote: referenceQuote(r), source: apitypes.PriceSourceForeign}
+				continue
 			}
 		}
 		if setting == family.FullValuationLiquid {
