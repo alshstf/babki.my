@@ -24,7 +24,7 @@ func (RefreshDividendCalendarArgs) Kind() string { return "marketdata.refresh_di
 // DividendFeed publishes the dividends shares and funds declared.
 type DividendFeed interface {
 	// SymbolFor names a paper by its ISIN; ok is false when the feed has none.
-	SymbolFor(ctx context.Context, isin string) (symbol string, ok bool, err error)
+	SymbolFor(ctx context.Context, isin, ticker string) (symbol string, ok bool, err error)
 	// Dividends is the paper's dividends dated from from to to, oldest first.
 	Dividends(ctx context.Context, symbol string, from, to time.Time) ([]Dividend, error)
 	Name() string
@@ -97,7 +97,7 @@ func (w *dividendCalendarWorker) Work(ctx context.Context, _ *river.Job[RefreshD
 			}
 			continue
 		}
-		symbol, found, err := w.feed.SymbolFor(ctx, isin)
+		symbol, found, err := w.feed.SymbolFor(ctx, isin, paper.Ticker)
 		if err != nil {
 			w.log.Warn("marketdata: look a paper up for its dividends failed", "instrument", id, "source", w.feed.Name(), "err", err)
 			lastErr = err

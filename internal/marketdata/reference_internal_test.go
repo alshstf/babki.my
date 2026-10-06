@@ -35,7 +35,7 @@ func (stubNAV) Name() string { return "stub-nav" }
 // stubForeign knows Microsoft and fails for Walt Disney.
 type stubForeign struct{ asked *[]string }
 
-func (stubForeign) SymbolFor(_ context.Context, isin string) (string, bool, error) {
+func (stubForeign) SymbolFor(_ context.Context, isin, _ string) (string, bool, error) {
 	switch isin {
 	case "US5949181045":
 		return "MSFT", true, nil

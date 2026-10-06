@@ -32,7 +32,7 @@ type NAVProvider interface {
 // ForeignQuoteProvider is a price feed of shares on their home exchanges.
 type ForeignQuoteProvider interface {
 	// SymbolFor names a share by its ISIN; ok is false when the feed has none.
-	SymbolFor(ctx context.Context, isin string) (symbol string, ok bool, err error)
+	SymbolFor(ctx context.Context, isin, ticker string) (symbol string, ok bool, err error)
 	// Closes is the share's closing prices from from to to, oldest first.
 	Closes(ctx context.Context, symbol string, from, to time.Time) ([]DayPrice, error)
 	Name() string
@@ -134,7 +134,7 @@ func (w *referencePricesWorker) Work(ctx context.Context, _ *river.Job[RefreshRe
 			if from.After(today) {
 				continue
 			}
-			symbol, found, err := w.foreign.SymbolFor(ctx, isin)
+			symbol, found, err := w.foreign.SymbolFor(ctx, isin, paper.Ticker)
 			if err != nil {
 				fetchErr = err
 				break

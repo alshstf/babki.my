@@ -19,7 +19,7 @@ import (
 // feed's price adjustments for spin-offs, one in whole numbers.
 type stubSplitsFeed struct{}
 
-func (stubSplitsFeed) SymbolFor(_ context.Context, isin string) (string, bool, error) {
+func (stubSplitsFeed) SymbolFor(_ context.Context, isin, _ string) (string, bool, error) {
 	return "AMZN", isin == amazonISIN, nil
 }
 
