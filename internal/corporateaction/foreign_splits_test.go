@@ -15,8 +15,8 @@ import (
 	"babki.my/babki/internal/marketdata/yahoo"
 )
 
-// stubSplitsFeed knows Amazon: the 2022 split, and a fractional «split» that
-// is the feed's price adjustment for a spin-off.
+// stubSplitsFeed knows Amazon: the 2022 split, and two «splits» that are the
+// feed's price adjustments for spin-offs, one in whole numbers.
 type stubSplitsFeed struct{}
 
 func (stubSplitsFeed) SymbolFor(_ context.Context, isin string) (string, bool, error) {
@@ -27,6 +27,7 @@ func (stubSplitsFeed) Splits(context.Context, string, time.Time, time.Time) ([]y
 	return []yahoo.Split{
 		{On: date("2022-06-06"), Numerator: decimal.NewFromInt(20), Denominator: decimal.NewFromInt(1)},
 		{On: date("2023-03-01"), Numerator: decimal.RequireFromString("1.0526"), Denominator: decimal.NewFromInt(1)},
+		{On: date("2025-02-24"), Numerator: decimal.NewFromInt(1323), Denominator: decimal.NewFromInt(1000)},
 	}, nil
 }
 
@@ -34,7 +35,7 @@ func (stubSplitsFeed) SplitsURL(symbol string) string { return "https://feed.exa
 
 // A foreign paper's split, published by the feed, is recorded and reaches the
 // holder's journal: one share bought before Amazon's split is twenty after. A
-// fractional ratio is not a split and is left out.
+// price adjustment filed as a split is left out.
 func TestAForeignPapersSplitReachesItsHoldersFromTheFeed(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2022-01-10", "1", -330_000)

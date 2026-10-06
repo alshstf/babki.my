@@ -70,9 +70,8 @@ func (w *refreshForeignSplitsWorker) Timeout(*river.Job[RefreshForeignSplitsArgs
 
 // Work records, for every foreign share and fund the journals hold, the splits
 // since its first entry, and brings the changed papers' journals into line. A
-// ratio that is not of whole numbers is the feed's price adjustment for a
-// spin-off, not a split, and is left out. One paper's failure does not stop the
-// others.
+// ratio that is not a split's is left out (see splitRatio). One paper's failure
+// does not stop the others.
 func (w *refreshForeignSplitsWorker) Work(ctx context.Context, _ *river.Job[RefreshForeignSplitsArgs]) error {
 	if w.feed == nil {
 		return nil
@@ -121,14 +120,15 @@ func (w *refreshForeignSplitsWorker) Work(ctx context.Context, _ *river.Job[Refr
 			continue
 		}
 		for _, s := range splits {
-			if !s.Numerator.IsInteger() || !s.Denominator.IsInteger() {
-				w.log.Debug("corporateaction: a ratio of fractions is a price adjustment, not a split",
+			from, to, ok := splitRatio(s)
+			if !ok {
+				w.log.Info("corporateaction: the feed's «split» is a price adjustment, not a split; left out",
 					"isin", isin, "on", s.On.Format(time.DateOnly), "numerator", s.Numerator, "denominator", s.Denominator)
 				continue
 			}
 			e := Event{
 				Kind: KindSplit, ISIN: isin, EffectiveOn: s.On,
-				RatioFrom: s.Denominator.IntPart(), RatioTo: s.Numerator.IntPart(),
+				RatioFrom: from, RatioTo: to,
 				Source: SourceYahoo, SourceRef: w.feed.SplitsURL(symbol),
 			}
 			if err := e.Validate(); err != nil {
@@ -163,4 +163,33 @@ func (w *refreshForeignSplitsWorker) Work(ctx context.Context, _ *river.Job[Refr
 		"papers", len(asked), "stored", stored, "left_to_other_records", kept,
 		"journal_rows_added", totals.Added, "journal_rows_removed", totals.Removed)
 	return errors.Join(failed...)
+}
+
+// splitRatio is a feed split's ratio in lowest terms, from units to units. The
+// feed also files a spin-off's price adjustment as a «split» (Western Digital
+// on 2025-02-24, when SanDisk was spun off: 1323 for 1000), sometimes in whole
+// numbers; a real split gives or takes whole shares per few (2:1, 3:2, 1:10),
+// so a ratio whose smaller side is above ten after reduction is refused.
+func splitRatio(s yahoo.Split) (from, to int64, ok bool) {
+	if !s.Numerator.IsInteger() || !s.Denominator.IsInteger() {
+		return 0, 0, false
+	}
+	to, from = s.Numerator.IntPart(), s.Denominator.IntPart()
+	if from <= 0 || to <= 0 {
+		return 0, 0, false
+	}
+	d := gcd(from, to)
+	from, to = from/d, to/d
+	return from, to, min(from, to) <= maxSplitSmallerSide
+}
+
+// maxSplitSmallerSide is the largest smaller side of a real split's ratio in
+// lowest terms.
+const maxSplitSmallerSide = 10
+
+func gcd(a, b int64) int64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
