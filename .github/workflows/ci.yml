@@ -41,7 +41,7 @@ jobs:
           make gen
           git diff --exit-code
       - name: Lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           args: --build-tags=embedui
       # Known vulnerabilities in what the code actually calls (tests included)
