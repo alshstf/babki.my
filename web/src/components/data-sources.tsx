@@ -27,6 +27,8 @@ function sourceName(t: TFunction, kind: string): string {
       return t("dataSources.kinds.tinvestDividends");
     case "corporateaction.refresh_moex_splits":
       return t("dataSources.kinds.moexSplits");
+    case "marketdata.refresh_dividend_calendar":
+      return t("dataSources.kinds.dividendCalendar");
     case "marketdata.refresh_reference_prices":
       return t("dataSources.kinds.referencePrices");
     default:

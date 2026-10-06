@@ -1576,7 +1576,7 @@ export interface components {
             note: string;
         };
         DataSource: {
-            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, marketdata.refresh_reference_prices */
+            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar */
             kind: string;
             /** @description How often it runs */
             every_seconds: number;

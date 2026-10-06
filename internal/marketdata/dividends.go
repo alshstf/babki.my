@@ -84,3 +84,28 @@ func (s *Store) DividendsOf(ctx context.Context, instrumentIDs []uuid.UUID) (map
 	}
 	return out, nil
 }
+
+// CalendarSources is, per paper, every source a calendar is stored from.
+func (s *Store) CalendarSources(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	out := map[uuid.UUID][]string{}
+	if len(instrumentIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT instrument_id, source FROM instrument_dividends
+		WHERE instrument_id = ANY($1) ORDER BY instrument_id, source`, instrumentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("marketdata: calendar sources: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id     uuid.UUID
+			source string
+		)
+		if err := rows.Scan(&id, &source); err != nil {
+			return nil, fmt.Errorf("marketdata: calendar sources: %w", err)
+		}
+		out[id] = append(out[id], source)
+	}
+	return out, rows.Err()
+}

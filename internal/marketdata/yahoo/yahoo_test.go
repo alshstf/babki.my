@@ -89,3 +89,42 @@ func TestAChartErrorIsAnError(t *testing.T) {
 		t.Error("a chart error answered as no closes")
 	}
 }
+
+// Dividends are read from the chart's events: so much per share on the
+// ex-date, the exchange's day, in whole units of the currency.
+func TestDividendsAreReadFromTheChartsEvents(t *testing.T) {
+	// Coca-Cola, 2024 (recorded 2026-10-06), and a London share in pence.
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{
+			"dollars", `{"chart":{"result":[{"meta":{"currency":"USD","exchangeTimezoneName":"America/New_York"},
+			"events":{"dividends":{"1717214400":{"amount":0.485,"date":1718371800},"1709269200":{"amount":0.485,"date":1710423000}}}}],"error":null}}`,
+			"2024-03-14 0.485 USD, 2024-06-14 0.485 USD",
+		},
+		{
+			"pence", `{"chart":{"result":[{"meta":{"currency":"GBp","exchangeTimezoneName":"Europe/London"},
+			"events":{"dividends":{"1":{"amount":7.5,"date":1710403200}}}}],"error":null}}`,
+			"2024-03-14 0.075 GBP",
+		},
+		{"none", `{"chart":{"result":[{"meta":{"currency":"USD","exchangeTimezoneName":"America/New_York"}}],"error":null}}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := serve(t, tc.body).Dividends(context.Background(), "KO",
+				time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parts []string
+			for _, d := range got {
+				parts = append(parts, d.RecordDate.Format(time.DateOnly)+" "+d.PerShare.String()+" "+d.Currency)
+				if d.Source != "yahoo" {
+					t.Errorf("source = %q, want yahoo", d.Source)
+				}
+			}
+			if s := strings.Join(parts, ", "); s != tc.want {
+				t.Errorf("dividends = %q, want %q", s, tc.want)
+			}
+		})
+	}
+}
