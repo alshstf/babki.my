@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"babki.my/babki/internal/platform/metrics"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -29,6 +30,9 @@ var _ rivertype.HookWorkEnd = (*outcomeHook)(nil)
 func (h *outcomeHook) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
 	if job.Kind == (HeartbeatArgs{}).Kind() {
 		return err
+	}
+	if job.AttemptedAt != nil {
+		metrics.ObserveJob(job.Kind, time.Since(*job.AttemptedAt), err != nil)
 	}
 	var werr error
 	if err == nil {
