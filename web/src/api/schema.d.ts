@@ -1116,10 +1116,10 @@ export interface components {
          */
         CostBasisPerimeter: "account" | "owner" | "not_applicable" | "unknown";
         /**
-         * @description One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are. `unverified_rule`: the row's method and perimeter were not traced to an established norm during jurisdiction research — they are an assumption by analogy, not a checked rule, even when they happen to read fifo/account.
+         * @description One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are.
          * @enum {string}
          */
-        CostBasisNotice: "method_mismatch" | "perimeter_mismatch" | "not_taxed" | "unknown_country" | "unverified_rule";
+        CostBasisNotice: "method_mismatch" | "perimeter_mismatch" | "not_taxed" | "unknown_country";
         /** @description The cost basis rules of one country, derived from its ISO 3166-1 alpha-2 code through a single table in the server. The figures this application publishes are ALWAYS computed FIFO within one account; this object says whether that is what the country actually requires, and names every way it is not. */
         CostBasisRules: {
             /** @description ISO 3166-1 alpha-2 the row was derived from */

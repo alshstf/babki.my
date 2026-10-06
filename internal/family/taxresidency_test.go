@@ -18,8 +18,8 @@ func notices(r family.TaxRules) []string {
 	return out
 }
 
-// RU, DE and US are fifo/account with a checked norm: supported and silent. KZ
-// is not among them (see the next test).
+// RU, DE and US are fifo/account: supported and silent. KZ is not among them
+// (see the next test).
 func TestFIFOWithinOneAccountIsExactlyTheseCountries(t *testing.T) {
 	for _, country := range []string{"RU", "DE", "US"} {
 		r := family.TaxRulesFor(country)
@@ -35,20 +35,15 @@ func TestFIFOWithinOneAccountIsExactlyTheseCountries(t *testing.T) {
 	}
 }
 
-// KZ reads fifo/account but its norm is unverified, so it is not supported.
-func TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed(t *testing.T) {
+// KZ queues FIFO over everything the owner holds (ст. 387 п. 6), so the
+// per-account figures are not its rule.
+func TestKazakhstanQueuesOverEverythingTheOwnerHolds(t *testing.T) {
 	r := family.TaxRulesFor("KZ")
-	if r.Method != family.MethodFIFO || r.Perimeter != family.PerimeterAccount {
-		t.Errorf("KZ = %s/%s, want fifo/account", r.Method, r.Perimeter)
+	if r.Method != family.MethodFIFO || r.Perimeter != family.PerimeterOwner {
+		t.Errorf("KZ = %s/%s, want fifo/owner", r.Method, r.Perimeter)
 	}
-	if !r.NormUnverified {
-		t.Error("KZ: NormUnverified = false, want true")
-	}
-	if r.Supported() {
-		t.Error("KZ: Supported() = true, want false — the norm behind fifo/account was never established")
-	}
-	if got := notices(r); !slices.Equal(got, []string{"unverified_rule"}) {
-		t.Errorf("KZ: notices = %v, want exactly [unverified_rule]", got)
+	if got := notices(r); !slices.Equal(got, []string{"perimeter_mismatch"}) {
+		t.Errorf("KZ: notices = %v, want exactly [perimeter_mismatch]", got)
 	}
 }
 
