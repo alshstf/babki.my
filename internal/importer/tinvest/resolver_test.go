@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata/moex"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -345,6 +346,94 @@ func TestResolve_ForgottenPaperTheCatalogDoesNotKnowStaysUnresolved(t *testing.T
 	}
 	if catalog.createCalls != 0 {
 		t.Errorf("catalog.Create called %d times, want 0", catalog.createCalls)
+	}
+}
+
+// fakeExchange is the exchange's reference: what it remembers, by ISIN, and
+// how often it was asked.
+type fakeExchange struct {
+	papers map[string]moex.Security
+	err    error
+	asked  int
+}
+
+func (e *fakeExchange) RememberedByISIN(_ context.Context, isin string) (moex.Security, bool, error) {
+	e.asked++
+	if e.err != nil {
+		return moex.Security{}, false, e.err
+	}
+	sec, ok := e.papers[isin]
+	return sec, ok, nil
+}
+
+// A forgotten paper the catalog does not know is created from what the
+// exchange remembers (decision Р-19): its full name, kind and ISIN, in the
+// currency the operation was paid in. The TCS receipt on the owner's history,
+// replaced by Т-Технологии shares in 2024.
+func TestResolve_ForgottenPaperIsCreatedFromTheExchangesReference(t *testing.T) {
+	f := newFixture(t)
+	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-gone"] = fmt.Errorf("%w: uid-gone", ErrInstrumentNotFound)
+	exchange := &fakeExchange{papers: map[string]moex.Security{
+		"US87238U2033": {SecID: "TCS-ME", ISIN: "US87238U2033", Name: "ГДР TCS Group Holding ORD SHS", Kind: "share"},
+	}}
+
+	r := NewResolver(f.store, catalog, nil).WithExchange(exchange)
+	ref := InstrumentRef{InstrumentUID: "uid-gone", Ticker: "US87238U2033", Currency: "rub"}
+	got, err := r.Resolve(f.ctx, f.conn.ID, src, ref)
+	if err != nil {
+		t.Fatalf("Resolve(a forgotten receipt the exchange remembers) = %v", err)
+	}
+	inst, err := catalog.ByISIN(f.ctx, "US87238U2033")
+	if err != nil {
+		t.Fatalf("no catalog row for the receipt: %v", err)
+	}
+	if got.InstrumentID != inst.ID || inst.Type != instrument.TypeShare || inst.Name != "ГДР TCS Group Holding ORD SHS" ||
+		inst.Ticker != "TCS-ME" || inst.Currency != "RUB" {
+		t.Errorf("created %+v (resolved %+v), want the exchange's receipt in roubles", inst, got)
+	}
+
+	// The next operation on it finds the row; the exchange is not asked again.
+	if _, err := NewResolver(f.store, catalog, nil).WithExchange(exchange).Resolve(f.ctx, f.conn.ID, src, ref); err != nil {
+		t.Fatalf("second Resolve: %v", err)
+	}
+	if exchange.asked != 1 || catalog.createCalls != 1 {
+		t.Errorf("exchange asked %d times, catalog created %d rows; want 1 and 1", exchange.asked, catalog.createCalls)
+	}
+}
+
+// What the exchange cannot describe stays unresolved, as before Р-19: a paper
+// it does not know, an operation with no currency, an exchange that did not
+// answer (asked once a run, not once per operation).
+func TestResolve_ForgottenPaperTheExchangeCannotDescribeStaysUnresolved(t *testing.T) {
+	for name, c := range map[string]struct {
+		exchange *fakeExchange
+		currency string
+	}{
+		"unknown to the exchange": {exchange: &fakeExchange{}, currency: "rub"},
+		"no currency":             {exchange: &fakeExchange{papers: map[string]moex.Security{"US87238U2033": {ISIN: "US87238U2033", Kind: "share"}}}},
+		"exchange did not answer": {exchange: &fakeExchange{err: errors.New("moex: unexpected status 502")}, currency: "rub"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+			src := newFakePassportSource()
+			src.instrumentErrs["uid-gone"] = fmt.Errorf("%w: uid-gone", ErrInstrumentNotFound)
+			r := NewResolver(f.store, catalog, nil).WithExchange(c.exchange)
+
+			for range 2 {
+				_, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{
+					InstrumentUID: "uid-gone", Ticker: "US87238U2033", Currency: c.currency,
+				})
+				if !errors.Is(err, ErrInstrumentNotFound) {
+					t.Fatalf("Resolve = %v, want the broker's own ErrInstrumentNotFound", err)
+				}
+			}
+			if catalog.createCalls != 0 || c.exchange.asked > 1 {
+				t.Errorf("catalog created %d rows, exchange asked %d times; want 0 and at most 1", catalog.createCalls, c.exchange.asked)
+			}
+		})
 	}
 }
 

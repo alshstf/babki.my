@@ -27,9 +27,11 @@ type Security struct {
 	FaceCurrency string
 }
 
-// kinds maps the exchange's security group to the catalog's kind.
+// kinds maps the exchange's security group to the catalog's kind. A
+// depositary receipt is held and taxed as a share, as the brokers file it.
 var kinds = map[string]string{
 	"stock_shares": "share",
+	"stock_dr":     "share",
 	"stock_bonds":  "bond",
 	"stock_etf":    "etf",
 	"stock_ppif":   "etf",
@@ -47,53 +49,119 @@ func (c *Client) FindSecurity(ctx context.Context, code string) (Security, bool,
 	if code == "" {
 		return Security{}, false, nil
 	}
-	var found struct {
+	rows, err := c.search(ctx, code)
+	if err != nil {
+		return Security{}, false, err
+	}
+	for _, row := range rows {
+		currency, onBoard := tradedBoards[row.board]
+		if !row.traded || row.kind == "" || !onBoard || (row.secid != code && row.isin != code) {
+			continue
+		}
+		sec := Security{SecID: row.secid, ISIN: row.isin, Name: row.shortname, Kind: row.kind, Currency: currency}
+		if err := c.withFace(ctx, &sec); err != nil {
+			return Security{}, false, err
+		}
+		return sec, true, nil
+	}
+	return Security{}, false, nil
+}
+
+// RememberedByISIN is what the exchange's reference still says about a
+// paper, traded or not: a receipt of a company that moved to Russia, a fund
+// wound up. The name is the full one, since no board's ticker is current;
+// Currency is left empty, the paper having no board that trades it (the caller
+// knows what its operations were paid in). Decision Р-19: a paper the broker
+// forgot is created from this.
+func (c *Client) RememberedByISIN(ctx context.Context, isin string) (Security, bool, error) {
+	isin = strings.ToUpper(strings.TrimSpace(isin))
+	if isin == "" {
+		return Security{}, false, nil
+	}
+	rows, err := c.search(ctx, isin)
+	if err != nil {
+		return Security{}, false, err
+	}
+	for _, row := range rows {
+		if row.isin != isin || row.kind == "" {
+			continue
+		}
+		name := row.name
+		if name == "" {
+			name = row.shortname
+		}
+		sec := Security{SecID: row.secid, ISIN: row.isin, Name: name, Kind: row.kind}
+		if err := c.withFace(ctx, &sec); err != nil {
+			return Security{}, false, err
+		}
+		return sec, true, nil
+	}
+	return Security{}, false, nil
+}
+
+// found is one row of the exchange's search, with the catalog's kind ("" for
+// a group this program does not hold, an index among them).
+type found struct {
+	secid, isin, shortname, name, kind, board string
+	traded                                    bool
+}
+
+// search asks the exchange for every paper whose name, ticker or ISIN holds
+// code — indices, delisted issues, every board among them.
+func (c *Client) search(ctx context.Context, code string) ([]found, error) {
+	var body struct {
 		Securities struct {
 			Columns []string `json:"columns"`
 			Data    [][]any  `json:"data"`
 		} `json:"securities"`
 	}
+	columns := []string{"secid", "shortname", "name", "isin", "group", "primary_boardid", "is_traded"}
 	q := url.Values{
 		"q":                  {code},
 		"iss.meta":           {"off"},
-		"securities.columns": {"secid,shortname,isin,group,primary_boardid,is_traded"},
+		"securities.columns": {strings.Join(columns, ",")},
 	}
-	if err := c.getJSON(ctx, "/iss/securities.json?"+q.Encode(), code, &found); err != nil {
-		return Security{}, false, err
+	if err := c.getJSON(ctx, "/iss/securities.json?"+q.Encode(), code, &body); err != nil {
+		return nil, err
 	}
 	col := map[string]int{}
-	for i, name := range found.Securities.Columns {
+	for i, name := range body.Securities.Columns {
 		col[name] = i
 	}
-	for _, name := range []string{"secid", "shortname", "isin", "group", "primary_boardid", "is_traded"} {
+	for _, name := range columns {
 		if _, ok := col[name]; !ok {
-			return Security{}, false, fmt.Errorf("moex: find %s: response missing %s", code, name)
+			return nil, fmt.Errorf("moex: find %s: response missing %s", code, name)
 		}
 	}
 	text := func(row []any, name string) string {
 		s, _ := row[col[name]].(string)
 		return s
 	}
-	for _, row := range found.Securities.Data {
-		if len(row) < len(found.Securities.Columns) {
+	var out []found
+	for _, row := range body.Securities.Data {
+		if len(row) < len(body.Securities.Columns) {
 			continue
 		}
 		traded, _ := row[col["is_traded"]].(float64)
-		secid, isin := strings.ToUpper(text(row, "secid")), strings.ToUpper(text(row, "isin"))
-		kind, priced := kinds[text(row, "group")]
-		currency, onBoard := tradedBoards[text(row, "primary_boardid")]
-		if traded != 1 || !priced || !onBoard || (secid != code && isin != code) {
-			continue
-		}
-		sec := Security{SecID: secid, ISIN: isin, Name: text(row, "shortname"), Kind: kind, Currency: currency}
-		if kind == "bond" {
-			if err := c.bondFace(ctx, &sec); err != nil {
-				return Security{}, false, err
-			}
-		}
-		return sec, true, nil
+		out = append(out, found{
+			secid:     strings.ToUpper(text(row, "secid")),
+			isin:      strings.ToUpper(text(row, "isin")),
+			shortname: text(row, "shortname"),
+			name:      text(row, "name"),
+			kind:      kinds[text(row, "group")],
+			board:     text(row, "primary_boardid"),
+			traded:    traded == 1,
+		})
 	}
-	return Security{}, false, nil
+	return out, nil
+}
+
+// withFace adds a bond's original face value and its currency.
+func (c *Client) withFace(ctx context.Context, sec *Security) error {
+	if sec.Kind != "bond" {
+		return nil
+	}
+	return c.bondFace(ctx, sec)
 }
 
 // bondFace reads a bond's original face value and currency; the exchange
