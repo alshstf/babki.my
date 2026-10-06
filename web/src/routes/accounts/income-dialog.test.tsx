@@ -258,3 +258,30 @@ describe("IncomeDialog: the face value before an amortization", () => {
     expect(screen.getByText("Введите положительный номинал")).toBeInTheDocument();
   });
 });
+
+// A dividend is not paid on a bond: the form says so before Save, as the
+// server would refuse it.
+describe("IncomeDialog: an entry that does not fit its paper", () => {
+  it("says a dividend cannot be recorded against a bond, and does not save", () => {
+    const bond = {
+      id: "instr-ofz", type: "bond", name: "ОФЗ 26238", ticker: "SU26238RMFS4", isin: "", figi: "",
+      currency: "RUB", frozen: false, face_value_minor: 100_000, face_currency: "RUB",
+    } as Instrument;
+    const dividend = {
+      id: "op-1", account_id: "acc-1", instrument_id: "instr-ofz", type: "dividend", occurred_on: "2026-04-01",
+      amount_minor: 1_000, currency: "RUB", fee_minor: 0, note: "", source: "manual",
+      created_at: "2026-04-01T10:00:00Z", has_undated_lots: false, assembled_from_lots: false,
+    } as Operation;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <IncomeDialog open onOpenChange={() => {}} account={account} editing={dividend} editingInstrument={bond} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId("operation-kind-mismatch").textContent).toBe(
+      "Операцию «дивиденд» нельзя записать по бумаге вида «облигация»",
+    );
+    expect(saveButton()).toBeDisabled();
+  });
+});

@@ -34,6 +34,8 @@ import {
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
+import { KindMismatch } from "./kind-mismatch";
+import { fitsKind } from "@/lib/operation-kinds";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 
@@ -92,18 +94,19 @@ export function IncomeDialog({
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
   const instrumentOk = instrument !== null || !REQUIRES_INSTRUMENT.has(type);
+  const kindOk = instrument === null || fitsKind(type, instrument.type);
   const asksFace = type === "amortization";
   const currency = instrument ? instrument.currency : account.currency;
   const faceParsed = parseToMinor(faceBefore);
   const faceValid = !asksFace || faceBefore === "" || (faceParsed !== null && faceParsed > 0);
-  const valid = amountValid && instrumentOk && faceValid && occurredOn !== "";
+  const valid = amountValid && instrumentOk && kindOk && faceValid && occurredOn !== "";
   const catalogFace =
     instrument?.face_value_minor != null && instrument.face_currency === currency
       ? formatMinor(instrument.face_value_minor, currency)
       : null;
 
   const submit = () => {
-    if (!amountValid || parsed === null || !instrumentOk || !faceValid) return;
+    if (!valid || parsed === null) return;
     createOperation.mutate(
       {
         account_id: account.id,
@@ -175,6 +178,7 @@ export function IncomeDialog({
             {!instrumentOk && (
               <p className="text-xs text-red-500">{t("income.instrumentRequired")}</p>
             )}
+            {instrument && !kindOk && <KindMismatch type={type} kind={instrument.type} />}
           </div>
           <AmountField
             id="income-amount"

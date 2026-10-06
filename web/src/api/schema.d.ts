@@ -611,6 +611,8 @@ export interface paths {
         /**
          * @description Records one journal entry. The account's WHOLE journal is replayed with the new row through the portfolio engine, and the row is kept only if the result computes.
          *
+         *     400 also refuses an entry that cannot happen to its paper's kind (decision Р-17), and the same on an edit: a buy or a sell of a `currency` paper (money is exchanged, not held as a paper); a redemption other than of a bond, a fund or a `custom` paper; a dividend other than on a share, a fund or a `custom` paper; a coupon or an amortization other than on a bond or a `custom` paper. A broker's import is not held to it: what the broker reports is recorded as reported.
+         *
          *     409 SAYS THAT REPLAY REFUSED, AND NOTHING FINER. Unrelated causes arrive as this one status: a sell or transfer_out releasing more than the account holds; an operation whose currency is not the one that position's cost, quantity and fees are already kept in (only a dividend, a coupon or a tax may arrive in another); a transfer whose stored FIFO breakdown no longer matches the history it is replayed against; a position's income total leaving the int64 range. THE REFUSED ROW NEED NOT BE THE ROW POSTED, since every stored row is folded again on every write — a buy releases nothing and is still answered 409 over an entry recorded months earlier, on a date this request never carried. So a client may not caption this status with a cause, nor with anything about the request it just sent. The body carries the engine's own English explanation, which is written for a log and is not part of this contract.
          */
         post: operations["createOperation"];

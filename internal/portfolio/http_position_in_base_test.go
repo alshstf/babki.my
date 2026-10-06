@@ -947,12 +947,12 @@ func TestPositionInBaseProfitInPositionCurrencyLossInBase(t *testing.T) {
 	}
 }
 
-// Each income operation converts at its own day's rate. All three income types
-// are on one instrument so the filter matches the engine's.
+// Each income operation converts at its own day's rate: two dividends and a
+// tax on one share.
 //
 //	USD->RUB 60 from 2026-02-01, 90 from 2026-07-01
 //	dividend +10_000 (03-10) -> 600_000
-//	coupon   +20_000 (07-10) -> 1_800_000
+//	dividend +20_000 (07-10) -> 1_800_000
 //	tax       −5_000 (07-10) -> −450_000
 //	income 25_000 USD; base 1_950_000 (today's rate would give 2_250_000)
 func TestPositionInBaseIncomeUsesEachOperationsOwnRate(t *testing.T) {
@@ -968,7 +968,7 @@ func TestPositionInBaseIncomeUsesEachOperationsOwnRate(t *testing.T) {
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID, lateBuyOn))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
 		"occurred_on":%q,"amount_minor":10000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
-	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"coupon",
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
 		"occurred_on":%q,"amount_minor":20000,"currency":"USD"}`, acc.ID, share.ID, lateBuyOn))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"tax",
 		"occurred_on":%q,"amount_minor":-5000,"currency":"USD"}`, acc.ID, share.ID, lateBuyOn))

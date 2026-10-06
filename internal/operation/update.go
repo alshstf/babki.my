@@ -42,6 +42,9 @@ func (s *Service) Update(ctx context.Context, spaceID, id uuid.UUID, op Operatio
 		if err := editable(old, op); err != nil {
 			return err
 		}
+		if err := st.checkKind(ctx, op); err != nil {
+			return err
+		}
 		op.ID, op.SpaceID, op.Source, op.CreatedAt = old.ID, old.SpaceID, old.Source, old.CreatedAt
 		if op.OccurredOn.Equal(old.OccurredOn) {
 			op.OccurredAt = old.OccurredAt

@@ -902,6 +902,14 @@ paths:
         through the portfolio engine, and the row is kept only if the result computes.
 
 
+        400 also refuses an entry that cannot happen to its paper's kind (decision Р-17), and
+        the same on an edit: a buy or a sell of a `currency` paper (money is exchanged, not
+        held as a paper); a redemption other than of a bond, a fund or a `custom` paper; a
+        dividend other than on a share, a fund or a `custom` paper; a coupon or an amortization
+        other than on a bond or a `custom` paper. A broker's import is not held to it: what
+        the broker reports is recorded as reported.
+
+
         409 SAYS THAT REPLAY REFUSED, AND NOTHING FINER. Unrelated causes arrive as this one
         status: a sell or transfer_out releasing more than the account holds; an operation
         whose currency is not the one that position's cost, quantity and fees are already kept

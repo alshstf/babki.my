@@ -670,6 +670,9 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 
 	var created Operation
 	err := s.store.WithOpenAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+		if err := st.checkKind(ctx, op); err != nil {
+			return err
+		}
 		removeIDs, accounts, err := replacedRows(ctx, st, spaceID, replace)
 		if err != nil {
 			return err
