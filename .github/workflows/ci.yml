@@ -56,3 +56,34 @@ jobs:
 
       - name: Docker build
         run: docker build -t babki:ci .
+
+  # The owner's first path through the built program — sign in, open an
+  # account, buy shares, see the position grow — against the real server and
+  # database, seeded with the demo data. Runs beside build-test.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Start the program with the demo data
+        working-directory: deploy/compose
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=e2e-$(openssl rand -hex 8)"
+            echo "BABKI_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "BABKI_COOKIE_SECURE=false"
+          } > .env
+          docker compose up -d --build --wait
+          docker compose exec -T app babki seed
+      - name: Install the browser
+        run: cd web && npm ci && npx playwright install --with-deps chromium
+      - name: Journey
+        run: cd web && BASE_URL=http://localhost:8080 npm run e2e
+      - name: Program log
+        if: failure()
+        working-directory: deploy/compose
+        run: docker compose logs app | tail -200
