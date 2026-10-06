@@ -958,6 +958,8 @@ type QuotableInstrument struct {
 	// Currency is empty for a mapping older than migration 0017; such a listing
 	// is not priced until SetMapCurrency fills it.
 	Currency string
+	// Bond: the catalog row is a bond, whose price is a percentage of its face.
+	Bond bool
 }
 
 // QuotableByConnection is every listing this connection can price, ordered by
@@ -966,10 +968,10 @@ type QuotableInstrument struct {
 // own day decides the latest quote.
 func (s *Store) QuotableByConnection(ctx context.Context, connectionID uuid.UUID) ([]QuotableInstrument, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT instrument_uid, instrument_id, currency
-		FROM tinvest_instrument_map
-		WHERE connection_id = $1 AND instrument_uid <> ''
-		ORDER BY instrument_uid`, connectionID)
+		SELECT m.instrument_uid, m.instrument_id, m.currency, i.type = 'bond'
+		FROM tinvest_instrument_map m JOIN instruments i ON i.id = m.instrument_id
+		WHERE m.connection_id = $1 AND m.instrument_uid <> ''
+		ORDER BY m.instrument_uid`, connectionID)
 	if err != nil {
 		return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
 	}
@@ -977,7 +979,7 @@ func (s *Store) QuotableByConnection(ctx context.Context, connectionID uuid.UUID
 	out := []QuotableInstrument{}
 	for rows.Next() {
 		var q QuotableInstrument
-		if err := rows.Scan(&q.InstrumentUID, &q.InstrumentID, &q.Currency); err != nil {
+		if err := rows.Scan(&q.InstrumentUID, &q.InstrumentID, &q.Currency, &q.Bond); err != nil {
 			return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
 		}
 		out = append(out, q)

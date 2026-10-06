@@ -297,6 +297,7 @@ type wireBondResponse struct {
 	Instrument struct {
 		Nominal        wireMoneyValue `json:"nominal"`
 		InitialNominal wireMoneyValue `json:"initialNominal"`
+		AciValue       wireMoneyValue `json:"aciValue"`
 	} `json:"instrument"`
 }
 
