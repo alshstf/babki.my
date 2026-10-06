@@ -2006,6 +2006,8 @@ export interface components {
         };
         Position: {
             instrument: components["schemas"]["Instrument"];
+            /** @description True when this is a bond of Russia's external loans in a foreign currency held by a Russian tax resident, and its rouble figures count each parcel's cost in the face currency at the rate of the day of the sale or repayment — today's for what is still held — as НК РФ ст. 214.1 п. 13 has it (decision Р-21). A position held in roubles then shows that restated cost in `cost_minor` and the results built on it; one held in the face currency keeps its own figures and restates `in_base`. False when the rule does not apply or a rate it needs is missing (the ordinary figures are shown, never a mix). */
+            cost_at_sale_rate: boolean;
             /** @description Decimal as string */
             quantity: string;
             /** Format: int64 */

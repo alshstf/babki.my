@@ -135,6 +135,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // Not read by PositionsTable; kept at its honest default.
     has_undated_realizations: false,
     has_unknown_cost: false,
+    cost_at_sale_rate: false,
     // The server's two named causes (#66), null here since the row converts.
     // A test that nulls in_base sets in_base_gap too, as the server does.
     in_base_gap: null,
@@ -864,6 +865,25 @@ describe("PositionsTable", () => {
 
   // Shares with no purchase price count as bought for nothing; the paper says
   // so under its cost, with a hint where the real price is.
+  it("says a bond of Russia's external loans counts its rouble cost at the sale's rate", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ currency: "RUB", cost_at_sale_rate: true })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("position-cost-at-sale-rate").textContent).toBe("в рублях — по курсу дня продажи");
+    expect(screen.getByTestId("position-cost-at-sale-rate").getAttribute("title")).toContain("ст. 214.1 п. 13");
+  });
+
+  it("draws no sale-rate note on an ordinary paper", () => {
+    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
+
+    expect(screen.queryByTestId("position-cost-at-sale-rate")).not.toBeInTheDocument();
+  });
+
   it("says on the paper that its purchase price is unknown and counted as nought", () => {
     wrap(
       <PositionsTable

@@ -2006,8 +2006,11 @@ type PeriodReturn struct {
 type Position struct {
 	// AccruedInterestMinor A bond only: the coupon interest accrued on one unit, as the exchange states it for the valuation day, in the currency of price_money_minor; market_value_minor includes it. Null for other types, and when the exchange stated none in the face's currency within ten days.
 	AccruedInterestMinor nullable.Nullable[int64] `json:"accrued_interest_minor,omitempty"`
-	CostMinor            int64                    `json:"cost_minor"`
-	Currency             string                   `json:"currency"`
+
+	// CostAtSaleRate True when this is a bond of Russia's external loans in a foreign currency held by a Russian tax resident, and its rouble figures count each parcel's cost in the face currency at the rate of the day of the sale or repayment — today's for what is still held — as НК РФ ст. 214.1 п. 13 has it (decision Р-21). A position held in roubles then shows that restated cost in `cost_minor` and the results built on it; one held in the face currency keeps its own figures and restates `in_base`. False when the rule does not apply or a rate it needs is missing (the ordinary figures are shown, never a mix).
+	CostAtSaleRate bool   `json:"cost_at_sale_rate"`
+	CostMinor      int64  `json:"cost_minor"`
+	Currency       string `json:"currency"`
 
 	// FeesMinor Every commission charged on this position in its own `currency`: a purchase's (also in the lot's cost), a sale's (also off its realized result) and one charged outside a trade (also off `income_minor`) — a tally to read, never a term to subtract again. Commissions in another currency are not published.
 	FeesMinor int64 `json:"fees_minor"`

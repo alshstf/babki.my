@@ -2611,9 +2611,12 @@ components:
         income_minor: { type: integer, format: int64, description: "Income in `currency`'s minor units: dividends and coupons paid in it, less the taxes and the commissions charged on the paper in it outside a trade. May be 0, or negative (a tax with no payment in this currency)." }
     Position:
       type: object
-      required: [instrument, quantity, cost_minor, realized_pnl_minor, settled_minor, total_minor, income_minor, income_by_currency, fees_minor, currency, has_undated_lots, has_undated_realizations, has_unknown_cost, in_base_gap, market_value_gap]
+      required: [instrument, quantity, cost_minor, realized_pnl_minor, settled_minor, total_minor, income_minor, income_by_currency, fees_minor, currency, has_undated_lots, has_undated_realizations, has_unknown_cost, cost_at_sale_rate, in_base_gap, market_value_gap]
       properties:
         instrument: { $ref: "#/components/schemas/Instrument" }
+        cost_at_sale_rate:
+          type: boolean
+          description: "True when this is a bond of Russia's external loans in a foreign currency held by a Russian tax resident, and its rouble figures count each parcel's cost in the face currency at the rate of the day of the sale or repayment — today's for what is still held — as НК РФ ст. 214.1 п. 13 has it (decision Р-21). A position held in roubles then shows that restated cost in `cost_minor` and the results built on it; one held in the face currency keeps its own figures and restates `in_base`. False when the rule does not apply or a rate it needs is missing (the ordinary figures are shown, never a mix)."
         quantity: { type: string, description: "Decimal as string" }
         cost_minor: { type: integer, format: int64 }
         realized_pnl_minor:

@@ -125,10 +125,20 @@ func (s *Service) Positions(ctx context.Context, spaceID, accountID uuid.UUID) (
 			// 404 rather than skipped, which would silently shrink every total.
 			return apitypes.PositionsResponse{}, 0, errInstrumentNotInCatalog
 		}
+		// Russia's external loan bonds count their rouble cost at the day of the
+		// sale (decision Р-21), before any figure is built from the position.
+		atSaleRate := false
+		if sp.TaxResidency == "RU" && inst.Type == instrument.TypeBond && instrument.RussianExternalBond(inst.ISIN) &&
+			inst.FaceCurrency != nil {
+			if atSaleRate, err = s.restateAtSaleRate(ctx, pos, *inst.FaceCurrency, sp.BaseCurrency, now, rates); err != nil {
+				return apitypes.PositionsResponse{}, 0, err
+			}
+		}
 		apiPos, err := s.toAPI(ctx, pos, inst, quotes, now, rates)
 		if err != nil {
 			return apitypes.PositionsResponse{}, 0, err
 		}
+		apiPos.CostAtSaleRate = atSaleRate
 		if err := s.addLiquid(ctx, &apiPos, pos, inst, book, sp.BaseCurrency, now, rates); err != nil {
 			return apitypes.PositionsResponse{}, 0, err
 		}

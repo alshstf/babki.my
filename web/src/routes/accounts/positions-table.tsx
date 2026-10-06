@@ -557,6 +557,17 @@ export function PositionsTable({
                     convertedTitle={costConvertedTitle}
                     testId="position-cost"
                   />
+                  {/* Russia's external loan bonds: the rouble cost is the face
+                     currency's at the sale's rate (decision Р-21). */}
+                  {position.cost_at_sale_rate && (
+                    <div
+                      data-testid="position-cost-at-sale-rate"
+                      className="text-xs text-muted-foreground"
+                      title={t("positions.costAtSaleRateHint")}
+                    >
+                      {t("positions.costAtSaleRate")}
+                    </div>
+                  )}
                   {/* Shares that arrived with no purchase price count as bought for
                      nothing, so every profit on this row is overstated; said on the
                      paper, held or sold. */}
