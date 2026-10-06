@@ -414,6 +414,7 @@ func (e InstrumentEventNotCountedReason) Valid() bool {
 
 // Defines values for InstrumentEventSource.
 const (
+	InstrumentEventSourceKnown   InstrumentEventSource = "known"
 	InstrumentEventSourceManual  InstrumentEventSource = "manual"
 	InstrumentEventSourceMoexIss InstrumentEventSource = "moex_iss"
 	InstrumentEventSourceYahoo   InstrumentEventSource = "yahoo"
@@ -422,6 +423,8 @@ const (
 // Valid indicates whether the value is a known member of the InstrumentEventSource enum.
 func (e InstrumentEventSource) Valid() bool {
 	switch e {
+	case InstrumentEventSourceKnown:
+		return true
 	case InstrumentEventSourceManual:
 		return true
 	case InstrumentEventSourceMoexIss:
@@ -1751,7 +1754,7 @@ type InstrumentEvent struct {
 	// ResultIsin The paper a conversion or a spin-off produces. Required on those two and refused on a split, which produces no new paper. Never equal to `isin`.
 	ResultIsin nullable.Nullable[string] `json:"result_isin,omitempty"`
 
-	// Source Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. Neither is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+	// Source Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. `known`: a receipt the exchange replaced by a Russian company's share one for one, from a list this program carries with each notice in `source_ref` (decision Р-19); it reaches only receipts bought for roubles, the ones Russian depositories held. None of the three is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
 	Source InstrumentEventSource `json:"source"`
 
 	// SourceRef Where the fact can be checked: the exchange's own URL for a `moex_iss` row, and for a `manual` one whatever its recorder linked to. Required on a manual event — a ratio nobody can check is a number this program would carry into every holder's journal on one person's word.
@@ -1764,7 +1767,7 @@ type InstrumentEventKind string
 // InstrumentEventNotCountedReason Why an event of a kind this program applies still puts nothing in a journal. `result_not_in_catalog`: the conversion or spin-off produces a paper the catalog has no row for, and a journal row cannot point at a paper that is not there. Nothing is wrong and nothing was refused — the fact is recorded and waits; adding the paper to the catalog is what completes it. A split can never carry this: it produces no second paper.
 type InstrumentEventNotCountedReason string
 
-// InstrumentEventSource Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. Neither is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+// InstrumentEventSource Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. `known`: a receipt the exchange replaced by a Russian company's share one for one, from a list this program carries with each notice in `source_ref` (decision Р-19); it reaches only receipts bought for roubles, the ones Russian depositories held. None of the three is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
 type InstrumentEventSource string
 
 // InstrumentEventWritten What recording or removing an event did. The event itself, and the journals it changed on the way — materialization runs inside the request rather than waiting for the daily sweep, so these figures describe a state the next screen will already show.

@@ -123,6 +123,7 @@ func NewWorkers(
 	}
 	river.AddWorker(workers, corporateaction.NewRefreshForeignSplitsWorker(
 		caStore, caMaterializer, operations, instruments, references.Splits, log))
+	river.AddWorker(workers, corporateaction.NewRecordKnownConversionsWorker(caStore, caMaterializer, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeAllWorker(caMaterializer, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeISINWorker(caMaterializer, log))
 	river.AddWorker(workers, marketdata.NewReferencePricesWorker(mdStore, operations, instruments,
@@ -154,6 +155,7 @@ func Schedule() []jobs.Periodic {
 		{Every: tinvestDividendsInterval, Args: tinvest.RefreshDividendsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshMoexSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshForeignSplitsArgs{}},
+		{Every: corporateActionsInterval, Args: corporateaction.RecordKnownConversionsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.MaterializeAllArgs{}},
 		{Every: referencePricesInterval, Args: marketdata.RefreshReferencePricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshDividendCalendarArgs{}},

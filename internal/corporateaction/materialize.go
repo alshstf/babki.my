@@ -299,6 +299,12 @@ func (m *Materializer) desired(ctx context.Context, base []operation.Operation, 
 			if !held.IsPositive() {
 				continue
 			}
+			if e.Source == SourceKnown && !heldInRoubles(working, instrumentID) {
+				// The exchange replaced only receipts held through Russian
+				// depositories, bought for roubles; one bought for currency at a
+				// foreign broker stayed a receipt.
+				continue
+			}
 			if e.Kind == KindSplit && hasForeignSplit(working, instrumentID, e.EffectiveOn) {
 				// Another split of this paper on this day is already in the
 				// journal; adding ours would multiply twice. No door writes one
@@ -322,6 +328,17 @@ func (m *Materializer) desired(ctx context.Context, base []operation.Operation, 
 		}
 	}
 	return want, nil
+}
+
+// heldInRoubles reports whether the account's first entry on the paper, the
+// one that fixes its position currency, is in roubles.
+func heldInRoubles(journal []operation.Operation, instrumentID uuid.UUID) bool {
+	for _, o := range journal {
+		if o.InstrumentID != nil && *o.InstrumentID == instrumentID {
+			return o.Currency == "RUB"
+		}
+	}
+	return false
 }
 
 // resultInstrument is the catalog row of the paper an event produces, or nil.
@@ -438,6 +455,8 @@ func sourceName(source string) string {
 		return "Московская биржа"
 	case SourceYahoo:
 		return "Yahoo Finance"
+	case SourceKnown:
+		return "замена на Московской бирже"
 	default:
 		return "внесено вручную"
 	}

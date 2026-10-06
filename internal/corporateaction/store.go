@@ -62,20 +62,22 @@ func (s *Store) Create(ctx context.Context, e Event) (Event, error) {
 	return created, nil
 }
 
-// Upsert is the exchange job's write: the same event again updates the ratio
-// and cached secid. It matches on (isin, kind, effective_on), never the secid,
-// which can change. A hand-recorded event is not overwritten: the job counts it
-// and leaves it.
+// Upsert is a job's write: the same event again updates the ratio, the paper
+// it produces, the evidence and the note. It matches on (isin, kind,
+// effective_on), never the secid, which can change. A hand-recorded event is
+// not overwritten: the job counts it and leaves it.
 func (s *Store) Upsert(ctx context.Context, e Event) (Event, bool, error) {
 	row := s.db.QueryRow(ctx, `
 		INSERT INTO instrument_events (kind, isin, effective_on, ratio_from, ratio_to,
 			result_isin, basis_share, source, source_ref, moex_secid, note)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (isin, kind, effective_on) DO UPDATE
-		SET ratio_from = EXCLUDED.ratio_from,
-		    ratio_to   = EXCLUDED.ratio_to,
-		    source_ref = EXCLUDED.source_ref,
-		    moex_secid = EXCLUDED.moex_secid
+		SET ratio_from  = EXCLUDED.ratio_from,
+		    ratio_to    = EXCLUDED.ratio_to,
+		    result_isin = EXCLUDED.result_isin,
+		    source_ref  = EXCLUDED.source_ref,
+		    moex_secid  = EXCLUDED.moex_secid,
+		    note        = EXCLUDED.note
 		WHERE instrument_events.source = $8
 		RETURNING `+cols,
 		e.Kind, e.ISIN, e.EffectiveOn, e.RatioFrom, e.RatioTo, nullISIN(e.ResultISIN),
