@@ -144,8 +144,8 @@ func newMoexHTTPClient() *http.Client {
 	return &http.Client{Timeout: moexHTTPTimeout}
 }
 
-// referenceHTTPTimeout bounds every request for reference prices (FinEx NAV,
-// Yahoo Finance); a fund's whole history is about 200 KB.
+// referenceHTTPTimeout bounds every request to the outside feeds (FinEx NAV,
+// Yahoo Finance prices and dividends); a fund's whole history is about 200 KB.
 const referenceHTTPTimeout = 30 * time.Second
 
 // tinvestHTTPTimeout bounds every T-Invest request, set here with the
@@ -228,9 +228,11 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	caMaterializer := corporateaction.NewMaterializer(
 		caStore, operation.NewService(opStore), instStore,
 		tinvest.NewRechecker(tinvest.NewStore(r.pool), enqueuer, r.log), r.log)
+	feed := yahoo.New(&http.Client{Timeout: referenceHTTPTimeout}, "")
 	references := background.ReferenceSources{
-		NAV:     finex.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
-		Foreign: yahoo.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+		NAV:       finex.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+		Foreign:   feed,
+		Dividends: feed,
 	}
 	workers := background.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, references, tinvestDeps, caStore, caMaterializer, enqueuer)

@@ -1,7 +1,8 @@
-// Package yahoo reads foreign shares' prices on their home exchanges from
-// Yahoo Finance (decision Р-11): a share is found by its ISIN, and its daily
-// closes are read by the symbol found. The API is public but unofficial and
-// needs no key; a change on its side shows as a failed job, never a figure.
+// Package yahoo reads foreign shares' prices on their home exchanges (decision
+// Р-11) and their dividends from Yahoo Finance: a share is found by its ISIN,
+// and its daily closes and events are read by the symbol found. The API is
+// public but unofficial and needs no key; a change on its side shows as a
+// failed job, never a figure.
 package yahoo
 
 import (
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -58,7 +60,7 @@ type wireSearch struct {
 	} `json:"quotes"`
 }
 
-// SymbolFor is the symbol of the first share the search finds for isin.
+// SymbolFor is the symbol of the first share or fund the search finds for isin.
 func (c *Client) SymbolFor(ctx context.Context, isin string) (string, bool, error) {
 	q := url.Values{"q": {isin}, "quotesCount": {"5"}, "newsCount": {"0"}}
 	var resp wireSearch
@@ -66,7 +68,7 @@ func (c *Client) SymbolFor(ctx context.Context, isin string) (string, bool, erro
 		return "", false, err
 	}
 	for _, r := range resp.Quotes {
-		if r.QuoteType == "EQUITY" && r.Symbol != "" {
+		if (r.QuoteType == "EQUITY" || r.QuoteType == "ETF") && r.Symbol != "" {
 			return r.Symbol, true, nil
 		}
 	}
@@ -80,6 +82,12 @@ type wireChart struct {
 				Currency             string `json:"currency"`
 				ExchangeTimezoneName string `json:"exchangeTimezoneName"`
 			} `json:"meta"`
+			Events struct {
+				Dividends map[string]struct {
+					Amount float64 `json:"amount"`
+					Date   int64   `json:"date"`
+				} `json:"dividends"`
+			} `json:"events"`
 			Timestamp  []int64 `json:"timestamp"`
 			Indicators struct {
 				Quote []struct {
@@ -117,16 +125,9 @@ func (c *Client) Closes(ctx context.Context, symbol string, from, to time.Time) 
 		return nil, nil
 	}
 	r := resp.Chart.Result[0]
-	currency, scale := r.Meta.Currency, int32(0)
-	if whole, ok := subunits[currency]; ok {
-		currency, scale = whole, -2
-	}
-	if len(currency) != 3 || strings.ToUpper(currency) != currency {
-		return nil, fmt.Errorf("yahoo: %s: currency %q is not a currency code", symbol, r.Meta.Currency)
-	}
-	loc, err := time.LoadLocation(r.Meta.ExchangeTimezoneName)
+	currency, scale, loc, err := chartFrame(symbol, r.Meta.Currency, r.Meta.ExchangeTimezoneName)
 	if err != nil {
-		return nil, fmt.Errorf("yahoo: %s: exchange time zone %q: %w", symbol, r.Meta.ExchangeTimezoneName, err)
+		return nil, err
 	}
 	if len(r.Indicators.Quote) == 0 {
 		return nil, nil
@@ -144,6 +145,67 @@ func (c *Client) Closes(ctx context.Context, symbol string, from, to time.Time) 
 		out = append(out, marketdata.DayPrice{Day: day, Price: price, Currency: currency})
 	}
 	return out, nil
+}
+
+// Dividends is the symbol's dividends with an ex-date from from to to, oldest
+// first: so much per share before tax, in the share's currency. Yahoo names
+// the ex-date, not the record date; since settlement moved to the next day
+// (May 2024 in the US) the two coincide, and either way the shares that count
+// are those held the day before (Dividend.LastBuyDate is left to that rule).
+func (c *Client) Dividends(ctx context.Context, symbol string, from, to time.Time) ([]marketdata.Dividend, error) {
+	q := url.Values{
+		"interval": {"1mo"},
+		"events":   {"div"},
+		"period1":  {strconv.FormatInt(from.Unix(), 10)},
+		"period2":  {strconv.FormatInt(to.AddDate(0, 0, 1).Unix(), 10)},
+	}
+	var resp wireChart
+	if err := c.get(ctx, c.chartURL+"/"+url.PathEscape(symbol)+"?"+q.Encode(), &resp); err != nil {
+		return nil, err
+	}
+	if resp.Chart.Error != nil {
+		return nil, fmt.Errorf("yahoo: %s: %s: %s", symbol, resp.Chart.Error.Code, resp.Chart.Error.Description)
+	}
+	if len(resp.Chart.Result) == 0 {
+		return nil, nil
+	}
+	r := resp.Chart.Result[0]
+	currency, scale, loc, err := chartFrame(symbol, r.Meta.Currency, r.Meta.ExchangeTimezoneName)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]marketdata.Dividend, 0, len(r.Events.Dividends))
+	for _, d := range r.Events.Dividends {
+		if d.Amount <= 0 {
+			continue
+		}
+		local := time.Unix(d.Date, 0).In(loc)
+		out = append(out, marketdata.Dividend{
+			Source:     c.Name(),
+			RecordDate: time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC),
+			PerShare:   decimal.NewFromFloat(d.Amount).Round(6).Shift(scale),
+			Currency:   currency,
+		})
+	}
+	slices.SortFunc(out, func(a, b marketdata.Dividend) int { return a.RecordDate.Compare(b.RecordDate) })
+	return out, nil
+}
+
+// chartFrame is a chart's currency in whole units, the shift its figures need
+// to get there, and the exchange's time zone that dates them.
+func chartFrame(symbol, rawCurrency, timeZone string) (string, int32, *time.Location, error) {
+	currency, scale := rawCurrency, int32(0)
+	if whole, ok := subunits[currency]; ok {
+		currency, scale = whole, -2
+	}
+	if len(currency) != 3 || strings.ToUpper(currency) != currency {
+		return "", 0, nil, fmt.Errorf("yahoo: %s: currency %q is not a currency code", symbol, rawCurrency)
+	}
+	loc, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("yahoo: %s: exchange time zone %q: %w", symbol, timeZone, err)
+	}
+	return currency, scale, loc, nil
 }
 
 func (c *Client) get(ctx context.Context, u string, out any) error {

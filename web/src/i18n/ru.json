@@ -541,7 +541,8 @@
       "tinvestHistory": "Т-Инвестиции — история цен",
       "tinvestDividends": "Т-Инвестиции — календарь дивидендов",
       "moexSplits": "Мосбиржа — сплиты",
-      "referencePrices": "FinEx и Yahoo Finance — СЧА фондов и цены западных бирж"
+      "referencePrices": "FinEx и Yahoo Finance — СЧА фондов и цены западных бирж",
+      "dividendCalendar": "Yahoo Finance — календарь дивидендов, если брокер его не даёт"
     }
   },
   "instrumentPage": {
