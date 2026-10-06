@@ -62,7 +62,7 @@ func applyBuy(p *Position, o Operation) error {
 	}
 	// A purchase dates its lot; the copy keeps the lot off the journal entry.
 	boughtOn := o.OccurredOn
-	p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn, settledCopy(o))
+	p.addLot(o.lotID(0), *o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn, settledCopy(o))
 	if err := p.addFee(o.Currency, o.FeeMinor); err != nil {
 		return wrapOp(o, err)
 	}
@@ -196,14 +196,14 @@ func applyArrival(p *Position, o Operation) error {
 		// No breakdown (basis given by hand, or a transfer from before breakdowns):
 		// the lot's purchase date is unknown, and the transfer's own date would be a
 		// false one.
-		p.addLot(*o.Quantity, o.AmountMinor, nil, nil)
+		p.addLot(o.lotID(0), *o.Quantity, o.AmountMinor, nil, nil)
 		return nil
 	}
 	if err := CheckTransferLots(o); err != nil {
 		return err
 	}
-	for _, pc := range o.TransferLots {
-		p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn, pc.RateOn)
+	for i, pc := range o.TransferLots {
+		p.addLot(o.lotID(i), pc.Quantity, pc.CostMinor, pc.AcquiredOn, pc.RateOn)
 	}
 	return nil
 }

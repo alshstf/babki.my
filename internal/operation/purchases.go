@@ -228,7 +228,7 @@ func sameLots(a, b []ReleasedLot) bool {
 	return slices.EqualFunc(a, b, func(x, y ReleasedLot) bool {
 		sameDay := (x.AcquiredOn == nil) == (y.AcquiredOn == nil) &&
 			(x.AcquiredOn == nil || x.AcquiredOn.Equal(*y.AcquiredOn))
-		return x.Quantity.Equal(y.Quantity) && x.CostMinor == y.CostMinor && sameDay
+		return x.From == y.From && x.Quantity.Equal(y.Quantity) && x.CostMinor == y.CostMinor && sameDay
 	})
 }
 

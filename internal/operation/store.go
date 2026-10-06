@@ -185,9 +185,25 @@ func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, ver
 // order and the foreign key removes pieces with their operation. It returns the
 // stored row because quantity is NUMERIC(30,10) and may come back rounded.
 const insertLotSQL = `
-	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on, rate_on)
-	VALUES ($1, $2, $3, $4, $5, $6)
-	RETURNING quantity, cost_minor, acquired_on, rate_on`
+	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on, rate_on, from_origin, from_seq)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	RETURNING quantity, cost_minor, acquired_on, rate_on, from_origin, from_seq`
+
+// lotFrom is a piece's lot number as its two columns, null when it has none.
+func lotFrom(id portfolio.LotID) (*string, *int) {
+	if id.IsZero() {
+		return nil, nil
+	}
+	return &id.Origin, &id.Seq
+}
+
+// scanLotFrom reads the two columns back into a number.
+func scanLotFrom(origin *string, seq *int) portfolio.LotID {
+	if origin == nil || seq == nil {
+		return portfolio.LotID{}
+	}
+	return portfolio.LotID{Origin: *origin, Seq: *seq}
+}
 
 // writeTransferLots stores a breakdown next to the operation carrying it and
 // returns the pieces as stored, in release order. The pieces go out as one
@@ -203,16 +219,22 @@ const insertLotSQL = `
 func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lots []ReleasedLot) ([]ReleasedLot, error) {
 	batch := &pgx.Batch{}
 	for i, lot := range lots {
-		batch.Queue(insertLotSQL, operationID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn, lot.RateOn)
+		origin, seq := lotFrom(lot.From)
+		batch.Queue(insertLotSQL, operationID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn, lot.RateOn, origin, seq)
 	}
 	br := tx.SendBatch(ctx, batch)
 	stored := make([]ReleasedLot, 0, len(lots))
 	for i := range lots {
-		var back ReleasedLot
-		if err := br.QueryRow().Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn, &back.RateOn); err != nil {
+		var (
+			back   ReleasedLot
+			origin *string
+			seq    *int
+		)
+		if err := br.QueryRow().Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn, &back.RateOn, &origin, &seq); err != nil {
 			_ = br.Close()
 			return nil, fmt.Errorf("transfer lot %d: %w", i, err)
 		}
+		back.From = scanLotFrom(origin, seq)
 		stored = append(stored, back)
 	}
 	if err := br.Close(); err != nil {
@@ -554,7 +576,7 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 				AND peer.type = 'transfer_in'
 			WHERE o.space_id = $1 AND o.id = ANY($2)
 		)
-		SELECT c.id, l.quantity, l.cost_minor, l.acquired_on, l.rate_on
+		SELECT c.id, l.quantity, l.cost_minor, l.acquired_on, l.rate_on, l.from_origin, l.from_seq
 		FROM carriers c
 		JOIN operation_transfer_lots l ON l.operation_id = c.carrier
 		ORDER BY c.id, l.seq`, spaceID, ids)
@@ -564,11 +586,16 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 	defer rows.Close()
 	byOperation := make(map[uuid.UUID][]ReleasedLot)
 	for rows.Next() {
-		var id uuid.UUID
-		var lot ReleasedLot
-		if err := rows.Scan(&id, &lot.Quantity, &lot.CostMinor, &lot.AcquiredOn, &lot.RateOn); err != nil {
+		var (
+			id     uuid.UUID
+			lot    ReleasedLot
+			origin *string
+			seq    *int
+		)
+		if err := rows.Scan(&id, &lot.Quantity, &lot.CostMinor, &lot.AcquiredOn, &lot.RateOn, &origin, &seq); err != nil {
 			return err
 		}
+		lot.From = scanLotFrom(origin, seq)
 		byOperation[id] = append(byOperation[id], lot)
 	}
 	if err := rows.Err(); err != nil {
