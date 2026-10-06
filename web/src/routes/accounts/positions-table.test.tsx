@@ -942,6 +942,7 @@ describe("PositionsTable", () => {
     return {
       currency: "USD",
       amount_minor: 150_000,
+      overdrawn_since: null,
       in_base: {
         currency: "RUB",
         value_minor: 13_500_000,
@@ -1167,6 +1168,37 @@ describe("PositionsTable", () => {
     );
     // And says why there is no profit: the journal is missing operations.
     expect(screen.getByTestId("cash-overdraft")).toBeInTheDocument();
+  });
+
+  it("offers an opening balance under money gone below zero, with the day it first went short", () => {
+    const opened: (CashPosition & { overdrawn_since: string })[] = [];
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash({ currency: "RUB", amount_minor: -29_600_000, overdrawn_since: "2026-03-02" })]}
+        mode="native"
+        baseCurrency="RUB"
+        onOpeningBalance={(money) => opened.push(money)}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("cash-opening-balance"));
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ currency: "RUB", overdrawn_since: "2026-03-02" });
+  });
+
+  it("offers no opening balance to a reader who cannot write", () => {
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash({ currency: "RUB", amount_minor: -29_600_000, overdrawn_since: "2026-03-02" })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-overdraft")).toBeInTheDocument();
+    expect(screen.queryByTestId("cash-opening-balance")).not.toBeInTheDocument();
   });
 
   it("draws no overdraft note on money the account actually holds", () => {

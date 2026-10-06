@@ -249,6 +249,7 @@ export function PositionsTable({
   baseCurrency,
   onPriceUnknown,
   onStatePrice,
+  onOpeningBalance,
   instrumentLinks = false,
   rowLabel,
 }: {
@@ -267,6 +268,9 @@ export function PositionsTable({
   // What «указать цену» on an unquoted paper opens; absent for a reader who
   // cannot write.
   onStatePrice?: (paper: QuotedPaper) => void;
+  // What «добавить начальный остаток» under a currency gone below zero opens
+  // (decision Р-2); absent for a reader who cannot write.
+  onOpeningBalance?: (money: CashPosition & { overdrawn_since: string }) => void;
   // Whether a paper's name leads to its own page. Off where the table is drawn
   // outside the application's router.
   instrumentLinks?: boolean;
@@ -835,6 +839,24 @@ export function PositionsTable({
                       {t("positions.cashOverdraft")}
                     </div>
                   )}
+                  {money.amount_minor < 0 &&
+                    money.overdrawn_since != null &&
+                    onOpeningBalance && (
+                      <button
+                        type="button"
+                        data-testid="cash-opening-balance"
+                        className="text-xs underline underline-offset-2 hover:text-foreground"
+                        title={t("positions.openingBalanceHint")}
+                        onClick={() =>
+                          onOpeningBalance({
+                            ...money,
+                            overdrawn_since: money.overdrawn_since as string,
+                          })
+                        }
+                      >
+                        {t("positions.openingBalance")}
+                      </button>
+                    )}
                 </TableCell>
                 <TableCell
                   className="text-right tabular-nums"

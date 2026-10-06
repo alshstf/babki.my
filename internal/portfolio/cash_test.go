@@ -207,6 +207,52 @@ func TestCashGoesNegativeRatherThanRefusing(t *testing.T) {
 	}
 }
 
+// A negative balance names the first day the journal went short — the day an
+// opening balance goes on (decision Р-2) — even when it recovered in between;
+// a balance back at nought or above names none.
+func TestCashNamesTheDayItFirstWentShort(t *testing.T) {
+	for name, c := range map[string]struct {
+		ops  []Operation
+		want string
+	}{
+		"short since the first purchase": {
+			ops: []Operation{
+				cashOp(t, TypeBuy, "2026-03-02", "RUB", -30_000_000, 0),
+				cashOp(t, TypeDividend, "2026-07-15", "RUB", 400_000, 0),
+			},
+			want: "2026-03-02",
+		},
+		"short, made good, short again": {
+			ops: []Operation{
+				cashOp(t, TypeBuy, "2026-03-02", "RUB", -100_000, 0),
+				cashOp(t, TypeDeposit, "2026-04-01", "RUB", 150_000, 0),
+				cashOp(t, TypeBuy, "2026-05-01", "RUB", -200_000, 0),
+			},
+			want: "2026-03-02",
+		},
+		"short once, not now": {
+			ops: []Operation{
+				cashOp(t, TypeBuy, "2026-03-02", "RUB", -100_000, 0),
+				cashOp(t, TypeDeposit, "2026-04-01", "RUB", 100_000, 0),
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cash, err := Cash(c.ops)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := cash["RUB"].OverdrawnSince
+			switch {
+			case c.want == "" && got != nil:
+				t.Errorf("short since %s, want no day: the balance is %d", got.Format(time.DateOnly), cash["RUB"].Minor)
+			case c.want != "" && (got == nil || !got.Equal(day(t, c.want))):
+				t.Errorf("short since %v, want %s", got, c.want)
+			}
+		})
+	}
+}
+
 // A currency held and fully spent is still named, with a zero balance.
 func TestCashNamesACurrencyWhoseBalanceCameToNought(t *testing.T) {
 	ops := []Operation{

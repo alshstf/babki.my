@@ -29,6 +29,8 @@ import { TransferDialog } from "./transfer-dialog";
 import { ArrivalDialog } from "./arrival-dialog";
 import { PurchasePriceDialog, type PricedPaper } from "./purchase-price-dialog";
 import { StatePriceDialog, type QuotedPaper } from "./state-price-dialog";
+import { OpeningBalanceDialog } from "./opening-balance-dialog";
+import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
@@ -57,6 +59,8 @@ export function AccountDetailPage() {
   // The paper whose purchase price is being given, from its «указать цену».
   const [pricing, setPricing] = useState<PricedPaper | null>(null);
   const [quoting, setQuoting] = useState<QuotedPaper | null>(null);
+  // The currency gone below zero whose opening balance is being given.
+  const [opening, setOpening] = useState<(CashPosition & { overdrawn_since: string }) | null>(null);
   // The recorded operation being corrected, and the paper it names.
   const [editing, setEditing] = useState<{
     operation: Operation;
@@ -197,6 +201,7 @@ export function AccountDetailPage() {
               baseCurrency={baseCurrency}
               onPriceUnknown={readOnly ? undefined : setPricing}
               onStatePrice={isViewer ? undefined : setQuoting}
+              onOpeningBalance={readOnly ? undefined : setOpening}
               instrumentLinks
             />
           </>
@@ -314,6 +319,14 @@ export function AccountDetailPage() {
       )}
       {quoting && (
         <StatePriceDialog open onOpenChange={(open) => !open && setQuoting(null)} paper={quoting} />
+      )}
+      {opening && (
+        <OpeningBalanceDialog
+          open
+          onOpenChange={(open) => !open && setOpening(null)}
+          account={account}
+          money={opening}
+        />
       )}
       {pricing && (
         <PurchasePriceDialog

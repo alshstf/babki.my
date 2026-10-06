@@ -1190,6 +1190,9 @@ type CashPosition struct {
 
 	// InBase The same money in the space's base currency, which is the only form in which it has a profit at all: in its OWN currency a thousand yuan cost a thousand yuan and always will. Null figures with a named `gap` when a rate was missing — never a partial answer.
 	InBase CashInBase `json:"in_base"`
+
+	// OverdrawnSince On a NEGATIVE balance only: the first day the journal took this money below zero, by the operations' own dates. An account whose journal starts after money was already there is short from that day on, and it is the date an opening balance goes on (decision Р-2, variant Б): one deposit of what the account holds now less `amount_minor`, recorded as an ordinary journal row. Null when the balance is zero or positive, even if it was negative once.
+	OverdrawnSince nullable.Nullable[openapi_types.Date] `json:"overdrawn_since"`
 }
 
 // ChangePasswordRequest defines model for ChangePasswordRequest.

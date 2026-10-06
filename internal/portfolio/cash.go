@@ -17,6 +17,9 @@ type CashPosition struct {
 	// Minor is the balance. It can be negative — a journal missing an operation
 	// shows money spent that never arrived — and is reported, not clamped.
 	Minor int64
+	// OverdrawnSince is the first day the journal took the balance below zero,
+	// by the operations' own dates; nil unless the balance is negative now.
+	OverdrawnSince *time.Time
 	// Lots are the inflows still held, oldest first; they sum to Minor when it is
 	// positive and are empty when it is not.
 	Lots []CashLot
@@ -109,6 +112,10 @@ func Cash(ops []Operation) (map[string]*CashPosition, error) {
 			return nil, fmt.Errorf("%w: the %s balance, adding %d to %d", err, o.Currency, effect, p.Minor)
 		}
 		p.Minor = balance
+		if balance < 0 && p.OverdrawnSince == nil {
+			day := o.OccurredOn
+			p.OverdrawnSince = &day
+		}
 		// Money moves on its settlement day when known (decision Р-3), the day the
 		// paper's own basis and proceeds are priced on.
 		on := RateDay(o)
@@ -122,6 +129,11 @@ func Cash(ops []Operation) (map[string]*CashPosition, error) {
 					OccurredOn: on, Released: released,
 				})
 			}
+		}
+	}
+	for _, p := range out {
+		if p.Minor >= 0 {
+			p.OverdrawnSince = nil
 		}
 	}
 	return out, nil

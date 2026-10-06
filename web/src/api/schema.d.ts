@@ -2204,6 +2204,11 @@ export interface components {
              * @description The balance in minor units of `currency`: every cash effect the journal records, added up — amount less commission on each entry, which is the same formula the reconciliation compares against the broker. CAN BE NEGATIVE, and is published so rather than clamped: an account whose journal is missing an operation genuinely shows money spent that never arrived (the owner's own yuan, spent on bonds while some of the purchases behind it are trades the broker will not explain), and a floor at nought would hide exactly the discrepancy a reader needs.
              */
             amount_minor: number;
+            /**
+             * Format: date
+             * @description On a NEGATIVE balance only: the first day the journal took this money below zero, by the operations' own dates. An account whose journal starts after money was already there is short from that day on, and it is the date an opening balance goes on (decision Р-2, variant Б): one deposit of what the account holds now less `amount_minor`, recorded as an ordinary journal row. Null when the balance is zero or positive, even if it was negative once.
+             */
+            overdrawn_since: string | null;
             in_base: components["schemas"]["CashInBase"];
         };
         /** @description The same money in the space's base currency, which is the only form in which it has a profit at all: in its OWN currency a thousand yuan cost a thousand yuan and always will. Null figures with a named `gap` when a rate was missing — never a partial answer. */
