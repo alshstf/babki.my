@@ -159,10 +159,9 @@ function priceHint(
   switch (position.instrument.type) {
     case "bond": {
       // Money first, the percent beside it: the percent is the market's quote,
-      // but the row's other figures are money. The face value is a catalog
-      // snapshot and drifts on an amortizing bond, as it already does in the
-      // valuation. The money is the server's price_money_minor, rounded once
-      // there.
+      // but the row's other figures are money. The money is the server's
+      // price_money_minor, rounded once there; the accrued interest the
+      // valuation adds follows it.
       const perUnitMinor = position.price_money_minor;
       const faceCurrency = position.instrument.face_currency;
       const perUnit =
@@ -177,6 +176,14 @@ function priceHint(
         : t("positions.pricePercent", { price: formatted });
       title += "\n" + t("positions.priceIsPercentOfFace");
       if (perUnit) title += "\n" + t("positions.priceMoneyFromFace");
+      const accruedMinor = position.accrued_interest_minor;
+      if (accruedMinor != null && faceCurrency) {
+        price = t("positions.priceWithAccrued", {
+          price,
+          accrued: formatMinor(accruedMinor, faceCurrency),
+        });
+        title += "\n" + t("positions.priceAccruedHint");
+      }
       break;
     }
     case "share":

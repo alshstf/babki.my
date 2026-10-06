@@ -657,7 +657,7 @@ describe("PositionsTable", () => {
   const BOND_PRICE_NOTE =
     "Облигация котируется в процентах от номинала, а не в деньгах за штуку: одна бумага стоит номинал, умноженный на этот процент";
   const BOND_MONEY_NOTE =
-    "Деньги за одну бумагу — это номинал, умноженный на этот процент. Номинал записан в каталоге и не обновляется: у амортизируемой облигации он со временем уменьшается, и тогда цена в деньгах будет завышена";
+    "Деньги за одну бумагу — это номинал, умноженный на этот процент. Номинал — текущий, по данным биржи: у амортизируемой облигации он уменьшается с каждой выплатой. Если биржа его не сообщает, берётся номинал из каталога";
 
   function makeBond(overrides: Partial<Position> = {}): Position {
     return makePosition({
@@ -1308,6 +1308,22 @@ describe("PositionsTable", () => {
       norm(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${BOND_MONEY_NOTE}\n${PRICE_VALUATION_NOTE}`,
       ),
+    );
+  });
+
+  it("adds the accrued interest the valuation includes after the price", () => {
+    wrap(
+      <PositionsTable
+        positions={[makeBond({ accrued_interest_minor: 4_929 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("952,00 ₽ · 95,20 % + НКД 49,29 ₽");
+    expect(priceLine.getAttribute("title")).toContain(
+      "НКД — накопленный купонный доход на одну бумагу, по данным биржи",
     );
   });
 

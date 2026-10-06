@@ -110,24 +110,29 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	c := moex.New(srv.Client(), srv.URL, nil)
 
 	// A plain share, a null price (dropped), a high-precision price, a SUR bond,
-	// a non-SUR bond, and a ticker on no board (absent, not an error).
-	tickers := []string{"SBER", "GAZP", "LKOH", "SU26238RMFS4", "RU000A105EX7", "NOPE"}
+	// a non-SUR bond, a dollar bond traded for roubles, and a ticker on no board
+	// (absent, not an error).
+	tickers := []string{"SBER", "GAZP", "LKOH", "SU26238RMFS4", "RU000A105EX7", "BYM000001818", "NOPE"}
 	quotes, err := c.QuotesFor(context.Background(), tickers)
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
 	}
 
-	// PREVDATE must be requested: without it the quote has no day (#90).
-	wantQuery := "iss.meta=off&iss.only=securities&securities.columns=SECID,ISIN,PREVPRICE,PREVDATE,CURRENCYID"
+	// PREVDATE must be requested: without it the quote has no day (#90). A bond
+	// board is also asked for the face and the accrued interest.
 	for _, p := range wantBoardPaths {
+		wantQuery := "iss.meta=off&iss.only=securities&securities.columns=SECID,ISIN,PREVPRICE,PREVDATE,CURRENCYID"
+		if strings.Contains(p, "/markets/bonds/") {
+			wantQuery += ",FACEVALUE,ACCRUEDINT,FACEUNIT"
+		}
 		if gotQueries[p] != wantQuery {
 			t.Errorf("request query for %s = %q, want %q", p, gotQueries[p], wantQuery)
 		}
 	}
 
 	// GAZP (null price) and NOPE (absent) do not appear.
-	if len(quotes) != 4 {
-		t.Fatalf("len(quotes) = %d, want 4: %+v", len(quotes), quotes)
+	if len(quotes) != 5 {
+		t.Fatalf("len(quotes) = %d, want 5: %+v", len(quotes), quotes)
 	}
 
 	byTicker := make(map[string]marketdata.TickerQuote, len(quotes))
@@ -197,6 +202,30 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	}
 	if usdBond.Currency != "USD" {
 		t.Errorf("RU000A105EX7.Currency = %q, want USD unchanged (only SUR maps)", usdBond.Currency)
+	}
+
+	// A bond carries its face and accrued interest; a share does not.
+	if sber.Bond != nil {
+		t.Errorf("SBER.Bond = %+v, want nil: a share has no face to quote against", sber.Bond)
+	}
+	for ticker, want := range map[string]struct{ face, accrued, currency string }{
+		"SU26238RMFS4": {"1000", "12.34", "RUB"},
+		"RU000A105EX7": {"1000", "5.67", "USD"},
+		// Settled in roubles, the interest is stated in roubles: not kept.
+		"BYM000001818": {"1000", "", "USD"},
+	} {
+		b := byTicker[ticker].Bond
+		if b == nil {
+			t.Errorf("%s.Bond = nil, want face %s %s", ticker, want.face, want.currency)
+			continue
+		}
+		accrued := ""
+		if b.Accrued != nil {
+			accrued = b.Accrued.String()
+		}
+		if b.Face.String() != want.face || b.Currency != want.currency || accrued != want.accrued {
+			t.Errorf("%s.Bond = face %s %s, accrued %q; want %s %s, %q", ticker, b.Face, b.Currency, accrued, want.face, want.currency, want.accrued)
+		}
 	}
 }
 

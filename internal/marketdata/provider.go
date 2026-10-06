@@ -43,6 +43,9 @@ type TickerQuote struct {
 	// never the fetch day (#90). For a carried-forward price it is the day the
 	// price was made.
 	On time.Time
+	// Bond is a bond's face and accrued interest as of the fetch, without its
+	// paper, day or source; nil for anything else or when not stated.
+	Bond *BondDay
 }
 
 // QuoteProvider fetches recent prices for exchange tickers.

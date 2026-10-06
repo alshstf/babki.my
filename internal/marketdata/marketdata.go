@@ -39,4 +39,8 @@ type Quote struct {
 	Price        decimal.Decimal
 	Currency     string
 	Source       string
+	// Bond is a bond's face and accrued interest on the valuation day, which
+	// the price is a percentage of. It is not stored with the quote: a
+	// valuation attaches it.
+	Bond *BondDay
 }

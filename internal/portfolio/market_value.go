@@ -62,8 +62,11 @@ func apiMarketValueGap(g valuationGap) (apitypes.MarketValueGap, bool) {
 //
 // share/etf: price × quantity, in the quote's currency — expected, not
 // guaranteed, to be the position's; toAPI converts when not.
-// bond: price is a percentage of face, so face × price/100 × quantity, in the
-// face currency. A face value without a currency gets no valuation.
+// bond: price is a percentage of face, so (face × price/100 + accrued interest)
+// × quantity, in the face currency. The face and the interest are the
+// exchange's for the day when the quote carries them (Quote.Bond), else the
+// catalog's face and no interest. A face value without a currency gets no
+// valuation.
 //
 // Decimal arithmetic, rounded once half away from zero by money.Minor, which
 // refuses an overflow (#27). Write-time bounds (#84) do not make this guard
@@ -83,17 +86,22 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	case instrument.TypeBond:
 		// The face value is checked before the quote: a quote would still value
 		// nothing.
-		if faceValueMinor == nil || faceCurrency == nil {
+		face, currency, ok := bondFace(faceValueMinor, faceCurrency, q, quoted)
+		if !ok {
 			return 0, "", valuationNoFaceValue, nil
 		}
 		if !quoted {
 			return 0, "", valuationNoQuote, nil
 		}
-		minor, err = money.Minor(decimal.NewFromInt(*faceValueMinor).Mul(q.Price).Shift(-centsPerUnit).Mul(quantity))
-		if err != nil {
-			return 0, "", valuationStruck, fmt.Errorf("%w: %s at %s%% of a face value of %d", err, quantity, q.Price, *faceValueMinor)
+		perUnit := face.Mul(q.Price).Shift(-2)
+		if q.Bond != nil && q.Bond.Accrued != nil {
+			perUnit = perUnit.Add(*q.Bond.Accrued)
 		}
-		return minor, *faceCurrency, valuationStruck, nil
+		minor, err = money.Minor(perUnit.Mul(quantity).Shift(centsPerUnit))
+		if err != nil {
+			return 0, "", valuationStruck, fmt.Errorf("%w: %s at %s%% of a face value of %s", err, quantity, q.Price, face)
+		}
+		return minor, currency, valuationStruck, nil
 	default:
 		// currency, crypto, metal, custom and any unhandled type: no valuation model,
 		// even with a quote, and none is planned.
@@ -101,10 +109,23 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
+// bondFace is the face a bond's quote is a percentage of, in major units, and
+// its currency: the exchange's for the day when the quote carries it, else the
+// catalog's. ok is false with neither.
+func bondFace(faceValueMinor *int64, faceCurrency *string, q marketdata.Quote, quoted bool) (decimal.Decimal, string, bool) {
+	if quoted && q.Bond != nil {
+		return q.Bond.Face, q.Bond.Currency, true
+	}
+	if faceValueMinor == nil || faceCurrency == nil {
+		return decimal.Zero, "", false
+	}
+	return decimal.NewFromInt(*faceValueMinor).Shift(-centsPerUnit), *faceCurrency, true
+}
+
 // pricePerUnitMinor is one bond's price in money (Position.price_money_minor),
-// since a bond's quote is a percentage. Bonds only. Struck directly rather
-// than divided out of the valuation, which would round twice; the client does
-// no money arithmetic. Overflow-checked anyway.
-func pricePerUnitMinor(faceValueMinor int64, price decimal.Decimal) (int64, error) {
-	return money.Minor(decimal.NewFromInt(faceValueMinor).Mul(price).Shift(-centsPerUnit))
+// since a bond's quote is a percentage; accrued interest is not in it. Bonds
+// only. Struck directly rather than divided out of the valuation, which would
+// round twice; the client does no money arithmetic. Overflow-checked anyway.
+func pricePerUnitMinor(face, price decimal.Decimal) (int64, error) {
+	return money.Minor(face.Mul(price).Shift(-2).Shift(centsPerUnit))
 }

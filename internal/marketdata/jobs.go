@@ -157,6 +157,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	// A row with an ISIN is never matched by ticker: the exchange would have
 	// named a different security.
 	instISIN := make(map[uuid.UUID]string, len(insts))
+	isBond := make(map[uuid.UUID]bool, len(insts))
 	tickers := make([]string, 0, len(insts))
 	asked := make(map[string]bool, len(insts))
 	for _, inst := range insts {
@@ -170,6 +171,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		// Register the ISIN before the ticker bookkeeping can skip the row: two rows
 		// sharing a ticker are not ambiguous if each has its own ISIN.
 		instISIN[inst.ID] = inst.ISIN
+		isBond[inst.ID] = inst.Type == instrument.TypeBond
 		if inst.ISIN != "" {
 			// ISINs are unique in the catalog (migration 0020).
 			byISIN[inst.ISIN] = inst.ID
@@ -210,6 +212,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	today := utcDay(time.Now())
 	seen := make(map[string]bool, len(tickerQuotes))
 	quotes := make([]Quote, 0, len(tickerQuotes))
+	var bondDays []BondDay
 	for _, tq := range tickerQuotes {
 		id, ok := byISIN[tq.ISIN]
 		if !ok {
@@ -243,6 +246,12 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 			Currency:     tq.Currency,
 			Source:       w.provider.Name(),
 		})
+		// A bond's face and interest are today's, however old its last trade.
+		if tq.Bond != nil && isBond[id] {
+			d := *tq.Bond
+			d.InstrumentID, d.On, d.Source = id, today, w.provider.Name()
+			bondDays = append(bondDays, d)
+		}
 	}
 	for _, t := range tickers {
 		if !seen[t] {
@@ -252,6 +261,10 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 
 	if err := w.store.StoreLatestQuotes(ctx, quotes); err != nil {
 		w.log.Error("marketdata: store quotes failed", "err", err)
+		return err
+	}
+	if err := w.store.UpsertBondDays(ctx, bondDays); err != nil {
+		w.log.Error("marketdata: store bond days failed", "err", err)
 		return err
 	}
 	w.log.Info("marketdata: refreshed quotes",

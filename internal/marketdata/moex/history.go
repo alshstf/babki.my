@@ -30,7 +30,7 @@ func (c *Client) History(ctx context.Context, market, secid string, from, till t
 			"till":            {till.Format(time.DateOnly)},
 			"start":           {strconv.Itoa(start)},
 			"iss.meta":        {"off"},
-			"history.columns": {"BOARDID,TRADEDATE,CLOSE,LEGALCLOSEPRICE,CURRENCYID"},
+			"history.columns": {historyColumns(market)},
 		}
 		path := fmt.Sprintf("/iss/history/engines/stock/markets/%s/securities/%s.json?%s",
 			url.PathEscape(market), url.PathEscape(secid), q.Encode())
@@ -45,6 +45,15 @@ func (c *Client) History(ctx context.Context, market, secid string, from, till t
 		}
 		start = next
 	}
+}
+
+// historyColumns are the columns asked of a market's history; a bond's adds
+// its face value, the interest accrued that day and the face's currency.
+func historyColumns(market string) string {
+	if market == "bonds" {
+		return "BOARDID,TRADEDATE,CLOSE,LEGALCLOSEPRICE,CURRENCYID,FACEVALUE,ACCINT,FACEUNIT"
+	}
+	return "BOARDID,TRADEDATE,CLOSE,LEGALCLOSEPRICE,CURRENCYID"
 }
 
 type historyCursor struct{ index, total, pageSize int }
@@ -110,7 +119,14 @@ func (c *Client) historyPage(ctx context.Context, path, secid string) ([]marketd
 			continue
 		}
 		currency, _ := row[col["CURRENCYID"]].(string)
-		out = append(out, marketdata.DayPrice{Day: day, Price: price, Currency: normalizeCurrency(currency)})
+		dayPrice := marketdata.DayPrice{Day: day, Price: price, Currency: normalizeCurrency(currency)}
+		if face, ok := col["FACEVALUE"]; ok {
+			if accrued, ok := col["ACCINT"]; ok {
+				unit, _ := row[col["FACEUNIT"]].(string)
+				dayPrice.Bond = bondTerms(row[face], row[accrued], unit, currency)
+			}
+		}
+		out = append(out, dayPrice)
 	}
 
 	var cursor historyCursor
@@ -131,6 +147,24 @@ func (c *Client) historyPage(ctx context.Context, path, secid string) ([]marketd
 		cursor = historyCursor{index: number("INDEX"), total: number("TOTAL"), pageSize: number("PAGESIZE")}
 	}
 	return out, cursor, nil
+}
+
+// bondTerms reads a bond's face and accrued interest cells into a BondDay
+// without its paper, day or source; nil without a positive face and its
+// currency. The interest is kept only when the exchange settles in the face's
+// currency: on a dollar bond traded for roubles it is stated in roubles.
+func bondTerms(face, accrued any, faceUnitCode, currencyID string) *marketdata.BondDay {
+	f, ok := positive(face)
+	if !ok || faceUnitCode == "" {
+		return nil
+	}
+	out := &marketdata.BondDay{Face: f, Currency: faceUnit(faceUnitCode)}
+	if n, ok := accrued.(json.Number); ok && normalizeCurrency(currencyID) == out.Currency {
+		if a, err := decimal.NewFromString(n.String()); err == nil && !a.IsNegative() {
+			out.Accrued = &a
+		}
+	}
+	return out
 }
 
 // positive reads a price cell; ok is false for an empty or non-positive one.

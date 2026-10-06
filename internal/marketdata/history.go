@@ -27,6 +27,9 @@ type DayPrice struct {
 	Day      time.Time
 	Price    decimal.Decimal
 	Currency string
+	// Bond is a bond's face and accrued interest that day, without its paper,
+	// day or source; nil for anything else or when not stated.
+	Bond *BondDay
 }
 
 // HistoryProvider is an exchange's price history.
@@ -92,6 +95,12 @@ func (w *backfillQuotesWorker) Work(ctx context.Context, _ *river.Job[BackfillQu
 	if err != nil {
 		return err
 	}
+	// A bond's history is complete only with its face and interest, which were
+	// not kept at first: one downloaded before them is downloaded again.
+	bondCovered, err := w.store.BondDaysCoverage(ctx, ids, QuoteHistorySource)
+	if err != nil {
+		return err
+	}
 	today := utcDay(w.now())
 	for _, id := range ids {
 		paper, ok := papers[id]
@@ -102,7 +111,11 @@ func (w *backfillQuotesWorker) Work(ctx context.Context, _ *river.Job[BackfillQu
 		if from.Before(backfillFloor) {
 			from = backfillFloor
 		}
-		if last, ok := covered[id]; ok && !last.Before(from) {
+		last, ok := covered[id]
+		if paper.Type == instrument.TypeBond {
+			last, ok = bondCovered[id]
+		}
+		if ok && !last.Before(from) {
 			from = last.AddDate(0, 0, 1)
 		}
 		if from.After(today) {
@@ -127,10 +140,19 @@ func (w *backfillQuotesWorker) Work(ctx context.Context, _ *river.Job[BackfillQu
 			return err
 		}
 		quotes := make([]Quote, 0, len(days))
+		var bondDays []BondDay
 		for _, d := range days {
 			quotes = append(quotes, Quote{InstrumentID: id, On: d.Day, Price: d.Price, Currency: d.Currency, Source: QuoteHistorySource})
+			if d.Bond != nil && paper.Type == instrument.TypeBond {
+				b := *d.Bond
+				b.InstrumentID, b.On, b.Source = id, d.Day, QuoteHistorySource
+				bondDays = append(bondDays, b)
+			}
 		}
 		if err := w.store.UpsertQuotes(ctx, quotes); err != nil {
+			return err
+		}
+		if err := w.store.UpsertBondDays(ctx, bondDays); err != nil {
 			return err
 		}
 		w.log.Info("marketdata: downloaded quote history", "instrument", id, "secid", secid,

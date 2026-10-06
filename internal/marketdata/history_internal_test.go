@@ -43,7 +43,12 @@ func (s stubExchange) History(_ context.Context, market, secid string, from, til
 	*s.calls = append(*s.calls, historyCall{market, secid, from.Format(time.DateOnly), till.Format(time.DateOnly)})
 	var out []DayPrice
 	for d := from; !d.After(till); d = d.AddDate(0, 0, 1) {
-		out = append(out, DayPrice{Day: d, Price: decimal.NewFromInt(int64(100 + d.Day())), Currency: "RUB"})
+		price := DayPrice{Day: d, Price: decimal.NewFromInt(int64(100 + d.Day())), Currency: "RUB"}
+		if market == "bonds" {
+			accrued := decimal.NewFromInt(int64(d.Day()))
+			price.Bond = &BondDay{Face: decimal.NewFromInt(1000), Accrued: &accrued, Currency: "RUB"}
+		}
+		out = append(out, price)
 	}
 	return out, nil
 }
@@ -99,6 +104,17 @@ func TestQuoteHistoryIsBackfilledFromTheFirstOperation(t *testing.T) {
 	}
 	if _, err := store.QuoteOn(ctx, att, day("2026-07-20")); err == nil {
 		t.Error("AT&T was priced from the exchange's ruble «T»")
+	}
+	// A bond's day keeps its face and the interest accrued that day.
+	bonds, err := store.BondDaysOn(ctx, []uuid.UUID{ofz, sber}, day("2026-07-20"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, ok := bonds[ofz]; !ok || !b.Face.Equal(decimal.NewFromInt(1000)) || b.Accrued == nil || !b.Accrued.Equal(decimal.NewFromInt(20)) || b.Currency != "RUB" {
+		t.Errorf("OFZ on 2026-07-20 = %+v; want face 1000 ₽ with 20 ₽ accrued", b)
+	}
+	if _, ok := bonds[sber]; ok {
+		t.Error("a share got a bond day")
 	}
 
 	calls = nil

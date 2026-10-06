@@ -49,6 +49,15 @@ type priceBook struct {
 	lastMarket map[uuid.UUID]marketdata.Quote
 }
 
+// bondDayStore is where a bond's face and accrued interest by day are read.
+type bondDayStore interface {
+	BondDaysOn(ctx context.Context, ids []uuid.UUID, day time.Time) (map[uuid.UUID]marketdata.BondDay, error)
+}
+
+// accruedWindow is how old a bond's stated interest may be: it grows every
+// day and drops at each coupon, so an old figure is no figure.
+const accruedWindow = 10
+
 // priceStore is the price store as both valuations read it.
 type priceStore interface {
 	QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day time.Time) (map[uuid.UUID]marketdata.Quote, error)
@@ -132,7 +141,35 @@ func (h *Handler) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, 
 			}
 		}
 	}
-	return book, nil
+	return book, h.attachBondDays(ctx, ids, day, book)
+}
+
+// attachBondDays gives each bond's quotes its face and accrued interest on
+// day (Quote.Bond): the face of any age, the interest only within
+// accruedWindow.
+func (h *Handler) attachBondDays(ctx context.Context, ids []uuid.UUID, day time.Time, book priceBook) error {
+	bs, ok := h.quotes.(bondDayStore)
+	if !ok {
+		return nil
+	}
+	days, err := bs.BondDaysOn(ctx, ids, day)
+	if err != nil {
+		return err
+	}
+	for id, d := range days {
+		if d.On.Before(day.AddDate(0, 0, -accruedWindow)) {
+			d.Accrued = nil
+		}
+		if q, ok := book.liquid[id]; ok {
+			q.Bond = &d
+			book.liquid[id] = q
+		}
+		if q, ok := book.full[id]; ok {
+			q.Bond = &d
+			book.full[id] = q
+		}
+	}
+	return nil
 }
 
 // fullQuotes is the full prices as plain quotes, for code valuing one way.
