@@ -74,7 +74,8 @@ func apiMarketValueGap(g valuationGap) (apitypes.MarketValueGap, bool) {
 // operations, and old rows predate the bounds. err is only that refusal.
 func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *string, quantity decimal.Decimal, q marketdata.Quote, quoted bool) (minor int64, currency string, gap valuationGap, err error) {
 	switch instType {
-	case instrument.TypeShare, instrument.TypeETF:
+	// A coin is priced per unit like a share (decision Р-20).
+	case instrument.TypeShare, instrument.TypeETF, instrument.TypeCrypto:
 		if !quoted {
 			return 0, "", valuationNoQuote, nil
 		}
@@ -103,8 +104,8 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 		}
 		return minor, currency, valuationStruck, nil
 	default:
-		// currency, crypto, metal, custom and any unhandled type: no valuation model,
-		// even with a quote, and none is planned.
+		// currency, metal, custom and any unhandled type: no valuation model, even
+		// with a quote, and none is planned.
 		return 0, "", valuationTypeNotPriced, nil
 	}
 }

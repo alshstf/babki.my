@@ -2085,7 +2085,7 @@ components:
       type: object
       required: [kind, every_seconds, last_success_at, last_failure_at, last_error, stale]
       properties:
-        kind: { type: string, description: "The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar" }
+        kind: { type: string, description: "The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices" }
         every_seconds: { type: integer, description: "How often it runs" }
         last_success_at: { type: string, format: date-time, nullable: true }
         last_failure_at: { type: string, format: date-time, nullable: true }
@@ -2187,6 +2187,9 @@ components:
         isin: { type: string }
         figi: { type: string }
         currency: { type: string }
+        coingecko_id:
+          type: string
+          description: "A cryptocurrency's coin at CoinGecko, which prices it daily (decision Р-20): the price job picks the largest coin with the paper's ticker, since tickers are not unique among coins, and a person may correct it. Empty for anything else and until a coin is picked; absent from older answers."
         face_value_minor:
           type: integer
           format: int64
@@ -2388,6 +2391,7 @@ components:
         isin: { type: string, description: "ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. An empty string clears it." }
         figi: { type: string, maxLength: 32 }
         frozen: { type: boolean }
+        coingecko_id: { type: string, maxLength: 100, description: "See Instrument.coingecko_id. Omitted, it stays as it is; only a cryptocurrency takes one." }
         face_value_minor:
           type: integer
           format: int64
@@ -2723,7 +2727,7 @@ components:
     MarketValueGap:
       type: string
       enum: [type_not_priced, no_face_value, no_quote, no_rate_valuation_currency]
-      description: "Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf and bond are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published."
+      description: "Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf, bond and crypto are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published."
     RealizedGap:
       type: string
       enum: [no_rate]

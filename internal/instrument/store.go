@@ -53,12 +53,12 @@ type Store struct{ db db.Executor }
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const cols = `id, type, name, ticker, isin, figi, currency,
-	face_value_minor, face_currency, frozen, created_at, updated_at`
+	face_value_minor, face_currency, frozen, coingecko_id, created_at, updated_at`
 
 func scan(row pgx.Row) (Instrument, error) {
 	var i Instrument
 	err := row.Scan(&i.ID, &i.Type, &i.Name, &i.Ticker, &i.ISIN, &i.FIGI,
-		&i.Currency, &i.FaceValueMinor, &i.FaceCurrency, &i.Frozen,
+		&i.Currency, &i.FaceValueMinor, &i.FaceCurrency, &i.Frozen, &i.CoinGeckoID,
 		&i.CreatedAt, &i.UpdatedAt)
 	return i, err
 }
@@ -66,11 +66,11 @@ func scan(row pgx.Row) (Instrument, error) {
 func (s *Store) Create(ctx context.Context, inst Instrument) (Instrument, error) {
 	created, err := scan(s.db.QueryRow(ctx, `
 		INSERT INTO instruments (type, name, ticker, isin, figi, currency,
-			face_value_minor, face_currency, frozen)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			face_value_minor, face_currency, frozen, coingecko_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING `+cols,
 		inst.Type, inst.Name, inst.Ticker, inst.ISIN, inst.FIGI,
-		inst.Currency, inst.FaceValueMinor, inst.FaceCurrency, inst.Frozen))
+		inst.Currency, inst.FaceValueMinor, inst.FaceCurrency, inst.Frozen, inst.CoinGeckoID))
 	if err != nil {
 		return Instrument{}, wrapTickerConflict(err)
 	}
@@ -211,11 +211,12 @@ func (s *Store) Update(ctx context.Context, id uuid.UUID, upd Update) (Instrumen
 			frozen           = COALESCE($6, frozen),
 			face_value_minor = CASE WHEN $7 THEN $8 ELSE face_value_minor END,
 			face_currency    = CASE WHEN $9 THEN $10 ELSE face_currency END,
+			coingecko_id     = COALESCE($11, coingecko_id),
 			updated_at       = now()
 		WHERE id = $1`,
 		id, upd.Name, upd.Ticker, upd.ISIN, upd.FIGI, upd.Frozen,
 		upd.FaceValueMinor != nil, doublePtr(upd.FaceValueMinor),
-		upd.FaceCurrency != nil, doublePtr(upd.FaceCurrency))
+		upd.FaceCurrency != nil, doublePtr(upd.FaceCurrency), upd.CoinGeckoID)
 	if err != nil {
 		return Instrument{}, wrapTickerConflict(err)
 	}

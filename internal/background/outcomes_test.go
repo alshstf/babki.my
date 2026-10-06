@@ -39,8 +39,8 @@ func TestTheSourcesAreTheOutsideFeedsInTheirOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 12 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
-		t.Errorf("sources = %d starting with %q, want the twelve in their fixed order", len(list), list[0].Kind)
+	if len(list) != 13 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
+		t.Errorf("sources = %d starting with %q, want the thirteen in their fixed order", len(list), list[0].Kind)
 	}
 }
 

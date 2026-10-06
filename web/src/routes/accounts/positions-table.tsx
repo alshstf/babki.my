@@ -187,7 +187,8 @@ function priceHint(
       break;
     }
     case "share":
-    case "etf": {
+    case "etf":
+    case "crypto": {
       const quoteCurrency =
         position.market_value_source_currency ?? position.market_value_currency;
       // Unreachable (a valued row has a market_value_currency), but the number
@@ -613,6 +614,13 @@ export function PositionsTable({
                           title={hint.title}
                         >
                           {hint.price}
+                        </div>
+                      )}
+                      {/* CoinGecko asks to be named where its prices are shown
+                         (decision Р-20). */}
+                      {position.instrument.type === "crypto" && !position.price_by_hand && (
+                        <div data-testid="position-price-coingecko" className="text-xs text-muted-foreground">
+                          {t("positions.priceCoinGecko")}
                         </div>
                       )}
                       {/* A stale quote is still what the valuation and totals use, so its

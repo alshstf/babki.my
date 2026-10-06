@@ -46,13 +46,14 @@ const (
 
 // ReferenceSources are the feeds beyond the exchange and the broker: the full
 // valuation's reference prices (decision Р-11), the dividend calendar of
-// papers no broker's calendar covers (Р-14) and foreign papers' splits. A nil
-// one is not fetched.
+// papers no broker's calendar covers (Р-14), foreign papers' splits and
+// cryptocurrencies' prices (Р-20). A nil one is not fetched.
 type ReferenceSources struct {
 	NAV       marketdata.NAVProvider
 	Foreign   marketdata.ForeignQuoteProvider
 	Dividends marketdata.DividendFeed
 	Splits    corporateaction.ForeignSplitsProvider
+	Crypto    marketdata.CryptoQuoteProvider
 }
 
 // TinvestDeps is what the T-Invest workers need. Clients are made per token
@@ -130,6 +131,7 @@ func NewWorkers(
 		references.NAV, references.Foreign, log))
 	river.AddWorker(workers, marketdata.NewDividendCalendarWorker(mdStore, operations, instruments,
 		references.Dividends, log))
+	river.AddWorker(workers, marketdata.NewCryptoPricesWorker(mdStore, operations, instruments, references.Crypto, log))
 	return workers
 }
 
@@ -159,6 +161,7 @@ func Schedule() []jobs.Periodic {
 		{Every: corporateActionsInterval, Args: corporateaction.MaterializeAllArgs{}},
 		{Every: referencePricesInterval, Args: marketdata.RefreshReferencePricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshDividendCalendarArgs{}},
+		{Every: referencePricesInterval, Args: marketdata.RefreshCryptoPricesArgs{}},
 	}
 }
 
@@ -177,6 +180,7 @@ var sources = []jobs.SourceKind{
 	{Kind: corporateaction.RefreshForeignSplitsArgs{}.Kind(), Every: corporateActionsInterval},
 	{Kind: marketdata.RefreshReferencePricesArgs{}.Kind(), Every: referencePricesInterval},
 	{Kind: marketdata.RefreshDividendCalendarArgs{}.Kind(), Every: tinvestDividendsInterval},
+	{Kind: marketdata.RefreshCryptoPricesArgs{}.Kind(), Every: referencePricesInterval},
 }
 
 // Sources reads how each source's jobs last ended.

@@ -277,6 +277,7 @@
     "statePrice": "указать текущую цену",
     "statePriceAgain": "изменить",
     "priceByHand": "цена указана вручную",
+    "priceCoinGecko": "по данным CoinGecko",
     "priceNav": "по стоимости чистых активов фонда",
     "priceNavHint": "Стоимость чистых активов на пай — расчёт управляющей компании, а не цена, по которой пай можно продать сейчас. Входит в полную оценку.",
     "priceForeign": "по цене на бирже эмитента",
@@ -560,7 +561,8 @@
       "moexSplits": "Мосбиржа — сплиты",
       "foreignSplits": "Yahoo Finance — сплиты иностранных бумаг",
       "referencePrices": "FinEx и Yahoo Finance — СЧА фондов и цены западных бирж",
-      "dividendCalendar": "Yahoo Finance — календарь дивидендов, если брокер его не даёт"
+      "dividendCalendar": "Yahoo Finance — календарь дивидендов, если брокер его не даёт",
+      "cryptoPrices": "CoinGecko — цены криптовалют (данные CoinGecko)"
     }
   },
   "instrumentPage": {
@@ -905,14 +907,16 @@
       "ticker": "Тикер",
       "isin": "ISIN",
       "figi": "FIGI",
-      "frozen": "Заморожена"
+      "frozen": "Заморожена",
+      "coingeckoId": "Монета в CoinGecko"
     },
     "edit": {
       "title": "Изменить бумагу",
       "isinHint": "По ISIN бумага ищется у брокера ради котировок. Без него котировок не будет",
       "nameRequired": "Название не может быть пустым",
       "frozenHint": "Замороженная бумага помечается на экране позиций: торги по ней остановлены",
-      "saveError": "Не удалось сохранить"
+      "saveError": "Не удалось сохранить",
+      "coingeckoIdHint": "Код монеты на coingecko.com — например, bitcoin или ethereum. Программа подбирает его сама по тикеру (берёт самую крупную монету с таким тикером); поправьте, если выбрала не ту. Цены — по данным CoinGecko."
     }
   },
   "corporateActions": {

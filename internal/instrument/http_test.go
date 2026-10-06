@@ -277,3 +277,36 @@ func TestCatalogRefusesAPageItCannotHonour(t *testing.T) {
 		t.Errorf("has_more = true on an empty catalog read at the ceiling")
 	}
 }
+
+// A cryptocurrency's coin at CoinGecko is a person's to correct, spelled as
+// the feed spells it; another paper has none (decision Р-20).
+func TestOnlyACryptocurrencyTakesACoin(t *testing.T) {
+	url, c := newAPI(t)
+	create := func(body string) string {
+		t.Helper()
+		resp := do(t, c, "POST", url+"/api/v1/instruments", body)
+		defer func() { _ = resp.Body.Close() }()
+		var created struct{ ID string }
+		if err := json.NewDecoder(resp.Body).Decode(&created); err != nil || resp.StatusCode != 201 {
+			t.Fatalf("create = %d: %v", resp.StatusCode, err)
+		}
+		return created.ID
+	}
+	coin := create(`{"type":"crypto","name":"Bitcoin","ticker":"BTC","currency":"USD"}`)
+	share := create(`{"type":"share","name":"Сбербанк","ticker":"SBER-T","currency":"RUB"}`)
+
+	resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+coin, `{"coingecko_id":" Bitcoin "}`)
+	var got struct {
+		CoinGeckoID *string `json:"coingecko_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("set the coin = %d: %v", resp.StatusCode, err)
+	}
+	_ = resp.Body.Close()
+	if got.CoinGeckoID == nil || *got.CoinGeckoID != "bitcoin" {
+		t.Errorf("coin = %v, want bitcoin", got.CoinGeckoID)
+	}
+	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+share, `{"coingecko_id":"bitcoin"}`); resp.StatusCode != 400 {
+		t.Errorf("a share took a coin: %d, want 400", resp.StatusCode)
+	}
+}

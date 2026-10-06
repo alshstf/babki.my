@@ -40,8 +40,11 @@ type Instrument struct {
 	FaceValueMinor *int64  // bonds: face value in minor units
 	FaceCurrency   *string // bonds: face value currency
 	Frozen         bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// CoinGeckoID is a cryptocurrency's coin at CoinGecko (decision Р-20);
+	// empty for anything else and until one is picked.
+	CoinGeckoID string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Update is a partial update; nil fields are unchanged, double pointers clear.
@@ -53,6 +56,7 @@ type Update struct {
 	Frozen         *bool
 	FaceValueMinor **int64
 	FaceCurrency   **string
+	CoinGeckoID    *string
 }
 
 // isinRe is the shape of an ISIN (ISO 6166): two letters of a country, nine

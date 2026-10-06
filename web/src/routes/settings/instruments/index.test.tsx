@@ -201,6 +201,37 @@ describe("InstrumentsPage", () => {
     });
   });
 
+  it("corrects a cryptocurrency's coin at CoinGecko, and offers no coin for a share", async () => {
+    // Decision Р-20: the price job picks the coin by ticker; a person corrects it.
+    const btc = makeInstrument({ id: "instr-btc", type: "crypto", name: "Bitcoin", ticker: "BTC", coingecko_id: "bitcoin-lookalike" });
+    serve([
+      {
+        path: "/api/v1/instruments",
+        body: { instruments: [makeInstrument(), btc], has_more: false },
+      },
+      {
+        path: "/api/v1/instruments/instr-btc",
+        method: "PATCH",
+        body: { ...btc, coingecko_id: "bitcoin" },
+      },
+    ]);
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("instrument-edit-AAPL"));
+    expect(screen.queryByTestId("instrument-coin")).not.toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    fireEvent.click(await screen.findByTestId("instrument-edit-BTC"));
+    const field = (await screen.findByTestId("instrument-coin")) as HTMLInputElement;
+    expect(field.value).toBe("bitcoin-lookalike");
+    fireEvent.change(field, { target: { value: "bitcoin" } });
+    fireEvent.click(screen.getByTestId("instrument-save"));
+
+    await waitFor(async () => {
+      expect(await bodiesSent("PATCH")).toEqual([{ coingecko_id: "bitcoin" }]);
+    });
+  });
+
   it("cannot save a name that is empty, and says so at the field", async () => {
     serve([
       {
