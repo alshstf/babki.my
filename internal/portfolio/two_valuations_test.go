@@ -30,7 +30,7 @@ type twoValuations struct {
 	account string
 	space   uuid.UUID
 	papers  map[string]uuid.UUID
-	h       *portfolio.Handler
+	h       *portfolio.Service
 	fam     *family.Store
 }
 
@@ -77,7 +77,7 @@ func setupTwoValuations(t *testing.T) twoValuations {
 		t.Fatal(err)
 	}
 	fam := family.NewStore(pool)
-	h := portfolio.NewHandler(operation.NewStore(pool), instrument.NewStore(pool), md, conv, fam, nil, nil)
+	h := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), md, conv, fam)
 	return twoValuations{url: url, c: c, account: acc.ID, space: space, papers: papers, h: h, fam: fam}
 }
 

@@ -273,7 +273,7 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 		if pc.AcquiredOn == nil {
 			// A piece with no purchase date: the row publishes no base-currency
 			// figure at all, matching the position built from the same pieces (see
-			// portfolio.Handler.positionInBase).
+			// portfolio.Service.positionInBase).
 			return nil, rateDate{}, false, nil
 		}
 		// A piece is dated by its purchase, so a missing rate here is a
@@ -312,7 +312,7 @@ func costless(o Operation) ([]datedMinor, rateDate, bool, error) {
 //
 // Amount and fee are converted and rounded separately, half away from zero, as
 // marketdata.Converter.Convert does. Several terms are summed as decimals and
-// rounded once, as portfolio.Handler.sumInBase does, so the two screens agree to
+// rounded once, as portfolio.Service.sumInBase does, so the two screens agree to
 // the minor unit.
 //
 // No object (in_base null as a whole) when the row is already in baseCurrency,

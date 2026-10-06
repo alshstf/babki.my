@@ -28,19 +28,19 @@ import (
 // (see ReturnBasis), and shares converted away leave at it. A spin-off carries
 // part of the paper's worth onto another paper, which no price says; a period
 // with one is not complete.
-func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uuid.UUID, from, to time.Time) (ReturnBasis, error) {
-	if _, ok := h.quotes.(priceStore); !ok {
+func (s *Service) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uuid.UUID, from, to time.Time) (ReturnBasis, error) {
+	if _, ok := s.quotes.(priceStore); !ok {
 		return ReturnBasis{}, ErrNoQuoteHistory
 	}
-	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	sp, err := s.spaces.SpaceByID(ctx, spaceID)
 	if err != nil {
 		return ReturnBasis{}, err
 	}
-	finder, ok := h.ops.(holdingAccounts)
+	finder, ok := s.ops.(holdingAccounts)
 	if !ok {
 		return ReturnBasis{}, errors.New("portfolio: the journal store cannot say which accounts hold a paper")
 	}
-	papers, err := h.instruments.ByIDs(ctx, []uuid.UUID{instrumentID})
+	papers, err := s.instruments.ByIDs(ctx, []uuid.UUID{instrumentID})
 	if err != nil {
 		return ReturnBasis{}, err
 	}
@@ -56,7 +56,7 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 	held := [2]decimal.Decimal{}
 	var journals [][]Operation
 	for _, accountID := range accounts {
-		ops, err := h.ops.ListForEngine(ctx, spaceID, accountID)
+		ops, err := s.ops.ListForEngine(ctx, spaceID, accountID)
 		if err != nil {
 			return ReturnBasis{}, err
 		}
@@ -76,7 +76,7 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 	for i, day := range []time.Time{from, to} {
 		v := JournalValue{Currency: paper.Currency}
 		if held[i].IsPositive() {
-			book, err := h.pricesOn(ctx, []uuid.UUID{instrumentID}, day, sp.FullValuation, pastWindows)
+			book, err := s.pricesOn(ctx, []uuid.UUID{instrumentID}, day, sp.FullValuation, pastWindows)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -100,13 +100,13 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 		}
 	}
 
-	rates := marketdata.NewRateMemo(h.conv)
+	rates := marketdata.NewRateMemo(s.conv)
 	for _, ops := range journals {
 		for _, o := range ops {
 			if o.InstrumentID == nil || *o.InstrumentID != instrumentID || !o.OccurredOn.After(from) || o.OccurredOn.After(to) {
 				continue
 			}
-			flow, known, err := h.paperFlow(ctx, sp.FullValuation, o)
+			flow, known, err := s.paperFlow(ctx, sp.FullValuation, o)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -117,7 +117,7 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 			if flow.minor == 0 {
 				continue
 			}
-			converted, ok, err := h.sumInBase(ctx, []datedMinor{flow}, out.Currency, rates)
+			converted, ok, err := s.sumInBase(ctx, []datedMinor{flow}, out.Currency, rates)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -145,7 +145,7 @@ func journalTo(ops []Operation, day time.Time) []Operation {
 // paperFlow is the money one row of the paper's journal moved into or out of
 // it, signed from the investor's side (in negative); known is false when it
 // cannot be had — a moved parcel with no price on its day, or a spin-off.
-func (h *Handler) paperFlow(ctx context.Context, setting family.FullValuation, o Operation) (datedMinor, bool, error) {
+func (s *Service) paperFlow(ctx context.Context, setting family.FullValuation, o Operation) (datedMinor, bool, error) {
 	flow := datedMinor{from: o.Currency, on: o.OccurredOn}
 	switch o.Type {
 	case TypeTransferIn, TypeTransferOut:
@@ -159,7 +159,7 @@ func (h *Handler) paperFlow(ctx context.Context, setting family.FullValuation, o
 		flow.minor = o.AmountMinor - o.FeeMinor
 		return flow, true, nil
 	}
-	worth, currency, known, err := h.parcelWorth(ctx, setting, o)
+	worth, currency, known, err := s.parcelWorth(ctx, setting, o)
 	if err != nil || !known {
 		return flow, false, err
 	}
@@ -182,7 +182,7 @@ func (h *Handler) handlePaperReturn(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "from and to must be YYYY-MM-DD, from before to, to at most today")
 		return
 	}
-	basis, err := h.PaperReturnBasis(r.Context(), p.SpaceID, id, from, to)
+	basis, err := h.svc.PaperReturnBasis(r.Context(), p.SpaceID, id, from, to)
 	var notComputed journalDoesNotCompute
 	switch {
 	case errors.As(err, &notComputed):

@@ -83,7 +83,7 @@ func apiInBaseGap(g inBaseGap) (apitypes.InBaseGap, bool) {
 //
 // A missing rate or purchase date nulls only this figure. A non-nil error is a
 // real failure, never shown as null.
-func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, rates *marketdata.RateMemo) (nullable.Nullable[int64], baseGap, error) {
+func (s *Service) realizedInBase(ctx context.Context, p *Position, to string, rates *marketdata.RateMemo) (nullable.Nullable[int64], baseGap, error) {
 	if minor, inOneCurrency := p.RealizedPnL(); p.Currency == to && inOneCurrency {
 		// Nothing to convert, but only when the position is in the base currency and
 		// every disposal settled in it; otherwise the figure is struck from the terms
@@ -94,7 +94,7 @@ func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, ra
 	if !dated {
 		return nullable.NewNullNullable[int64](), gapUndated, nil
 	}
-	minor, ok, err := h.sumInBase(ctx, terms, to, rates)
+	minor, ok, err := s.sumInBase(ctx, terms, to, rates)
 	if err != nil {
 		return nullable.Nullable[int64]{}, gapNone, err
 	}
@@ -155,7 +155,7 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // non-nil error is a real failure; the gap beside it means nothing.
 //
 // now is the request's single "today", shared with toAPI.
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, rates *marketdata.RateMemo) (*apitypes.PositionInBase, inBaseGap, error) {
+func (s *Service) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, rates *marketdata.RateMemo) (*apitypes.PositionInBase, inBaseGap, error) {
 	// Nothing to convert unless a disposal settled in a third currency: then the
 	// native realized figure does not exist and this object must carry the base
 	// one, its other figures being identity conversions.
@@ -170,7 +170,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		// rate, so the permanent cause is the one reported.
 		return nil, inBaseUndatedLot, nil
 	}
-	costMinor, ok, err := h.sumInBase(ctx, lots, baseCurrency, rates)
+	costMinor, ok, err := s.sumInBase(ctx, lots, baseCurrency, rates)
 	if err != nil {
 		return nil, inBaseStruck, err
 	}
@@ -179,7 +179,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	}
 
 	// Each payment out of its own currency (see incomeTerms).
-	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), baseCurrency, rates)
+	incomeMinor, ok, err := s.sumInBase(ctx, incomeTerms(income), baseCurrency, rates)
 	if err != nil {
 		return nil, inBaseStruck, err
 	}

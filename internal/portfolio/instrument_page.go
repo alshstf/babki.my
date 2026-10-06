@@ -51,7 +51,7 @@ func (h *Handler) handleHoldings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	out, err := h.Holdings(r.Context(), p.SpaceID, id)
+	out, err := h.svc.Holdings(r.Context(), p.SpaceID, id)
 	var notComputed journalDoesNotCompute
 	switch {
 	case errors.As(err, &notComputed):
@@ -67,8 +67,8 @@ func (h *Handler) handleHoldings(w http.ResponseWriter, r *http.Request) {
 
 // Holdings is the paper's catalog row and its positions on the space's
 // accounts, ordered as the accounts were found.
-func (h *Handler) Holdings(ctx context.Context, spaceID, instrumentID uuid.UUID) (apitypes.InstrumentHoldings, error) {
-	papers, err := h.instruments.ByIDs(ctx, []uuid.UUID{instrumentID})
+func (s *Service) Holdings(ctx context.Context, spaceID, instrumentID uuid.UUID) (apitypes.InstrumentHoldings, error) {
+	papers, err := s.instruments.ByIDs(ctx, []uuid.UUID{instrumentID})
 	if err != nil {
 		return apitypes.InstrumentHoldings{}, err
 	}
@@ -76,7 +76,7 @@ func (h *Handler) Holdings(ctx context.Context, spaceID, instrumentID uuid.UUID)
 	if !ok {
 		return apitypes.InstrumentHoldings{}, errInstrumentNotInCatalog
 	}
-	finder, ok := h.ops.(holdingAccounts)
+	finder, ok := s.ops.(holdingAccounts)
 	if !ok {
 		return apitypes.InstrumentHoldings{}, errors.New("portfolio: the journal store cannot say which accounts hold a paper")
 	}
@@ -90,7 +90,7 @@ func (h *Handler) Holdings(ctx context.Context, spaceID, instrumentID uuid.UUID)
 		Total:      nullable.NewNullNullable[apitypes.InstrumentHoldingsTotal](),
 	}
 	for _, accountID := range accounts {
-		resp, _, err := h.positionsResponse(ctx, spaceID, accountID)
+		resp, _, err := s.Positions(ctx, spaceID, accountID)
 		if err != nil {
 			return apitypes.InstrumentHoldings{}, err
 		}
@@ -166,6 +166,22 @@ func holdingsTotal(holdings []apitypes.InstrumentHolding) (apitypes.InstrumentHo
 	return out, true, nil
 }
 
+// Prices is the paper's daily prices from from to to, both included.
+func (s *Service) Prices(ctx context.Context, id uuid.UUID, from, to time.Time) ([]marketdata.Quote, error) {
+	papers, err := s.instruments.ByIDs(ctx, []uuid.UUID{id})
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := papers[id]; !ok {
+		return nil, errInstrumentNotInCatalog
+	}
+	series, ok := s.quotes.(priceSeries)
+	if !ok {
+		return nil, errors.New("portfolio: the quote store keeps no price series")
+	}
+	return series.PriceSeries(ctx, id, from, to)
+}
+
 // handlePrices answers the paper's daily prices from `from` to today.
 func (h *Handler) handlePrices(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInstrumentID(w, r)
@@ -178,21 +194,11 @@ func (h *Handler) handlePrices(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "from must be a YYYY-MM-DD date, not in the future and at most ten years back")
 		return
 	}
-	papers, err := h.instruments.ByIDs(r.Context(), []uuid.UUID{id})
-	if err != nil {
-		family.WriteError(w, err)
-		return
-	}
-	if _, ok := papers[id]; !ok {
+	quotes, err := h.svc.Prices(r.Context(), id, from, today)
+	if errors.Is(err, errInstrumentNotInCatalog) {
 		httpjson.Error(w, http.StatusNotFound, "not found")
 		return
 	}
-	series, ok := h.quotes.(priceSeries)
-	if !ok {
-		family.WriteError(w, errors.New("portfolio: the quote store keeps no price series"))
-		return
-	}
-	quotes, err := series.PriceSeries(r.Context(), id, from, today)
 	if err != nil {
 		family.WriteError(w, err)
 		return

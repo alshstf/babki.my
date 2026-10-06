@@ -39,7 +39,7 @@ type datedMinor struct {
 // currency and rounds the total once. ok is false when some rate is missing,
 // and the caller publishes nothing. err is a real failure, including a total
 // too large for int64.
-func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, to string, rates *marketdata.RateMemo) (minor int64, ok bool, err error) {
+func (s *Service) sumInBase(ctx context.Context, amounts []datedMinor, to string, rates *marketdata.RateMemo) (minor int64, ok bool, err error) {
 	total := decimal.Zero
 	for _, a := range amounts {
 		rl := rates.Rate(ctx, a.from, to, a.on)

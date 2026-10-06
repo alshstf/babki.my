@@ -106,7 +106,7 @@ func TestApplyRateRefusesAConvertedAmountThatWouldWrap(t *testing.T) {
 
 // Two terms that fit can sum past int64; the total is refused.
 func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
-	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
+	h := &Service{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
@@ -121,7 +121,7 @@ func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
 
 // An overflow is an error, not ok=false, which means a missing rate.
 func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
-	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
+	h := &Service{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
@@ -198,7 +198,7 @@ func TestToAPIRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
 	// 100% of face, so the valuation is the face value itself: -9e18, an int64.
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "RUB"}}
 
-	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(nil))
+	out, err := (&Service{}).toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(nil))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: -9e18 minus 1e18 is not an int64, and the wrapped answer is a small positive profit", out, err)
 	}
@@ -220,7 +220,7 @@ func TestPositionInBaseRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
 		MarketValueMinor:    nullable.NewNullableWithValue(int64(-9_000_000_000_000_000_000)),
 		MarketValueCurrency: nullable.NewNullableWithValue("USD"),
 	}
-	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
+	h := &Service{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 
 	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
 		nullable.NewNullNullable[int64](), time.Now(), marketdata.NewRateMemo(h.conv))
@@ -247,7 +247,7 @@ func TestToAPIRefusesToPublishAPositionWhoseValuationCannotBeStruck(t *testing.T
 	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "USD"}}
 
-	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(nil))
+	out, err := (&Service{}).toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(nil))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
 	}
@@ -264,7 +264,7 @@ func TestToAPIRefusesAValuationThatCannotBeConvertedToThePositionCurrency(t *tes
 	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
 	// price × quantity × 100 is exactly MaxInt64.
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("92233720368547758.07"), Currency: "USD"}}
-	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
+	h := &Service{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 
 	out, err := h.toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
@@ -289,7 +289,7 @@ func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *t
 		MarketValueMinor:    nullable.NewNullableWithValue(int64(math.MaxInt64)),
 		MarketValueCurrency: nullable.NewNullableWithValue("USD"),
 	}
-	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
+	h := &Service{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 
 	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
 		nullable.NewNullNullable[int64](), time.Now(), marketdata.NewRateMemo(h.conv))

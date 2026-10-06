@@ -53,7 +53,7 @@ func TestAPeriodsReturnIsReckonedFromItsEdges(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT id FROM spaces LIMIT 1`).Scan(&spaceID); err != nil {
 		t.Fatal(err)
 	}
-	h := portfolio.NewHandler(operation.NewStore(pool), instrument.NewStore(pool), md, conv, family.NewStore(pool), nil, nil)
+	h := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), md, conv, family.NewStore(pool))
 	from, to := mustDate(t, "2025-06-30"), mustDate(t, "2026-06-30")
 	b, err := h.ReturnBasis(ctx, spaceID, uuid.MustParse(acc.ID), from, to)
 	if err != nil {

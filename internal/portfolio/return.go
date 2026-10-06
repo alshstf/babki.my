@@ -45,12 +45,12 @@ type ReturnBasis struct {
 }
 
 // ReturnBasis reckons the account's period from (exclusive) to to (inclusive).
-func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID, from, to time.Time) (ReturnBasis, error) {
-	values, err := h.ValuesOn(ctx, spaceID, accountID, []time.Time{from, to})
+func (s *Service) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID, from, to time.Time) (ReturnBasis, error) {
+	values, err := s.ValuesOn(ctx, spaceID, accountID, []time.Time{from, to})
 	if err != nil {
 		return ReturnBasis{}, err
 	}
-	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	sp, err := s.spaces.SpaceByID(ctx, spaceID)
 	if err != nil {
 		return ReturnBasis{}, err
 	}
@@ -59,11 +59,11 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 	out := ReturnBasis{Currency: values[0].Currency, Start: fullView(values[0]), End: fullView(values[1])}
 	out.Complete = whole(out.Start) && whole(out.End)
 
-	ops, err := h.ops.ListForEngine(ctx, spaceID, accountID)
+	ops, err := s.ops.ListForEngine(ctx, spaceID, accountID)
 	if err != nil {
 		return ReturnBasis{}, err
 	}
-	rates := marketdata.NewRateMemo(h.conv)
+	rates := marketdata.NewRateMemo(s.conv)
 	for _, o := range ops {
 		if !o.OccurredOn.After(from) || o.OccurredOn.After(to) {
 			continue
@@ -77,7 +77,7 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 		case TypeDeposit, TypeWithdrawal:
 			minor, currency = -o.AmountMinor, o.Currency
 		case TypeTransferIn, TypeTransferOut:
-			v, c, ok, err := h.parcelWorth(ctx, sp.FullValuation, o)
+			v, c, ok, err := s.parcelWorth(ctx, sp.FullValuation, o)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -90,7 +90,7 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 		}
 		flow := ReturnFlow{Day: o.OccurredOn}
 		if known && minor != 0 {
-			converted, ok, err := h.sumInBase(ctx, []datedMinor{{minor: minor, from: currency, on: o.OccurredOn}}, out.Currency, rates)
+			converted, ok, err := s.sumInBase(ctx, []datedMinor{{minor: minor, from: currency, on: o.OccurredOn}}, out.Currency, rates)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -119,11 +119,11 @@ func whole(v JournalValue) bool {
 // parcelWorth is what the shares a transfer moved were worth at that day's
 // full price, in the currency the price is struck in; ok is false when there
 // is none.
-func (h *Handler) parcelWorth(ctx context.Context, setting family.FullValuation, o Operation) (int64, string, bool, error) {
+func (s *Service) parcelWorth(ctx context.Context, setting family.FullValuation, o Operation) (int64, string, bool, error) {
 	if o.InstrumentID == nil || o.Quantity == nil {
 		return 0, "", false, nil
 	}
-	papers, err := h.instruments.ByIDs(ctx, []uuid.UUID{*o.InstrumentID})
+	papers, err := s.instruments.ByIDs(ctx, []uuid.UUID{*o.InstrumentID})
 	if err != nil {
 		return 0, "", false, err
 	}
@@ -131,7 +131,7 @@ func (h *Handler) parcelWorth(ctx context.Context, setting family.FullValuation,
 	if !ok {
 		return 0, "", false, errInstrumentNotInCatalog
 	}
-	book, err := h.pricesOn(ctx, []uuid.UUID{*o.InstrumentID}, o.OccurredOn, setting, pastWindows)
+	book, err := s.pricesOn(ctx, []uuid.UUID{*o.InstrumentID}, o.OccurredOn, setting, pastWindows)
 	if err != nil {
 		return 0, "", false, err
 	}
@@ -195,7 +195,7 @@ func (h *Handler) handleReturn(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "from and to must be YYYY-MM-DD, from before to, to at most today")
 		return
 	}
-	basis, err := h.ReturnBasis(r.Context(), p.SpaceID, accountID, from, to)
+	basis, err := h.svc.ReturnBasis(r.Context(), p.SpaceID, accountID, from, to)
 	if err != nil {
 		family.WriteError(w, err)
 		return

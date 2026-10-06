@@ -74,8 +74,8 @@ func (w *worth) add(currency string, minor int64) error {
 
 // struck converts each currency at day's rate into base: the sum, the
 // currencies with no rate (left out), and the non-zero currencies.
-func (h *Handler) struck(ctx context.Context, w *worth, base string, day time.Time) (int64, []string, map[string]int64, error) {
-	rates := marketdata.NewRateMemo(h.conv)
+func (s *Service) struck(ctx context.Context, w *worth, base string, day time.Time) (int64, []string, map[string]int64, error) {
+	rates := marketdata.NewRateMemo(s.conv)
 	currencies := make([]string, 0, len(w.byCurrency))
 	for currency := range w.byCurrency {
 		currencies = append(currencies, currency)
@@ -94,7 +94,7 @@ func (h *Handler) struck(ctx context.Context, w *worth, base string, day time.Ti
 		}
 		nonZero[currency] = minor
 		if currency != base {
-			converted, ok, err := h.sumInBase(ctx, []datedMinor{{minor: minor, from: currency, on: day}}, base, rates)
+			converted, ok, err := s.sumInBase(ctx, []datedMinor{{minor: minor, from: currency, on: day}}, base, rates)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -112,12 +112,12 @@ func (h *Handler) struck(ctx context.Context, w *worth, base string, day time.Ti
 }
 
 // finish strikes both worths into v.
-func (h *Handler) finish(ctx context.Context, v *JournalValue, liquid, full *worth, day time.Time) error {
+func (s *Service) finish(ctx context.Context, v *JournalValue, liquid, full *worth, day time.Time) error {
 	var err error
-	if v.Minor, v.MissingRates, v.ByCurrency, err = h.struck(ctx, liquid, v.Currency, day); err != nil {
+	if v.Minor, v.MissingRates, v.ByCurrency, err = s.struck(ctx, liquid, v.Currency, day); err != nil {
 		return err
 	}
-	if v.FullMinor, v.FullMissingRates, v.FullByCurrency, err = h.struck(ctx, full, v.Currency, day); err != nil {
+	if v.FullMinor, v.FullMissingRates, v.FullByCurrency, err = s.struck(ctx, full, v.Currency, day); err != nil {
 		return err
 	}
 	v.Unpriced, v.FullUnpriced = liquid.unpriced, full.unpriced
@@ -130,8 +130,8 @@ func (h *Handler) finish(ctx context.Context, v *JournalValue, liquid, full *wor
 // nothing, an open one its market value in whatever currency that is struck
 // in, and each currency's cash its balance. Each currency is then converted
 // once, at today's rate.
-func (h *Handler) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (JournalValue, error) {
-	resp, operations, err := h.positionsResponse(ctx, spaceID, accountID)
+func (s *Service) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (JournalValue, error) {
+	resp, operations, err := s.Positions(ctx, spaceID, accountID)
 	if err != nil {
 		return JournalValue{}, err
 	}
@@ -166,7 +166,7 @@ func (h *Handler) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.
 			return JournalValue{}, fmt.Errorf("the full value of account %s: %w", accountID, err)
 		}
 	}
-	if err := h.finish(ctx, &out, liquid, full, time.Now().UTC()); err != nil {
+	if err := s.finish(ctx, &out, liquid, full, time.Now().UTC()); err != nil {
 		return JournalValue{}, fmt.Errorf("the value of account %s: %w", accountID, err)
 	}
 	return out, nil
@@ -178,8 +178,8 @@ var ErrNoQuoteHistory = errors.New("portfolio: the quote store keeps no past pri
 // ValueOn values an account from its journal as it stood at the end of day:
 // the operations up to that day, each holding at its liquid and full prices of
 // that day (see pricesOn), each currency converted at that day's rate.
-func (h *Handler) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error) {
-	values, err := h.ValuesOn(ctx, spaceID, accountID, []time.Time{day})
+func (s *Service) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error) {
+	values, err := s.ValuesOn(ctx, spaceID, accountID, []time.Time{day})
 	if err != nil {
 		return JournalValue{}, err
 	}
@@ -187,21 +187,21 @@ func (h *Handler) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day
 }
 
 // ValuesOn is ValueOn for several days, the journal read once.
-func (h *Handler) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]JournalValue, error) {
-	if _, ok := h.quotes.(priceStore); !ok {
+func (s *Service) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]JournalValue, error) {
+	if _, ok := s.quotes.(priceStore); !ok {
 		return nil, ErrNoQuoteHistory
 	}
-	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	sp, err := s.spaces.SpaceByID(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
-	all, err := h.ops.ListForEngine(ctx, spaceID, accountID)
+	all, err := s.ops.ListForEngine(ctx, spaceID, accountID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]JournalValue, 0, len(days))
 	for _, day := range days {
-		v, err := h.valueOn(ctx, sp.BaseCurrency, sp.FullValuation, accountID, all, day)
+		v, err := s.valueOn(ctx, sp.BaseCurrency, sp.FullValuation, accountID, all, day)
 		if err != nil {
 			return nil, err
 		}
@@ -211,7 +211,7 @@ func (h *Handler) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, da
 }
 
 // valueOn values the journal all as it stood at the end of day.
-func (h *Handler) valueOn(ctx context.Context, base string, setting family.FullValuation, accountID uuid.UUID, all []Operation, day time.Time) (JournalValue, error) {
+func (s *Service) valueOn(ctx context.Context, base string, setting family.FullValuation, accountID uuid.UUID, all []Operation, day time.Time) (JournalValue, error) {
 	var ops []Operation
 	for _, o := range all {
 		if !o.OccurredOn.After(day) {
@@ -238,11 +238,11 @@ func (h *Handler) valueOn(ctx context.Context, base string, setting family.FullV
 			ids = append(ids, id)
 		}
 	}
-	papers, err := h.instruments.ByIDs(ctx, ids)
+	papers, err := s.instruments.ByIDs(ctx, ids)
 	if err != nil {
 		return JournalValue{}, err
 	}
-	book, err := h.pricesOn(ctx, ids, day, setting, pastWindows)
+	book, err := s.pricesOn(ctx, ids, day, setting, pastWindows)
 	if err != nil {
 		return JournalValue{}, err
 	}
@@ -291,7 +291,7 @@ func (h *Handler) valueOn(ctx context.Context, base string, setting family.FullV
 			return JournalValue{}, fmt.Errorf("the full value of account %s on %s: %w", accountID, day.Format(time.DateOnly), err)
 		}
 	}
-	if err := h.finish(ctx, &out, liquid, full, day); err != nil {
+	if err := s.finish(ctx, &out, liquid, full, day); err != nil {
 		return JournalValue{}, fmt.Errorf("the value of account %s on %s: %w", accountID, day.Format(time.DateOnly), err)
 	}
 	return out, nil

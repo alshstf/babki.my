@@ -41,7 +41,7 @@ import (
 // journalValues hands the portfolio engine's valuation of an account to the
 // account module, which counts brokerage accounts in the family total by their
 // journal and must not import the engine to do it.
-type journalValues struct{ positions *portfolio.Handler }
+type journalValues struct{ positions *portfolio.Service }
 
 func (j journalValues) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (account.JournalValue, error) {
 	v, err := j.positions.ValueFromJournal(ctx, spaceID, accountID)
@@ -91,8 +91,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	opSvc := operation.NewService(opStore)
 	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).
 		WithDividendCalendar(mdStore, instStore).Mount(srv)
-	positions := portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM)
-	positions.Mount(srv)
+	positions := portfolio.NewService(opStore, instStore, mdStore, converter, famStore)
+	portfolio.NewHandler(positions, famAuth, famSM).Mount(srv)
 	background.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
 	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
