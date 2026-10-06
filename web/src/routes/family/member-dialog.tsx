@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -22,6 +22,7 @@ import { isConflict } from "@/api/operations";
 import { useCreateMember, type Role } from "@/api/members";
 import { MAX_PERSON_NAME } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
 
@@ -42,16 +43,13 @@ export function MemberDialog({
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("editor");
 
-  useEffect(() => {
-    if (open) {
-      setUsername("");
-      setDisplayName("");
-      setPassword("");
-      setRole("editor");
-      create.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setUsername("");
+    setDisplayName("");
+    setPassword("");
+    setRole("editor");
+    create.reset();
+  });
 
   const valid =
     USERNAME_RE.test(username) && displayName.trim() !== "" && password.length >= 8;

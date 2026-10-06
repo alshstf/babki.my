@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -17,6 +17,7 @@ import { apiError } from "@/api/operations";
 import { isPositiveDecimal } from "@/lib/money";
 import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 // The paper a price is stated for.
 export type QuotedPaper = { id: string; name: string; currency: string; bond: boolean };
@@ -53,14 +54,11 @@ export function StatePriceDialog({
       onOpenChange(false);
     },
   });
-  useEffect(() => {
-    if (open) {
-      setOn(localToday());
-      setPrice("");
-      save.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setOn(localToday());
+    setPrice("");
+    save.reset();
+  });
   const valid = isPositiveDecimal(price.trim().replace(",", ".")) && on !== "";
 
   return (

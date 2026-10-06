@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -38,6 +38,7 @@ import { KindMismatch } from "./kind-mismatch";
 import { fitsKind } from "@/lib/operation-kinds";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 // Dividend and coupon may be recorded at the cash level (no instrument) per
 // the backend's validation contract (Type.RequiresInstrument in
@@ -78,18 +79,15 @@ export function IncomeDialog({
   // an empty field is valid and sends nothing.
   const [faceBefore, setFaceBefore] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setType(editing?.type ?? "dividend");
-      setInstrument(editingInstrument ?? null);
-      setAmount(editing ? minorToInput(editing.amount_minor) : "");
-      setOccurredOn(editing?.occurred_on ?? localToday());
-      setNote(editing?.note ?? "");
-      setFaceBefore(editing?.face_before_minor != null ? minorToInput(editing.face_before_minor) : "");
-      createOperation.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setType(editing?.type ?? "dividend");
+    setInstrument(editingInstrument ?? null);
+    setAmount(editing ? minorToInput(editing.amount_minor) : "");
+    setOccurredOn(editing?.occurred_on ?? localToday());
+    setNote(editing?.note ?? "");
+    setFaceBefore(editing?.face_before_minor != null ? minorToInput(editing.face_before_minor) : "");
+    createOperation.reset();
+  });
 
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;

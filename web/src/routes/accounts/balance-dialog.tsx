@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -20,6 +20,7 @@ import {
 import { formatDate, localToday } from "@/lib/dates";
 import { useSetBalance, type AccountWithBalance } from "@/api/accounts";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 export function BalanceDialog({
   open,
@@ -35,14 +36,11 @@ export function BalanceDialog({
   const [amount, setAmount] = useState("");
   const [asOf, setAsOf] = useState(localToday());
 
-  useEffect(() => {
-    if (open) {
-      setAmount("");
-      setAsOf(localToday());
-      setBalance.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setAmount("");
+    setAsOf(localToday());
+    setBalance.reset();
+  });
 
   if (!account) return null;
   const parsed = parseToMinor(amount);

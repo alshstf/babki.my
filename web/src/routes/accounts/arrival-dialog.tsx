@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -31,6 +31,7 @@ import {
 } from "./purchases-editor";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 // ArrivalDialog records shares that came from another broker — one this
 // program does not hold — on an account no importer feeds. With the purchases
@@ -54,18 +55,15 @@ export function ArrivalDialog({
   const [priced, setPriced] = useState(false);
   const [rows, setRows] = useState<PurchaseRow[]>(() => [newPurchaseRow()]);
 
-  useEffect(() => {
-    if (open) {
-      setInstrument(null);
-      setQuantity("");
-      setOccurredOn(localToday());
-      setNote("");
-      setPriced(false);
-      setRows([newPurchaseRow()]);
-      createArrival.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setInstrument(null);
+    setQuantity("");
+    setOccurredOn(localToday());
+    setNote("");
+    setPriced(false);
+    setRows([newPurchaseRow()]);
+    createArrival.reset();
+  });
 
   const qty = normalizeQuantity(quantity);
   const qtyValid = isPositiveDecimal(qty);
