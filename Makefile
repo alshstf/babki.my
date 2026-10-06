@@ -8,6 +8,7 @@ test:
 gen:
 	go tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
 	cd web && npm run gen:api
+	go run ./cmd/webconst
 
 lint:
 	golangci-lint run

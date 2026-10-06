@@ -1,3 +1,5 @@
+import { CURRENCY_CODE } from "@/api/constants.gen";
+
 // The currency codes offered as ready-made choices wherever a currency is
 // picked: the base currency (routes/settings) and an account's own
 // (routes/accounts/account-dialog). Both also offer «другая», so the list is a
@@ -6,11 +8,8 @@
 // (#33). The rouble leads because every stored rate is quoted against it.
 export const COMMON_CURRENCIES = ["RUB", "USD", "EUR", "KZT"];
 
-// The shape the server accepts for a currency code: currency.Pattern in Go,
-// whose test holds this literal to it.
-const CURRENCY_CODE = /^[A-Z]{3}$/;
-
-// isCurrencyCode is whether a form may send code as a currency.
+// isCurrencyCode is whether a form may send code as a currency: the shape the
+// server accepts, generated from it (api/constants.gen.ts).
 export function isCurrencyCode(code: string): boolean {
   return CURRENCY_CODE.test(code);
 }

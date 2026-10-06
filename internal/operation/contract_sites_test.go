@@ -118,67 +118,11 @@ func TestTheContractStatesTheJournalAnswers400(t *testing.T) {
 	}
 }
 
-// The oldest operation date lives in four places: minOccurredOn (the rule),
-// api/openapi.yaml twice (one per request schema), and web/src/lib/dates.ts for
-// the dialogs. Nothing else makes them agree. Checked as written (YYYY-MM-DD);
-// the prose around each must be re-read by hand when the date moves.
-//
-// These are the two literal sites. The Operation response schema states no range:
-// rows written before the floor are returned as they are.
-var dateFloorLiteralSites = []string{
-	"api/openapi.yaml",
-	"web/src/lib/dates.ts",
-}
-
-// The shared date field takes the constant from dates.ts; a field spelling
-// the date itself would be another copy. The balance dialog has no floor (see
-// EARLIEST_OPERATION_DATE).
-var dateFloorFormSites = []string{
-	"web/src/components/form-fields.tsx",
-}
-
-// dateFloorFieldSites are the dialogs that use the shared field.
-var dateFloorFieldSites = []string{
-	"web/src/routes/accounts/trade-dialog.tsx",
-	"web/src/routes/accounts/transfer-dialog.tsx",
-	"web/src/routes/accounts/income-dialog.tsx",
-	"web/src/routes/accounts/cash-dialog.tsx",
-}
-
-func TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces(t *testing.T) {
+// The oldest operation date is stated in both request schemas (#100, #102: a
+// bound on one door of several); the forms take it from the generated web
+// constants (cmd/webconst).
+func TestTheContractStatesTheDateFloorTheServerEnforces(t *testing.T) {
 	want := minOccurredOn.Format("2006-01-02")
-	for _, rel := range dateFloorLiteralSites {
-		body, err := os.ReadFile(filepath.Join("..", "..", rel))
-		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
-		}
-		if !strings.Contains(string(body), want) {
-			t.Errorf("%s does not mention %s (minOccurredOn): a date field or a contract that "+
-				"disagrees with the floor either refuses what the server accepts or accepts "+
-				"what it refuses", rel, want)
-		}
-	}
-	// The constant must reach the input, not merely be imported.
-	for _, rel := range dateFloorFormSites {
-		body, err := os.ReadFile(filepath.Join("..", "..", rel))
-		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
-		}
-		if !strings.Contains(string(body), "min={EARLIEST_OPERATION_DATE}") {
-			t.Errorf("%s does not pass min={EARLIEST_OPERATION_DATE} to its date input", rel)
-		}
-	}
-	for _, rel := range dateFloorFieldSites {
-		body, err := os.ReadFile(filepath.Join("..", "..", rel))
-		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
-		}
-		if !strings.Contains(string(body), "<OperationDateField") {
-			t.Errorf("%s does not take its date from OperationDateField", rel)
-		}
-	}
-	// Both request schemas state it (#100, #102: a bound on one door of
-	// several).
 	body, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))
 	if err != nil {
 		t.Fatalf("read api/openapi.yaml: %v", err)

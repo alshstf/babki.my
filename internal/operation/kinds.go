@@ -32,6 +32,15 @@ var kindsFor = map[Type][]instrument.Type{
 	TypeAmortization: {instrument.TypeBond, instrument.TypeCustom},
 }
 
+// KindsFor is kindsFor for the web forms' generated copy (cmd/webconst).
+func KindsFor() map[Type][]instrument.Type {
+	out := make(map[Type][]instrument.Type, len(kindsFor))
+	for t, kinds := range kindsFor {
+		out[t] = slices.Clone(kinds)
+	}
+	return out
+}
+
 // fitsKind refuses a type of entry that cannot happen to a paper of kind.
 func fitsKind(t Type, kind instrument.Type) error {
 	kinds, ruled := kindsFor[t]
