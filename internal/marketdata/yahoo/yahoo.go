@@ -87,6 +87,11 @@ type wireChart struct {
 					Amount float64 `json:"amount"`
 					Date   int64   `json:"date"`
 				} `json:"dividends"`
+				Splits map[string]struct {
+					Date        int64   `json:"date"`
+					Numerator   float64 `json:"numerator"`
+					Denominator float64 `json:"denominator"`
+				} `json:"splits"`
 			} `json:"events"`
 			Timestamp  []int64 `json:"timestamp"`
 			Indicators struct {
@@ -189,6 +194,58 @@ func (c *Client) Dividends(ctx context.Context, symbol string, from, to time.Tim
 	}
 	slices.SortFunc(out, func(a, b marketdata.Dividend) int { return a.RecordDate.Compare(b.RecordDate) })
 	return out, nil
+}
+
+// Split is a share split on its home exchange: Denominator units became
+// Numerator on On, the exchange's day.
+type Split struct {
+	On                     time.Time
+	Numerator, Denominator decimal.Decimal
+}
+
+// Splits is the symbol's splits from from to to, oldest first.
+func (c *Client) Splits(ctx context.Context, symbol string, from, to time.Time) ([]Split, error) {
+	q := url.Values{
+		"interval": {"1mo"},
+		"events":   {"split"},
+		"period1":  {strconv.FormatInt(from.Unix(), 10)},
+		"period2":  {strconv.FormatInt(to.AddDate(0, 0, 1).Unix(), 10)},
+	}
+	var resp wireChart
+	if err := c.get(ctx, c.chartURL+"/"+url.PathEscape(symbol)+"?"+q.Encode(), &resp); err != nil {
+		return nil, err
+	}
+	if resp.Chart.Error != nil {
+		return nil, fmt.Errorf("yahoo: %s: %s: %s", symbol, resp.Chart.Error.Code, resp.Chart.Error.Description)
+	}
+	if len(resp.Chart.Result) == 0 {
+		return nil, nil
+	}
+	r := resp.Chart.Result[0]
+	loc, err := time.LoadLocation(r.Meta.ExchangeTimezoneName)
+	if err != nil {
+		return nil, fmt.Errorf("yahoo: %s: exchange time zone %q: %w", symbol, r.Meta.ExchangeTimezoneName, err)
+	}
+	out := make([]Split, 0, len(r.Events.Splits))
+	for _, s := range r.Events.Splits {
+		if s.Numerator <= 0 || s.Denominator <= 0 {
+			continue
+		}
+		local := time.Unix(s.Date, 0).In(loc)
+		out = append(out, Split{
+			On:          time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC),
+			Numerator:   decimal.NewFromFloat(s.Numerator),
+			Denominator: decimal.NewFromFloat(s.Denominator),
+		})
+	}
+	slices.SortFunc(out, func(a, b Split) int { return a.On.Compare(b.On) })
+	return out, nil
+}
+
+// SplitsURL is the address a symbol's splits are read from, for the record's
+// evidence link.
+func (c *Client) SplitsURL(symbol string) string {
+	return c.chartURL + "/" + url.PathEscape(symbol) + "?events=split&interval=1mo&range=max"
 }
 
 // chartFrame is a chart's currency in whole units, the shift its figures need

@@ -32,15 +32,15 @@ func sourceOf(t *testing.T, list []jobs.Source, kind string) jobs.Source {
 	return jobs.Source{}
 }
 
-// The sources are the eleven outside feeds, in the order a reader looks for
+// The sources are the twelve outside feeds, in the order a reader looks for
 // them: the exchange's quotes first.
 func TestTheSourcesAreTheOutsideFeedsInTheirOrder(t *testing.T) {
 	list, err := background.Sources(context.Background(), testdb.New(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 11 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
-		t.Errorf("sources = %d starting with %q, want the eleven in their fixed order", len(list), list[0].Kind)
+	if len(list) != 12 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
+		t.Errorf("sources = %d starting with %q, want the twelve in their fixed order", len(list), list[0].Kind)
 	}
 }
 

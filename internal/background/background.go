@@ -45,12 +45,14 @@ const (
 )
 
 // ReferenceSources are the feeds beyond the exchange and the broker: the full
-// valuation's reference prices (decision Р-11) and the dividend calendar of
-// papers no broker's calendar covers (Р-14). A nil one is not fetched.
+// valuation's reference prices (decision Р-11), the dividend calendar of
+// papers no broker's calendar covers (Р-14) and foreign papers' splits. A nil
+// one is not fetched.
 type ReferenceSources struct {
 	NAV       marketdata.NAVProvider
 	Foreign   marketdata.ForeignQuoteProvider
 	Dividends marketdata.DividendFeed
+	Splits    corporateaction.ForeignSplitsProvider
 }
 
 // TinvestDeps is what the T-Invest workers need. Clients are made per token
@@ -119,6 +121,8 @@ func NewWorkers(
 		river.AddWorker(workers, corporateaction.NewRefreshMoexSplitsWorker(
 			caStore, caMaterializer, splits, log))
 	}
+	river.AddWorker(workers, corporateaction.NewRefreshForeignSplitsWorker(
+		caStore, caMaterializer, operations, instruments, references.Splits, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeAllWorker(caMaterializer, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeISINWorker(caMaterializer, log))
 	river.AddWorker(workers, marketdata.NewReferencePricesWorker(mdStore, operations, instruments,
@@ -149,6 +153,7 @@ func Schedule() []jobs.Periodic {
 		{Every: backfillFxInterval, Args: tinvest.BackfillQuotesArgs{}},
 		{Every: tinvestDividendsInterval, Args: tinvest.RefreshDividendsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshMoexSplitsArgs{}},
+		{Every: corporateActionsInterval, Args: corporateaction.RefreshForeignSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.MaterializeAllArgs{}},
 		{Every: referencePricesInterval, Args: marketdata.RefreshReferencePricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshDividendCalendarArgs{}},
@@ -167,6 +172,7 @@ var sources = []jobs.SourceKind{
 	{Kind: tinvest.BackfillQuotesArgs{}.Kind(), Every: backfillFxInterval},
 	{Kind: tinvest.RefreshDividendsArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: corporateaction.RefreshMoexSplitsArgs{}.Kind(), Every: corporateActionsInterval},
+	{Kind: corporateaction.RefreshForeignSplitsArgs{}.Kind(), Every: corporateActionsInterval},
 	{Kind: marketdata.RefreshReferencePricesArgs{}.Kind(), Every: referencePricesInterval},
 	{Kind: marketdata.RefreshDividendCalendarArgs{}.Kind(), Every: tinvestDividendsInterval},
 }

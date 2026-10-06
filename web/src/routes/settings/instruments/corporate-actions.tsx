@@ -148,7 +148,9 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
                 <div className="text-xs text-muted-foreground">
                   {event.source === "moex_iss"
                     ? t("corporateActions.sources.moex_iss")
-                    : t("corporateActions.sources.manual")}
+                    : event.source === "yahoo"
+                      ? t("corporateActions.sources.yahoo")
+                      : t("corporateActions.sources.manual")}
                   {event.source_ref !== "" && (
                     <>
                       {" · "}

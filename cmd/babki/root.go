@@ -233,6 +233,7 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 		NAV:       finex.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
 		Foreign:   feed,
 		Dividends: feed,
+		Splits:    feed,
 	}
 	workers := background.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, references, tinvestDeps, caStore, caMaterializer, enqueuer)

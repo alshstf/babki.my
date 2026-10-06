@@ -428,20 +428,24 @@ func eventNote(e Event) string {
 	default:
 		what = fmt.Sprintf("%s %d:%d", e.Kind, e.RatioFrom, e.RatioTo)
 	}
-	if e.Source == SourceMOEX {
-		return what + " — из реестра корпоративных действий (Московская биржа)"
+	return what + " — из реестра корпоративных действий (" + sourceName(e.Source) + ")"
+}
+
+// sourceName is where an event came from, as a journal row says it.
+func sourceName(source string) string {
+	switch source {
+	case SourceMOEX:
+		return "Московская биржа"
+	case SourceYahoo:
+		return "Yahoo Finance"
+	default:
+		return "внесено вручную"
 	}
-	return what + " — из реестра корпоративных действий (внесено вручную)"
 }
 
 // splitNote is what a split row says on the screen, like eventNote.
 func splitNote(e Event) string {
-	switch e.Source {
-	case SourceMOEX:
-		return fmt.Sprintf("Дробление %d:%d — из реестра корпоративных действий (Московская биржа)", e.RatioFrom, e.RatioTo)
-	default:
-		return fmt.Sprintf("Дробление %d:%d — из реестра корпоративных действий (внесено вручную)", e.RatioFrom, e.RatioTo)
-	}
+	return fmt.Sprintf("Дробление %d:%d — из реестра корпоративных действий (%s)", e.RatioFrom, e.RatioTo, sourceName(e.Source))
 }
 
 // externalIDFor names the row an event produces on one account's holding of
