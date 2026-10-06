@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/alexedwards/scs/v2"
@@ -61,6 +62,9 @@ func toAPI(i Instrument) apitypes.Instrument {
 		Figi:     i.FIGI,
 		Currency: i.Currency,
 		Frozen:   i.Frozen,
+	}
+	if i.Type == TypeCrypto {
+		out.CoingeckoId = &i.CoinGeckoID
 	}
 	// Face value is omitted for non-bonds: absent means not applicable.
 	if i.FaceValueMinor != nil {
@@ -217,7 +221,9 @@ func checkFaceUpdate(value nullable.Nullable[int64], code nullable.Nullable[stri
 const (
 	MaxNameRunes   = 200
 	MaxTickerRunes = 32
-	MaxFIGIRunes   = 32
+	// MaxCoinGeckoIDRunes bounds a coin's id at CoinGecko, as the contract does.
+	MaxCoinGeckoIDRunes = 100
+	MaxFIGIRunes        = 32
 )
 
 // checkTexts refuses a given text over its ceiling.
@@ -328,6 +334,25 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.CoingeckoId != nil {
+		coin := strings.ToLower(strings.TrimSpace(*req.CoingeckoId))
+		if utf8.RuneCountInString(coin) > MaxCoinGeckoIDRunes {
+			httpjson.Error(w, http.StatusBadRequest, fmt.Sprintf("coingecko_id must be at most %d characters", MaxCoinGeckoIDRunes))
+			return
+		}
+		if coin != "" {
+			stored, err := h.store.ByID(r.Context(), id)
+			if err != nil {
+				family.WriteError(w, err)
+				return
+			}
+			if stored.Type != TypeCrypto {
+				httpjson.Error(w, http.StatusBadRequest, "only a cryptocurrency has a coin at CoinGecko")
+				return
+			}
+		}
+		req.CoingeckoId = &coin
+	}
 	if req.Isin != nil {
 		isin, err := NormalizeISIN(*req.Isin)
 		if err != nil {
@@ -342,6 +367,8 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		ISIN:   req.Isin,
 		FIGI:   req.Figi,
 		Frozen: req.Frozen,
+		// A coin's id at CoinGecko, as its own API spells them: lowercase.
+		CoinGeckoID: req.CoingeckoId,
 	}
 	if req.FaceValueMinor.IsSpecified() {
 		if req.FaceValueMinor.IsNull() {

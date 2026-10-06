@@ -878,6 +878,20 @@ describe("PositionsTable", () => {
     expect(screen.getByTestId("position-cost-at-sale-rate").getAttribute("title")).toContain("ст. 214.1 п. 13");
   });
 
+  it("names CoinGecko under a cryptocurrency's price, but not under a price stated by hand", () => {
+    const btc = (overrides: Partial<Position>) =>
+      makePosition({
+        instrument: { id: "instr-btc", type: "crypto", name: "Bitcoin", ticker: "BTC", isin: "", figi: "", currency: "USD", frozen: false },
+        ...overrides,
+      });
+    wrap(<PositionsTable positions={[btc({})]} mode="native" baseCurrency="RUB" />);
+    expect(screen.getByTestId("position-price-coingecko").textContent).toBe("по данным CoinGecko");
+    cleanup();
+
+    wrap(<PositionsTable positions={[btc({ price_by_hand: true })]} mode="native" baseCurrency="RUB" />);
+    expect(screen.queryByTestId("position-price-coingecko")).not.toBeInTheDocument();
+  });
+
   it("draws no sale-rate note on an ordinary paper", () => {
     wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
@@ -1504,13 +1518,13 @@ describe("PositionsTable", () => {
   });
 
   // A type this build cannot read a price for gets no currency claimed (#105);
-  // today's server values only share, etf and bond.
+  // today's server values only share, etf, bond and crypto.
   it("claims no currency for a priced type this build does not know", () => {
     wrap(
       <PositionsTable
         positions={[
           makePosition({
-            instrument: { ...makePosition().instrument, type: "crypto" },
+            instrument: { ...makePosition().instrument, type: "metal" },
           }),
         ]}
         mode="native"

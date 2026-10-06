@@ -1398,7 +1398,7 @@ type DataSource struct {
 	// EverySeconds How often it runs
 	EverySeconds int `json:"every_seconds"`
 
-	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar
+	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices
 	Kind string `json:"kind"`
 
 	// LastError The last failure's text, cut to 300 characters; empty when it never failed
@@ -1708,7 +1708,9 @@ type InBaseGap string
 
 // Instrument defines model for Instrument.
 type Instrument struct {
-	Currency string `json:"currency"`
+	// CoingeckoId A cryptocurrency's coin at CoinGecko, which prices it daily (decision Р-20): the price job picks the largest coin with the paper's ticker, since tickers are not unique among coins, and a person may correct it. Empty for anything else and until a coin is picked; absent from older answers.
+	CoingeckoId *string `json:"coingecko_id,omitempty"`
+	Currency    string  `json:"currency"`
 
 	// FaceCurrency The currency face_value_minor is denominated in, which need not be the instrument's own. Null exactly when face_value_minor is null; never empty (a CHECK constraint). Its ISO-4217 shape is enforced by every writer but not by the database, so no pattern is promised for stored rows.
 	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
@@ -1845,7 +1847,7 @@ type LoginRequest struct {
 	Username string `json:"username"`
 }
 
-// MarketValueGap Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf and bond are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published.
+// MarketValueGap Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf, bond and crypto are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published.
 type MarketValueGap string
 
 // MemberInfo defines model for MemberInfo.
@@ -2710,6 +2712,9 @@ type UpdateAccountRequest struct {
 
 // UpdateInstrumentRequest defines model for UpdateInstrumentRequest.
 type UpdateInstrumentRequest struct {
+	// CoingeckoId See Instrument.coingecko_id. Omitted, it stays as it is; only a cryptocurrency takes one.
+	CoingeckoId *string `json:"coingecko_id,omitempty"`
+
 	// FaceCurrency The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all, and set only on an instrument that is stored as a bond — see it.
 	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
 

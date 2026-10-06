@@ -33,6 +33,8 @@ function sourceName(t: TFunction, kind: string): string {
       return t("dataSources.kinds.dividendCalendar");
     case "marketdata.refresh_reference_prices":
       return t("dataSources.kinds.referencePrices");
+    case "marketdata.refresh_crypto_prices":
+      return t("dataSources.kinds.cryptoPrices");
     default:
       return kind;
   }
@@ -84,6 +86,7 @@ const PRICE_SOURCES = new Set([
   "marketdata.refresh_quotes",
   "marketdata.refresh_fx",
   "tinvest.refresh_quotes",
+  "marketdata.refresh_crypto_prices",
 ]);
 
 export function StaleSourcesNotice({ canOpenSettings }: { canOpenSettings: boolean }) {

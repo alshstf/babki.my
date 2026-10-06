@@ -37,6 +37,7 @@ export function InstrumentEditDialog({
     figi: "",
   });
   const [frozen, setFrozen] = useState(false);
+  const [coin, setCoin] = useState("");
 
   // Reloaded from the row every time the dialog opens on one, so a form left
   // half-typed on one paper cannot reappear over another.
@@ -49,6 +50,7 @@ export function InstrumentEditDialog({
       figi: instrument.figi,
     });
     setFrozen(instrument.frozen);
+    setCoin(instrument.coingecko_id ?? "");
     update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrument?.id]);
@@ -62,6 +64,9 @@ export function InstrumentEditDialog({
     if (values[field] !== instrument[field]) changed[field] = values[field];
   }
   if (frozen !== instrument.frozen) changed.frozen = frozen;
+  if (instrument.type === "crypto" && coin.trim().toLowerCase() !== (instrument.coingecko_id ?? "")) {
+    changed.coingecko_id = coin;
+  }
 
   // The name is the one field the server refuses empty. Checked here so the
   // reader is told at the field rather than by a save that fails.
@@ -98,6 +103,19 @@ export function InstrumentEditDialog({
               )}
             </div>
           ))}
+          {/* Decision Р-20: the coin CoinGecko prices this cryptocurrency as. */}
+          {instrument.type === "crypto" && (
+            <div className="grid gap-2">
+              <Label htmlFor="instrument-coin">{t("instruments.fields.coingeckoId")}</Label>
+              <Input
+                id="instrument-coin"
+                data-testid="instrument-coin"
+                value={coin}
+                onChange={(e) => setCoin(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">{t("instruments.edit.coingeckoIdHint")}</p>
+            </div>
+          )}
           {emptyName && (
             <p
               className="text-xs text-red-500"

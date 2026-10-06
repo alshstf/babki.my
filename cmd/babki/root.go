@@ -26,6 +26,7 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/cbr"
+	"babki.my/babki/internal/marketdata/coingecko"
 	"babki.my/babki/internal/marketdata/finex"
 	"babki.my/babki/internal/marketdata/moex"
 	"babki.my/babki/internal/marketdata/yahoo"
@@ -238,6 +239,7 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 		Foreign:   feed,
 		Dividends: feed,
 		Splits:    feed,
+		Crypto:    coingecko.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
 	}
 	workers := background.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, references, tinvestDeps, caStore, caMaterializer, enqueuer)

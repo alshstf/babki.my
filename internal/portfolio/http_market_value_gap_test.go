@@ -56,14 +56,14 @@ func TestPositionMarketValueGapNamesTheMissingQuote(t *testing.T) {
 	}
 }
 
-// type_not_priced: a crypto position with a fresh quote that will never value
+// type_not_priced: a metal position with a fresh quote that will never value
 // it.
 func TestPositionMarketValueGapNamesAnUnpricedTypeThatHasAQuote(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := quotedAPI(t, quotes)
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
-	coin := createInstrument(t, c, url, `{"type":"crypto","name":"Биткоин","ticker":"BTC","currency":"RUB"}`)
+	coin := createInstrument(t, c, url, `{"type":"metal","name":"Золото","ticker":"GLDRUB","currency":"RUB"}`)
 	quotes.byInstrument[mustUUID(t, coin.ID)] = marketdata.Quote{
 		InstrumentID: mustUUID(t, coin.ID), On: mustDate(t, "2026-07-22"),
 		Price: decimal.RequireFromString("5000000"), Currency: "RUB", Source: "test",
@@ -74,7 +74,7 @@ func TestPositionMarketValueGapNamesAnUnpricedTypeThatHasAQuote(t *testing.T) {
 
 	p := onlyPosition(t, c, url, acc.ID)
 	if p.MarketValueMinor != nil {
-		t.Fatalf("market_value_minor = %d, want null: this program has no valuation model for crypto", *p.MarketValueMinor)
+		t.Fatalf("market_value_minor = %d, want null: this program has no valuation model for a metal", *p.MarketValueMinor)
 	}
 	if p.MarketValueGap == nil || *p.MarketValueGap != "type_not_priced" {
 		t.Fatalf("market_value_gap = %s, want type_not_priced: the quote for this instrument exists and is not what is missing",
@@ -83,6 +83,28 @@ func TestPositionMarketValueGapNamesAnUnpricedTypeThatHasAQuote(t *testing.T) {
 	// No price line either: the cell is not derived from it.
 	if p.Price != nil || p.PriceOn != nil {
 		t.Errorf("price/price_on = %v/%v, want both null: no valuation was struck from this quote", p.Price, p.PriceOn)
+	}
+}
+
+// A cryptocurrency is valued per unit like a share (decision Р-20): two coins
+// at 5 000 000 ₽.
+func TestACryptocurrencyIsValuedLikeAShare(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := quotedAPI(t, quotes)
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	coin := createInstrument(t, c, url, `{"type":"crypto","name":"Биткоин","ticker":"BTC","currency":"RUB"}`)
+	quotes.byInstrument[mustUUID(t, coin.ID)] = marketdata.Quote{
+		InstrumentID: mustUUID(t, coin.ID), On: mustDate(t, "2026-07-22"),
+		Price: decimal.RequireFromString("5000000"), Currency: "RUB", Source: "coingecko",
+	}
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"2","price":"4000000",
+		"amount_minor":-800000000,"currency":"RUB"}`, acc.ID, coin.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.MarketValueMinor == nil || *p.MarketValueMinor != 1_000_000_000 || p.MarketValueGap != nil {
+		t.Errorf("market value = %v (gap %s), want 1000000000", p.MarketValueMinor, gapText(p.MarketValueGap))
 	}
 }
 

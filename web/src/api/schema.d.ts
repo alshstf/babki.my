@@ -1516,7 +1516,7 @@ export interface components {
             note: string;
         };
         DataSource: {
-            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar */
+            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices */
             kind: string;
             /** @description How often it runs */
             every_seconds: number;
@@ -1628,6 +1628,8 @@ export interface components {
             isin: string;
             figi: string;
             currency: string;
+            /** @description A cryptocurrency's coin at CoinGecko, which prices it daily (decision Р-20): the price job picks the largest coin with the paper's ticker, since tickers are not unique among coins, and a person may correct it. Empty for anything else and until a coin is picked; absent from older answers. */
+            coingecko_id?: string;
             /**
              * Format: int64
              * @description What one bond is worth at redemption, in face_currency's minor units. Null for a bond without a recorded face value and for any other type (rows written before that rule are returned as they stand; PATCH clears them). Always positive and never without face_currency — a CHECK constraint backs both for every stored row. No maximum is stated: the write's cap has no constraint behind it.
@@ -1763,6 +1765,8 @@ export interface components {
             isin?: string;
             figi?: string;
             frozen?: boolean;
+            /** @description See Instrument.coingecko_id. Omitted, it stays as it is; only a cryptocurrency takes one. */
+            coingecko_id?: string;
             /**
              * Format: int64
              * @description Same rules as on creation, judged against the stored instrument's type: setting the pair on a row that is not a bond is a 400; clearing it (two nulls) is allowed on any type. To touch either half, send both — two values or two nulls; one alone is a 400 («face_value_minor and face_currency must be sent together, even to change one»). Omitting both leaves the pair as it was.
@@ -2156,7 +2160,7 @@ export interface components {
          */
         InBaseGap: "undated_lot" | "no_rate_lot_date" | "no_rate_income_date" | "no_rate_today";
         /**
-         * @description Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf and bond are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published.
+         * @description Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf, bond and crypto are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published.
          * @enum {string}
          */
         MarketValueGap: "type_not_priced" | "no_face_value" | "no_quote" | "no_rate_valuation_currency";
