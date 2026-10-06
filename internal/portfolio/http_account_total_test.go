@@ -12,7 +12,8 @@ import (
 )
 
 // The account's total is summed on the server like the realized one. Beyond
-// the rows it adds interest, standalone commissions and account-level tax.
+// the rows it adds interest, and commissions and tax charged to the account
+// rather than to a paper.
 
 // accountFigure reads a bucket's amount, failing on null.
 func accountFigure(t *testing.T, minor *int64) int64 {
@@ -121,6 +122,41 @@ func TestAccountTotalDoesNotChargeATradesCommissionTwice(t *testing.T) {
 	// A sold-out position has no basis, so it is not counted at nought.
 	if got.ZeroValuedPositions != 0 {
 		t.Errorf("zero_valued_positions = %d, want 0: nothing is held here, so nothing was written off", got.ZeroValuedPositions)
+	}
+}
+
+// A commission charged on a paper outside a trade (a depositary's) is what
+// holding it cost: it comes off the paper's settled result, and the account
+// total counts it once, through the row.
+//
+//	buy 10 @ 1 000 ₽; sell 10 @ 1 500 ₽ -> realized 50_000; depositary −700
+func TestACommissionOnAPaperComesOffItsSettledResultOnce(t *testing.T) {
+	url, c := newAPI(t)
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	acme := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"RUB"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-03-10","quantity":"10","price":"1000",
+		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, acme.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"fee",
+		"occurred_on":"2026-04-01","amount_minor":-700,"currency":"RUB"}`, acc.ID, acme.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":"2026-05-10","quantity":"10","price":"1500",
+		"amount_minor":150000,"currency":"RUB"}`, acc.ID, acme.ID))
+
+	got := accountPositions(t, c, url, acc.ID)
+
+	if settled := accountFigure(t, got.Positions[0].SettledMinor); settled != 49_300 {
+		t.Errorf("settled = %d, want 49300 (50000 realized less the 700 commission)", settled)
+	}
+	switch total := accountFigure(t, got.AccountTotal.ByCurrency[0].AmountMinor); total {
+	case 48_600:
+		t.Errorf("total = 48600 — the commission was taken twice: in the row and again as the account's own charge")
+	default:
+		if total != 49_300 {
+			t.Errorf("total = %d, want 49300", total)
+		}
 	}
 }
 

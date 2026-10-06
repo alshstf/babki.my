@@ -264,7 +264,8 @@ func TestAFeeSettlesTheCurrencyAPaymentOnlyLentIt(t *testing.T) {
 	if p.CostMinor != 70_000 {
 		t.Errorf("cost = %d, want 70000 (fen)", p.CostMinor)
 	}
-	wantIncome(t, p, []portfolio.CurrencyMinor{{Currency: "RUB", Minor: 123_456}})
+	// The commission was charged outside a trade, so it also comes off the income.
+	wantIncome(t, p, []portfolio.CurrencyMinor{{Currency: "CNY", Minor: -300}, {Currency: "RUB", Minor: 123_456}})
 }
 
 // Payments whose total leaves int64 are refused rather than wrapped (the write

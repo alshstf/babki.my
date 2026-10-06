@@ -279,17 +279,16 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 }
 
 // accountCharges are the entries charged or credited to the account directly,
-// which no position contains: interest, standalone commissions, and tax not
-// attributed to an instrument. Trade commissions and instrument taxes are
-// already in positions. Amount and fee are taken together, as reconciliation
-// does.
+// which no position contains: interest, and commissions and tax not attributed
+// to an instrument. Those attributed to one are in its position's income. Amount
+// and fee are taken together, as reconciliation does.
 func accountCharges(ops []Operation) []Operation {
 	var out []Operation
 	for _, o := range ops {
 		switch o.Type {
-		case TypeInterest, TypeFee:
+		case TypeInterest:
 			out = append(out, o)
-		case TypeTax:
+		case TypeFee, TypeTax:
 			if o.InstrumentID == nil {
 				out = append(out, o)
 			}

@@ -103,14 +103,16 @@ type Position struct {
 	Quantity  decimal.Decimal
 	CostMinor int64 // remaining FIFO cost basis (fees capitalized on buy)
 	// IncomeByCurrency is what the paper paid — dividends and coupons less taxes
-	// on them — one entry per currency, ordered by code (deterministic, unlike map
-	// order). A yuan bond's rouble coupon stays in roubles; the engine holds no
-	// rates. An entry may be zero or negative (a tax on a payment before the
-	// journal starts). addIncome is its only writer.
+	// on them and the commissions charged on it outside a trade — one entry per
+	// currency, ordered by code (deterministic, unlike map order). A yuan bond's
+	// rouble coupon stays in roubles; the engine holds no rates. An entry may be
+	// zero or negative (a tax on a payment before the journal starts). addIncome
+	// is its only writer.
 	IncomeByCurrency []CurrencyMinor
-	// FeesByCurrency is the commissions charged, per currency and ordered like
-	// IncomeByCurrency: a sale of a yuan bond is charged in roubles. A commission
-	// on an acquisition is part of the lot's cost instead.
+	// FeesByCurrency is every commission charged, per currency and ordered like
+	// IncomeByCurrency: a sale of a yuan bond is charged in roubles. A purchase's
+	// is also in the lot's cost, a sale's in its realization, and one charged
+	// outside a trade in the income.
 	FeesByCurrency []CurrencyMinor
 	// Lots are the acquisitions still held, oldest acquisition first, which is
 	// the release order; undated lots lead, ties keep journal order (see addLot).
@@ -758,8 +760,13 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeFee:
-			// A negative amount is a positive fee, in its own currency.
+			// A negative amount is a positive fee, in its own currency. Charged on the
+			// paper outside a trade (a depositary's, a transfer's), it is what holding
+			// the paper cost, so it comes off its income as a tax does.
 			if err := p.addFee(o.Currency, -o.AmountMinor); err != nil {
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+			}
+			if err := p.addIncome(o.Currency, o.AmountMinor); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeAmortization:
