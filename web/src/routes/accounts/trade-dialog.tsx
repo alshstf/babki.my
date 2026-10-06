@@ -29,6 +29,8 @@ import { useSaveOperation, isConflict, type Operation } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
+import { KindMismatch } from "./kind-mismatch";
+import { fitsKind } from "@/lib/operation-kinds";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 
@@ -192,8 +194,10 @@ export function TradeDialog({
   const totalMinor = qtyValid && priceValid ? multiplyToMinor(quantity, price) : null;
   const overflow = qtyValid && priceValid && totalMinor === null;
 
+  const kindOk = instrument === null || fitsKind(side, instrument.type);
   const valid =
     instrument !== null &&
+    kindOk &&
     qtyValid &&
     priceValid &&
     totalMinor !== null &&
@@ -279,6 +283,7 @@ export function TradeDialog({
           <div className="grid gap-2">
             <Label>{t("instrumentPicker.search")}</Label>
             <InstrumentPicker value={instrument} onChange={changeInstrument} />
+            {instrument && !kindOk && <KindMismatch type={side} kind={instrument.type} />}
           </div>
           {isBond && instrument ? (
             <>
