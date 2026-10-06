@@ -24,7 +24,7 @@ export function useUpdateSpace() {
     onSuccess: (data, body) => {
       queryClient.setQueryData(["session"], data);
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
-      if (body.base_currency !== undefined) {
+      if (body.base_currency !== undefined || body.full_valuation !== undefined) {
         void queryClient.invalidateQueries({ queryKey: ["summary"] });
         void queryClient.invalidateQueries({ queryKey: ["accounts"] });
         void queryClient.invalidateQueries({ queryKey: ["operations"] });

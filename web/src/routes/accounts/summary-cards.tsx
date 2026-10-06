@@ -104,9 +104,29 @@ export function SummaryCards({
               {t("summary.journalPinned", { count: summary.journal.pinned_to_balance })}
             </div>
           )}
-          {summary.journal.unpriced_positions > 0 && (
+          {/* The total is the liquid worth; the full one, which also counts what
+              cannot be sold now, is said beneath it (decision Р-11). */}
+          {hasTotal && summary.journal.full_difference_minor !== 0 && (
+            <div
+              data-testid="summary-full-valuation"
+              className="text-sm text-muted-foreground"
+              title={t("summary.fullValuationHint")}
+            >
+              {t("summary.fullValuation", {
+                amount: formatMinorCompact(totalInBase + summary.journal.full_difference_minor, summary.base_currency),
+              })}
+            </div>
+          )}
+          {summary.journal.not_traded_positions > 0 && (
+            <div data-testid="summary-journal-not-traded" className="text-xs text-muted-foreground">
+              {t("summary.journalNotTraded", { count: summary.journal.not_traded_positions })}
+            </div>
+          )}
+          {summary.journal.unpriced_positions - summary.journal.not_traded_positions > 0 && (
             <div data-testid="summary-journal-unpriced" className="text-xs text-amber-600">
-              {t("summary.journalUnpriced", { count: summary.journal.unpriced_positions })}
+              {t("summary.journalUnpriced", {
+                count: summary.journal.unpriced_positions - summary.journal.not_traded_positions,
+              })}
             </div>
           )}
         </CardContent>

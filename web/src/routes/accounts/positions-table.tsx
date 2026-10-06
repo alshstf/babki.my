@@ -619,6 +619,37 @@ export function PositionsTable({
                           )}
                         </div>
                       )}
+                      {position.price_source === "nav" && (
+                        <div data-testid="position-price-nav" className="text-xs text-muted-foreground" title={t("positions.priceNavHint")}>
+                          {t("positions.priceNav")}
+                        </div>
+                      )}
+                      {position.price_source === "foreign" && (
+                        <div data-testid="position-price-foreign" className="text-xs text-muted-foreground" title={t("positions.priceForeignHint")}>
+                          {t("positions.priceForeign")}
+                        </div>
+                      )}
+                      {/* What can be sold now, beside the full valuation above (decision
+                         Р-11): the «Итого» counts this one. */}
+                      {position.quantity !== "0" &&
+                        (position.liquid_value_minor == null ? (
+                          <div data-testid="position-not-traded" className="text-xs text-amber-600" title={t("positions.notTradedHint")}>
+                            {position.last_traded_on
+                              ? t("positions.notTradedSince", { date: formatDate(position.last_traded_on) })
+                              : t("positions.notTraded")}
+                          </div>
+                        ) : (
+                          position.liquid_value_minor !== position.market_value_minor && (
+                            <div data-testid="position-liquid" className="text-xs text-muted-foreground" title={t("positions.liquidHint")}>
+                              {t("positions.liquid", {
+                                amount:
+                                  mode === "base" && position.liquid_value_in_base_minor != null
+                                    ? formatMinor(position.liquid_value_in_base_minor, baseCurrency)
+                                    : formatMinor(position.liquid_value_minor, position.currency),
+                              })}
+                            </div>
+                          )
+                        ))}
                       {position.price_on && staleSince(position.price_on) && (
                         <div
                           data-testid="position-price-stale"

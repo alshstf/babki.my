@@ -406,6 +406,24 @@ describe("SettingsPage", () => {
     });
   });
 
+  // Р-11: where the full valuation starts is the space's to choose.
+  it("saves where the full valuation starts", async () => {
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      "/api/v1/tinvest/connections": { body: { connections: [] } },
+      "/api/v1/space": { body: makeSession({ full_valuation: "liquid" }) },
+    });
+    wrap(makeSession());
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Полная оценка" }));
+    fireEvent.click(screen.getByText("Только то, что можно продать сейчас"));
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+    fireEvent.click(saveButton());
+
+    await waitFor(async () => expect(await patchBodies()).toEqual([{ full_valuation: "liquid" }]));
+  });
+
   describe("connections", () => {
     function makeConnection(overrides: Partial<TinvestConnection> = {}): TinvestConnection {
       return {
