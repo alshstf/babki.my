@@ -106,8 +106,8 @@ func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, ra
 
 // incomeByInstrument groups instrument-attributed income operations, so income
 // is converted payment by payment at each one's own date and currency. The
-// types match the engine's notion of income (dividend, coupon, tax);
-// TestPositionInBaseIncomeUsesEachOperationsOwnRate holds them together.
+// types match the engine's notion of income (dividend, coupon, tax, fee);
+// TestIncomeByInstrumentMatchesEngineIncomeTypes holds them together.
 func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 	out := make(map[uuid.UUID][]Operation)
 	for _, o := range ops {
@@ -115,7 +115,7 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 			continue
 		}
 		switch o.Type {
-		case TypeDividend, TypeCoupon, TypeTax:
+		case TypeDividend, TypeCoupon, TypeTax, TypeFee:
 			out[*o.InstrumentID] = append(out[*o.InstrumentID], o)
 		}
 	}
