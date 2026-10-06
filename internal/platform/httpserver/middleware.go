@@ -9,14 +9,19 @@ import (
 	"time"
 
 	"babki.my/babki/internal/platform/httpjson"
+	"babki.my/babki/internal/platform/metrics"
 )
 
-// withRequestLog logs each request: method, path, status, duration.
+// withRequestLog logs each request — method, path, status, duration — and
+// counts it for the metrics by the route it matched.
 func withRequestLog(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
+		// The mux records the matched pattern on the request it was handed, the
+		// same one this middleware holds.
+		metrics.ObserveRequest(r.Method, r.Pattern, sw.status, time.Since(start))
 		log.Info("http",
 			"method", r.Method,
 			"path", r.URL.Path,

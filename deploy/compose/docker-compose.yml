@@ -32,6 +32,7 @@ services:
       BABKI_AUTO_MIGRATE: ${BABKI_AUTO_MIGRATE:-true}
       BABKI_COOKIE_SECURE: ${BABKI_COOKIE_SECURE:-true}
       BABKI_SETUP_CODE: ${BABKI_SETUP_CODE:-}
+      BABKI_METRICS: ${BABKI_METRICS:-false}
     depends_on:
       postgres:
         condition: service_healthy

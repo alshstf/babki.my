@@ -34,6 +34,7 @@ import (
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/jobs"
+	"babki.my/babki/internal/platform/metrics"
 	"babki.my/babki/internal/platform/version"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/web"
@@ -97,6 +98,12 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	positions := portfolio.NewService(opStore, instStore, mdStore, converter, famStore).WithAccounts(accStore)
 	portfolio.NewHandler(positions, famAuth, famSM).Mount(srv)
 	background.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
+	// For an outside watcher, and Prometheus when asked for (decision Р-22).
+	background.NewDataHealthHandler(r.pool).Mount(srv)
+	if r.cfg.Metrics {
+		metrics.Registry.MustRegister(background.NewSourcesCollector(r.pool))
+		srv.Mount("GET /metrics", metrics.Handler())
+	}
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log)), instStore, famAuth, famSM).Mount(srv)

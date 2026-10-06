@@ -23,6 +23,9 @@ type Config struct {
 	// SetupCode is the one-time code first-run setup asks for. When empty the
 	// server generates one and logs it.
 	SetupCode string `env:"BABKI_SETUP_CODE"`
+	// Metrics publishes the program's numbers for Prometheus at /metrics
+	// (decision Р-22). Off by default: the address needs no sign-in.
+	Metrics bool `env:"BABKI_METRICS" envDefault:"false"`
 }
 
 // Load reads the configuration from the environment. Role-specific
