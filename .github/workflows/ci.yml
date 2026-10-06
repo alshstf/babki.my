@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A release runs the same checks before it builds anything (release.yml).
+  workflow_call:
 
 # The workflow reads the repository and nothing else: it publishes nothing and
 # comments on nothing, so its token is not given the right to.

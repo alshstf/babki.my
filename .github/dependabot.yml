@@ -1,0 +1,48 @@
+# Weekly, grouped: one PR per ecosystem a week rather than one per package; a
+# new major version comes on its own, since it may need the code changed.
+# Security updates come at once and outside this schedule (the repository's
+# Dependabot security updates). Every PR passes the same checks as any other
+# and is merged on green (decision Р-18).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      web:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # A base image's new major (node 24, a new alpine) is a decision, not an
+    # update; the compose file's postgres is left out for the same reason — a
+    # new major needs its data upgraded.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      images:
+        patterns: ["*"]
