@@ -1643,10 +1643,10 @@ export interface components {
          */
         InstrumentEventKind: "split" | "conversion" | "spin_off";
         /**
-         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. Neither is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. `known`: a receipt the exchange replaced by a Russian company's share one for one, from a list this program carries with each notice in `source_ref` (decision Р-19); it reaches only receipts bought for roubles, the ones Russian depositories held. None of the three is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
          * @enum {string}
          */
-        InstrumentEventSource: "moex_iss" | "yahoo" | "manual";
+        InstrumentEventSource: "moex_iss" | "yahoo" | "known" | "manual";
         /** @description One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds. */
         InstrumentEvent: {
             /** Format: uuid */
