@@ -19,7 +19,7 @@ import (
 // ManualPriceSource is what the quotes table calls a price a person stated.
 const ManualPriceSource = marketdata.ManualQuoteSource
 
-// ErrNoQuoteWriter is a quote store this handler cannot write to.
+// ErrNoQuoteWriter is a quote store this service cannot write to.
 var ErrNoQuoteWriter = errors.New("portfolio: the quote store takes no prices")
 
 type quoteWriter interface {
@@ -46,7 +46,7 @@ func (h *Handler) handleStatePrice(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "price must be a positive decimal")
 		return
 	}
-	if err := h.StatePrice(r.Context(), id, on, price); err != nil {
+	if err := h.svc.StatePrice(r.Context(), id, on, price); err != nil {
 		if errors.Is(err, errInstrumentNotInCatalog) {
 			httpjson.Error(w, http.StatusNotFound, "not found")
 			return
@@ -59,12 +59,12 @@ func (h *Handler) handleStatePrice(w http.ResponseWriter, r *http.Request) {
 
 // StatePrice records a price a person stated for a paper on a day, in the
 // paper's currency, as a quote of its own source.
-func (h *Handler) StatePrice(ctx context.Context, instrumentID uuid.UUID, on time.Time, price decimal.Decimal) error {
-	writer, ok := h.quotes.(quoteWriter)
+func (s *Service) StatePrice(ctx context.Context, instrumentID uuid.UUID, on time.Time, price decimal.Decimal) error {
+	writer, ok := s.quotes.(quoteWriter)
 	if !ok {
 		return ErrNoQuoteWriter
 	}
-	papers, err := h.instruments.ByIDs(ctx, []uuid.UUID{instrumentID})
+	papers, err := s.instruments.ByIDs(ctx, []uuid.UUID{instrumentID})
 	if err != nil {
 		return err
 	}

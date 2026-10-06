@@ -69,7 +69,7 @@ func TestAnAccountIsValuedFromItsJournal(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT id FROM spaces LIMIT 1`).Scan(&spaceID); err != nil {
 		t.Fatalf("read the space: %v", err)
 	}
-	h := portfolio.NewHandler(operation.NewStore(pool), instrument.NewStore(pool), quotes, conv, family.NewStore(pool), nil, nil)
+	h := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), quotes, conv, family.NewStore(pool))
 
 	got, err := h.ValueFromJournal(t.Context(), spaceID, uuid.MustParse(acc.ID))
 	if err != nil {
@@ -127,7 +127,7 @@ func TestACurrencyWithNoRateIsLeftOutAndNamed(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT id FROM spaces LIMIT 1`).Scan(&spaceID); err != nil {
 		t.Fatalf("read the space: %v", err)
 	}
-	h := portfolio.NewHandler(operation.NewStore(pool), instrument.NewStore(pool), quotes, conv, family.NewStore(pool), nil, nil)
+	h := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), quotes, conv, family.NewStore(pool))
 	got, err := h.ValueFromJournal(t.Context(), spaceID, uuid.MustParse(acc.ID))
 	if err != nil {
 		t.Fatalf("ValueFromJournal: %v", err)

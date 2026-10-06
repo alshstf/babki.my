@@ -107,7 +107,7 @@ func incomeByCurrencyToAPI(income []CurrencyMinor) []apitypes.PositionCurrencyIn
 // the position's currency when needed. now is the request's single "today",
 // shared with positionInBase and the prefetch. err is a real failure, never
 // ErrNoRate.
-func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, rates *marketdata.RateMemo) (apitypes.Position, error) {
+func (s *Service) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, rates *marketdata.RateMemo) (apitypes.Position, error) {
 	out := apitypes.Position{
 		Instrument: instrumentToAPI(inst),
 		Quantity:   p.Quantity.String(),

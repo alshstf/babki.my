@@ -54,7 +54,7 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv marketdata.RateSource) (str
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).WithDividendCalendar(mdStore, instStore).Mount(srv)
 	// Positions use a real converter, so a journal row and its position can be
 	// compared on one running stack (http_transfer_in_base_test.go).
-	portfolio.NewHandler(opStore, instStore, mdStore, marketdata.NewConverter(mdStore), famStore, auth, sm).Mount(srv)
+	portfolio.NewHandler(portfolio.NewService(opStore, instStore, mdStore, marketdata.NewConverter(mdStore), famStore), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

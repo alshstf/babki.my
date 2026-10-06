@@ -68,7 +68,7 @@ type priceStore interface {
 // pricesOn is the prices of ids on day under the space's setting. A store
 // keeping only the latest prices (a test's) is read as if every price were a
 // market one on its own day.
-func (h *Handler) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, setting family.FullValuation, windows priceWindows) (priceBook, error) {
+func (s *Service) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, setting family.FullValuation, windows priceWindows) (priceBook, error) {
 	book := priceBook{
 		liquid:     make(map[uuid.UUID]marketdata.Quote, len(ids)),
 		full:       make(map[uuid.UUID]pricedQuote, len(ids)),
@@ -82,7 +82,7 @@ func (h *Handler) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, 
 		refs           map[uuid.UUID]map[marketdata.ReferenceKind]marketdata.ReferencePrice
 		err            error
 	)
-	if ps, ok := h.quotes.(priceStore); ok {
+	if ps, ok := s.quotes.(priceStore); ok {
 		if latest, err = ps.QuotesOn(ctx, ids, day); err != nil {
 			return priceBook{}, err
 		}
@@ -95,7 +95,7 @@ func (h *Handler) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, 
 			}
 		}
 	} else {
-		if latest, err = h.quotes.LatestQuotes(ctx, ids); err != nil {
+		if latest, err = s.quotes.LatestQuotes(ctx, ids); err != nil {
 			return priceBook{}, err
 		}
 		market = make(map[uuid.UUID]marketdata.Quote, len(latest))
@@ -141,14 +141,14 @@ func (h *Handler) pricesOn(ctx context.Context, ids []uuid.UUID, day time.Time, 
 			}
 		}
 	}
-	return book, h.attachBondDays(ctx, ids, day, book)
+	return book, s.attachBondDays(ctx, ids, day, book)
 }
 
 // attachBondDays gives each bond's quotes its face and accrued interest on
 // day (Quote.Bond): the face of any age, the interest only within
 // accruedWindow.
-func (h *Handler) attachBondDays(ctx context.Context, ids []uuid.UUID, day time.Time, book priceBook) error {
-	bs, ok := h.quotes.(bondDayStore)
+func (s *Service) attachBondDays(ctx context.Context, ids []uuid.UUID, day time.Time, book priceBook) error {
+	bs, ok := s.quotes.(bondDayStore)
 	if !ok {
 		return nil
 	}
@@ -187,7 +187,7 @@ func referenceQuote(r marketdata.ReferencePrice) marketdata.Quote {
 
 // addLiquid publishes, beside a position's full valuation, where its price
 // came from and what it can be sold for now (decision Р-11).
-func (h *Handler) addLiquid(ctx context.Context, out *apitypes.Position, p *Position, inst instrument.Instrument,
+func (s *Service) addLiquid(ctx context.Context, out *apitypes.Position, p *Position, inst instrument.Instrument,
 	book priceBook, base string, now time.Time, rates *marketdata.RateMemo,
 ) error {
 	out.PriceSource = nullable.NewNullNullable[apitypes.PriceSource]()

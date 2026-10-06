@@ -55,7 +55,7 @@ func TestAnAccountIsValuedOnAPastDay(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT id FROM spaces LIMIT 1`).Scan(&spaceID); err != nil {
 		t.Fatal(err)
 	}
-	h := portfolio.NewHandler(operation.NewStore(pool), instrument.NewStore(pool), md, conv, family.NewStore(pool), nil, nil)
+	h := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), md, conv, family.NewStore(pool))
 	for _, tc := range []struct {
 		day           string
 		minor         int64
