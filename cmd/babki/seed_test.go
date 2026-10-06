@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
@@ -34,52 +35,172 @@ func mustAcquired(t *testing.T, on *time.Time, what string) time.Time {
 	return *on
 }
 
-func TestSeedDemo(t *testing.T) {
+// demoToday is the demo's «today»: the date of the newest seeded USD/RUB rate.
+var demoToday = time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+
+// demo is a freshly seeded instance and what its checks look things up by.
+type demo struct {
+	ctx                context.Context
+	pool               *pgxpool.Pool
+	space              uuid.UUID
+	accounts           []account.WithBalance
+	totals             []account.CurrencyTotal
+	tbankID, freedomID uuid.UUID
+	ops                *operation.Store
+	catalog            *instrument.Store
+	conv               *marketdata.Converter
+	// tbank and freedom are the two brokers' positions, by ticker.
+	tbank, freedom map[string]*portfolio.Position
+}
+
+// seeded seeds a database of its own and signs the demo user in.
+func seeded(t *testing.T) demo {
+	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-
 	if err := seedDemo(ctx, pool); err != nil {
 		t.Fatalf("seedDemo: %v", err)
 	}
-
-	// demo user can log in and sees the seeded world
-	svc := family.NewService(family.NewStore(pool))
-	_, p, err := svc.Login(ctx, "demo", "demo1234")
+	_, p, err := family.NewService(family.NewStore(pool)).Login(ctx, "demo", "demo1234")
 	if err != nil || p.Role != family.RoleOwner {
 		t.Fatalf("login demo: %v %+v", err, p)
 	}
-
-	accounts, err := account.NewStore(pool).ListWithBalance(ctx, p.SpaceID)
-	if err != nil || len(accounts) != 6 {
-		t.Fatalf("accounts = %d, %v; want 6", len(accounts), err)
+	d := demo{
+		ctx: ctx, pool: pool, space: p.SpaceID,
+		ops: operation.NewStore(pool), catalog: instrument.NewStore(pool),
+		conv: marketdata.NewConverter(marketdata.NewStore(pool)),
 	}
-	for _, a := range accounts {
+	if d.accounts, err = account.NewStore(pool).ListWithBalance(ctx, p.SpaceID); err != nil {
+		t.Fatalf("accounts: %v", err)
+	}
+	if d.totals, err = account.NewStore(pool).SummaryByCurrency(ctx, p.SpaceID, nil); err != nil {
+		t.Fatalf("totals: %v", err)
+	}
+	for _, a := range d.accounts {
+		switch a.Name {
+		case "Брокерский Т-Банк":
+			d.tbankID = a.ID
+		case "Freedom KZ":
+			d.freedomID = a.ID
+		}
+	}
+	if d.tbankID == uuid.Nil || d.freedomID == uuid.Nil {
+		t.Fatalf("brokerage accounts not found among seeded accounts")
+	}
+	d.tbank, d.freedom = d.positionsByTicker(t, d.tbankID), d.positionsByTicker(t, d.freedomID)
+	return d
+}
+
+// positionsByTicker folds an account's journal, as the positions are a
+// projection of it, checked through the stores.
+func (d demo) positionsByTicker(t *testing.T, accountID uuid.UUID) map[string]*portfolio.Position {
+	t.Helper()
+	ops, err := d.ops.ListForEngine(d.ctx, d.space, accountID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	positions, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	out := make(map[string]*portfolio.Position, len(positions))
+	for _, pos := range positions {
+		inst, err := d.catalog.ByID(d.ctx, pos.InstrumentID)
+		if err != nil {
+			t.Fatalf("instrument ByID: %v", err)
+		}
+		out[inst.Ticker] = pos
+	}
+	return out
+}
+
+// position is one of the account's positions, failing the test without it.
+func position(t *testing.T, positions map[string]*portfolio.Position, ticker, why string) *portfolio.Position {
+	t.Helper()
+	pos, ok := positions[ticker]
+	if !ok {
+		t.Fatalf("missing position %s — %s", ticker, why)
+	}
+	return pos
+}
+
+// demoDay parses a YYYY-MM-DD date.
+func demoDay(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.DateOnly, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return parsed
+}
+
+// rateToday is the USD/RUB rate «today» resolves to: any date past the newest
+// seeded rate gives the same 78.50 the running instance uses, without depending
+// on the clock.
+func (d demo) rateToday(t *testing.T) decimal.Decimal {
+	t.Helper()
+	rate, on, err := d.conv.Rate(d.ctx, "USD", "RUB", demoDay(t, "2099-01-01"))
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, today): %v", err)
+	}
+	if !on.Equal(demoToday) {
+		t.Errorf("newest USD/RUB rate is dated %s, want %s — the figures below are struck against the last rate in the table",
+			on.Format(time.DateOnly), demoToday.Format(time.DateOnly))
+	}
+	return rate
+}
+
+// realizedInBase rebuilds in_base.realized_pnl_minor from each disposal's
+// parcels: proceeds and fee at the disposal day's rate, each parcel at its own
+// purchase day's (НК РФ ст. 210 п. 5), summed as decimals and rounded once, as
+// portfolio's realizedTerms and sumInBase do. A position with no disposals is
+// zero and asks for no rate, so AAPL's gap does not block the total.
+func (d demo) realizedInBase(t *testing.T, pos *portfolio.Position, what string) int64 {
+	t.Helper()
+	total := decimal.Zero
+	term := func(minor int64, on time.Time) {
+		rate, _, err := d.conv.Rate(d.ctx, pos.Currency, "RUB", on)
+		if err != nil {
+			t.Fatalf("Rate(%s -> RUB, %s term on %s): %v", pos.Currency, what, on.Format(time.DateOnly), err)
+		}
+		total = total.Add(decimal.NewFromInt(minor).Mul(rate))
+	}
+	for _, e := range pos.Realizations {
+		term(e.ProceedsMinor, e.OccurredOn)
+		term(-e.FeeMinor, e.OccurredOn)
+		for _, rel := range e.Released {
+			term(-rel.CostMinor, mustAcquired(t, rel.AcquiredOn, what+" released parcel"))
+		}
+	}
+	return total.Round(0).IntPart()
+}
+
+// The demo user signs in and owns six accounts, each with a balance, in
+// roubles and dollars; a second seeding of a non-empty instance is refused.
+func TestSeedDemoSignsInToSixAccountsInTwoCurrencies(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	if len(d.accounts) != 6 {
+		t.Fatalf("accounts = %d; want 6", len(d.accounts))
+	}
+	for _, a := range d.accounts {
 		if a.Balance == nil {
 			t.Errorf("account %q has no balance", a.Name)
 		}
 	}
-
-	totals, err := account.NewStore(pool).SummaryByCurrency(ctx, p.SpaceID, nil)
-	if err != nil || len(totals) != 2 {
-		t.Fatalf("totals = %+v, %v; want RUB+USD", totals, err)
+	if len(d.totals) != 2 {
+		t.Fatalf("totals = %+v; want RUB+USD", d.totals)
 	}
-
-	// Positions are a projection of the journal, checked through the stores.
-	var tbankID, freedomID uuid.UUID
-	for _, a := range accounts {
-		switch a.Name {
-		case "Брокерский Т-Банк":
-			tbankID = a.ID
-		case "Freedom KZ":
-			freedomID = a.ID
-		}
+	if err := seedDemo(d.ctx, d.pool); err == nil {
+		t.Fatal("second seedDemo: want error")
 	}
-	if tbankID == uuid.Nil || freedomID == uuid.Nil {
-		t.Fatalf("brokerage accounts not found among seeded accounts")
-	}
+}
 
-	opStore := operation.NewStore(pool)
-	instStore := instrument.NewStore(pool)
+func TestSeedDemoBondIsAskedOfTheExchangeByItsOwnID(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	instStore := d.catalog
 
 	// The quotes job sends ListTradable's tickers to MOEX verbatim, which answers
 	// by SECID, so a non-SECID ticker is never priced (#35). The literal is the
@@ -97,28 +218,12 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("the tickers the quotes job would ask for are %v, and MOEX's own id for the demo's bond, %q, is not among them",
 			askable, "SU26238RMFS4")
 	}
+}
 
-	positionsByTicker := func(accountID uuid.UUID) map[string]*portfolio.Position {
-		ops, err := opStore.ListForEngine(ctx, p.SpaceID, accountID)
-		if err != nil {
-			t.Fatalf("ListForEngine: %v", err)
-		}
-		positions, err := portfolio.Compute(ops)
-		if err != nil {
-			t.Fatalf("Compute: %v", err)
-		}
-		out := make(map[string]*portfolio.Position, len(positions))
-		for _, pos := range positions {
-			inst, err := instStore.ByID(ctx, pos.InstrumentID)
-			if err != nil {
-				t.Fatalf("instrument ByID: %v", err)
-			}
-			out[inst.Ticker] = pos
-		}
-		return out
-	}
-
-	tbankPositions := positionsByTicker(tbankID)
+func TestSeedDemoBrokersHoldWhatTheirJournalsSay(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	tbankPositions := d.tbank
 	if len(tbankPositions) != 8 {
 		t.Fatalf("Т-Банк positions = %d, want 8 (SBER, LKOH, SU26238RMFS4, FXUS + TSLA, NVDA, INTC and AMZN left closed by their transfers): %+v",
 			len(tbankPositions), tbankPositions)
@@ -148,7 +253,7 @@ func TestSeedDemo(t *testing.T) {
 			tsla.Quantity.String(), tsla.CostMinor, len(tsla.Lots))
 	}
 
-	freedomPositions := positionsByTicker(freedomID)
+	freedomPositions := d.freedom
 	if len(freedomPositions) != 9 {
 		t.Fatalf("Freedom positions = %d, want 9 (AAPL, GOOGL, MSFT, NVDA, TSLA, KAZ32EUR, WEWKQ, INTC, AMZN): %+v", len(freedomPositions), freedomPositions)
 	}
@@ -191,6 +296,15 @@ func TestSeedDemo(t *testing.T) {
 			t.Errorf("TSLA lots missing one acquired on %s — the transfer re-dated it instead of carrying it over", dateStr)
 		}
 	}
+}
+
+func TestSeedDemoDollarRatesHaveTheirShape(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	aapl := position(t, d.freedom, "AAPL", "Freedom holds Apple")
+	ctx := d.ctx
+	pool := d.pool
+	day := func(s string) time.Time { return demoDay(t, s) }
 
 	// 100 USD = 10000 minor -> 785000 minor = 7850.00 RUB at 78.50.
 	converter := marketdata.NewConverter(marketdata.NewStore(pool))
@@ -201,18 +315,6 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if got != 785_000 {
 		t.Errorf("Convert(100 USD -> RUB) = %d, want 785000 (7850.00 RUB)", got)
-	}
-
-	// USD/RUB is a history, and the demo depends on its shape: each entry
-	// converts at its own date's rate. These cases fail if a seed edit flattens
-	// it.
-	day := func(s string) time.Time {
-		t.Helper()
-		parsed, err := time.Parse(time.DateOnly, s)
-		if err != nil {
-			t.Fatalf("parse %q: %v", s, err)
-		}
-		return parsed
 	}
 	// (a) an operation date with a rate of its own converts at that rate.
 	rateOnBuy, dateOnBuy, err := converter.Rate(ctx, "USD", "RUB", day("2026-05-20"))
@@ -253,6 +355,15 @@ func TestSeedDemo(t *testing.T) {
 	if lotsWithoutRate != 1 {
 		t.Errorf("AAPL lots with no fx rate on their acquisition date = %d, want exactly 1 — seeding a rate for the early buy would remove the demo's only position that honestly refuses to convert", lotsWithoutRate)
 	}
+}
+
+func TestSeedDemoAmazonShowsAMissingAndAHolidayRate(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	converter := d.conv
+	freedomPositions := d.freedom
+	day := func(s string) time.Time { return demoDay(t, s) }
 
 	// AMZN's two lot dates carry the journal's last two sentences:
 	//
@@ -301,11 +412,20 @@ func TestSeedDemo(t *testing.T) {
 	if got := decimal.NewFromInt(200_000).Mul(rateOnHoliday).Round(0).IntPart(); got != 16_200_000 {
 		t.Errorf("AMZN's datable parcel in rubles = %d, want 16200000 (162 000,00 ₽ = 200000 × 81.00) — the figure the transfer row and the buy row four lines above it must agree on", got)
 	}
+}
+
+func TestSeedDemoJournalRunsPastOnePage(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	opStore := d.ops
+	tbankID := d.tbankID
+	day := func(s string) time.Time { return demoDay(t, s) }
 
 	// Т-Банк's journal must run past one 50-row page (JOURNAL_PAGE_SIZE, also
 	// defaultListLimit), so "show more" appears on the stand (#86); the server's
 	// has_more is what is asserted.
-	firstPage, hasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 0, operation.JournalFilter{})
+	firstPage, hasMore, err := opStore.ListByAccount(ctx, d.space, tbankID, 50, 0, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("ListByAccount(Т-Банк, 50, 0): %v", err)
 	}
@@ -313,7 +433,7 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Т-Банк journal page one = %d rows, has_more = %v; want a full 50 and true — the demo must be able to show the «Показать еще» button",
 			len(firstPage), hasMore)
 	}
-	rest, restHasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 50, operation.JournalFilter{})
+	rest, restHasMore, err := opStore.ListByAccount(ctx, d.space, tbankID, 50, 50, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("ListByAccount(Т-Банк, 50, 50): %v", err)
 	}
@@ -332,6 +452,17 @@ func TestSeedDemo(t *testing.T) {
 				o.OccurredOn.Format(time.DateOnly), o.Currency, o.InstrumentID)
 		}
 	}
+}
+
+func TestSeedDemoMicrosoftGainsInDollarsAndLosesInRoubles(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	pool := d.pool
+	converter := d.conv
+	freedomPositions := d.freedom
+	on := demoToday
+	rateToday := d.rateToday(t)
 
 	// One open position whose unrealized profit has opposite signs in dollars
 	// and roubles (owner's decision 2026-07-29). Redone from the seeded ingredients so
@@ -347,15 +478,6 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if len(msft.Lots) != 1 {
 		t.Fatalf("MSFT lots = %d, want 1 — the sign flip is stated for a single-lot position", len(msft.Lots))
-	}
-	// "Today" is any date past the newest seeded rate, so this resolves to the
-	// same 78.50 the running instance uses, without depending on the clock.
-	rateToday, dateToday, err := converter.Rate(ctx, "USD", "RUB", day("2099-01-01"))
-	if err != nil {
-		t.Fatalf("Rate(USD -> RUB, today): %v", err)
-	}
-	if !dateToday.Equal(on) {
-		t.Errorf("newest USD/RUB rate is dated %s, want %s — the sign flip below is struck against the last rate in the table", dateToday.Format(time.DateOnly), on.Format(time.DateOnly))
 	}
 	rateOnLot, _, err := converter.Rate(ctx, "USD", "RUB", mustAcquired(t, msft.Lots[0].AcquiredOn, "the MSFT lot"))
 	if err != nil {
@@ -390,6 +512,17 @@ func TestSeedDemo(t *testing.T) {
 	if oldCostRUB := decimal.NewFromInt(msft.CostMinor).Mul(rateToday).Round(0).IntPart(); marketRUB-oldCostRUB <= 0 {
 		t.Errorf("basis at today's rate = %d gives a ruble profit of %d: the seed no longer distinguishes the historical basis from the current one, and the demo has nothing left to show", oldCostRUB, marketRUB-oldCostRUB)
 	}
+}
+
+func TestSeedDemoTeslaKeepsItsPurchaseDayRatesAcrossTheTransfer(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	tsla := position(t, d.freedom, "TSLA", "Freedom holds Tesla by transfer")
+	ctx := d.ctx
+	opStore := d.ops
+	converter := d.conv
+	tbankID := d.tbankID
+	rateToday := d.rateToday(t)
 
 	// TSLA's lots converted at their purchase days, not the transfer day:
 	//
@@ -418,7 +551,7 @@ func TestSeedDemo(t *testing.T) {
 
 	// The source account's journal row converts the same breakdown (see
 	// operation.Store.attachTransferLots), so it shows 118 000,00 ₽ too.
-	tbankJournal, err := opStore.ListForEngine(ctx, p.SpaceID, tbankID)
+	tbankJournal, err := opStore.ListForEngine(ctx, d.space, tbankID)
 	if err != nil {
 		t.Fatalf("ListForEngine Т-Банк: %v", err)
 	}
@@ -446,6 +579,16 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Т-Банк transfer_out carries %d pieces worth %d ₽, want 2 worth %d — one pair of legs may not disagree about the same ten shares",
 			len(outLeg.TransferLots), outLegBaseCost, correctBaseCost)
 	}
+}
+
+func TestSeedDemoNvidiaLeavesTheEarliestParcelFirst(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	converter := d.conv
+	tbankPositions := d.tbank
+	freedomPositions := d.freedom
+	day := func(s string) time.Time { return demoDay(t, s) }
 
 	// NVDA: a parcel that arrived by transfer but was bought earlier leaves first
 	// (НК РФ ст. 214.1 п. 13; 26 CFR 1.1012-1(c)(1)(i)).
@@ -509,30 +652,26 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Т-Банк NVDA after transferring everything = {qty %s cost %d}, want {0 0}",
 			tbankNvda.Quantity.String(), tbankNvda.CostMinor)
 	}
-
-	// realizedInBase rebuilds in_base.realized_pnl_minor from each disposal's
-	// parcels: proceeds and fee at the disposal day's rate, each parcel at its own
-	// purchase day's (НК РФ ст. 210 п. 5), summed as decimals and rounded once, as
-	// portfolio's realizedTerms and sumInBase do. A position with no disposals is
-	// zero and asks for no rate, so AAPL's gap does not block the total.
-	realizedInBase := func(pos *portfolio.Position, what string) int64 {
-		total := decimal.Zero
-		term := func(minor int64, on time.Time) {
-			rate, _, err := converter.Rate(ctx, pos.Currency, "RUB", on)
-			if err != nil {
-				t.Fatalf("Rate(%s -> RUB, %s term on %s): %v", pos.Currency, what, on.Format(time.DateOnly), err)
-			}
-			total = total.Add(decimal.NewFromInt(minor).Mul(rate))
-		}
-		for _, e := range pos.Realizations {
-			term(e.ProceedsMinor, e.OccurredOn)
-			term(-e.FeeMinor, e.OccurredOn)
-			for _, rel := range e.Released {
-				term(-rel.CostMinor, mustAcquired(t, rel.AcquiredOn, what+" released parcel"))
-			}
-		}
-		return total.Round(0).IntPart()
+	// NVDA's settled result differs from a single-rate conversion without
+	// flipping sign:
+	//
+	// 	proceeds 200_000 on 2026-07-22 -> nearest earlier rate, 2026-07-20's 78.50
+	// 	  -> 15_700_000
+	// 	basis    100_000 bought 2026-05-14, rate 60.50 -> 6_050_000
+	// 	  in RUB: 15_700_000 − 6_050_000 = +9_650_000 (+96 500,00 ₽)
+	nvdaBase := d.realizedInBase(t, nvda, "NVDA")
+	if nvdaBase != 9_650_000 {
+		t.Errorf("NVDA realized P&L in RUB = %d, want 9650000 (15 700 000 − 6 050 000 = +96 500,00 ₽)", nvdaBase)
 	}
+}
+
+func TestSeedDemoAlphabetsSettledResultFlipsSignInRoubles(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	converter := d.conv
+	freedomPositions := d.freedom
+	day := func(s string) time.Time { return demoDay(t, s) }
 
 	// Alphabet: the closed deal whose settled result has opposite signs.
 	//
@@ -556,7 +695,7 @@ func TestSeedDemo(t *testing.T) {
 	if portfoliotest.Realized(t, googl) != 50_000 {
 		t.Errorf("GOOGL realized P&L = %d, want 50000 (+$500.00 = 1050000 − 1000000)", portfoliotest.Realized(t, googl))
 	}
-	googlBase := realizedInBase(googl, "GOOGL")
+	googlBase := d.realizedInBase(t, googl, "GOOGL")
 	if googlBase != -13_150_000 {
 		t.Errorf("GOOGL realized P&L in RUB = %d, want -13150000 (68 250 000 − 81 400 000 = −131 500,00 ₽)", googlBase)
 	}
@@ -573,18 +712,12 @@ func TestSeedDemo(t *testing.T) {
 	if flat := decimal.NewFromInt(portfoliotest.Realized(t, googl)).Mul(rateOnSale).Round(0).IntPart(); flat != 3_250_000 || flat <= 0 {
 		t.Errorf("GOOGL result converted at the sale day's rate alone = %d, want 3250000 (+32 500,00 ₽, a PROFIT) — the point of this deal is that no single rate reproduces −131 500,00 ₽", flat)
 	}
+}
 
-	// NVDA's settled result differs from a single-rate conversion without
-	// flipping sign:
-	//
-	// 	proceeds 200_000 on 2026-07-22 -> nearest earlier rate, 2026-07-20's 78.50
-	// 	  -> 15_700_000
-	// 	basis    100_000 bought 2026-05-14, rate 60.50 -> 6_050_000
-	// 	  in RUB: 15_700_000 − 6_050_000 = +9_650_000 (+96 500,00 ₽)
-	nvdaBase := realizedInBase(nvda, "NVDA")
-	if nvdaBase != 9_650_000 {
-		t.Errorf("NVDA realized P&L in RUB = %d, want 9650000 (15 700 000 − 6 050 000 = +96 500,00 ₽)", nvdaBase)
-	}
+func TestSeedDemoFreedomsRealizedTotalHasOppositeSigns(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	freedomPositions := d.freedom
 
 	// The account's «Зафиксировано» line, summed as portfolio.realizedTotals
 	// does, with opposite signs across the display toggle:
@@ -598,7 +731,7 @@ func TestSeedDemo(t *testing.T) {
 	var accountUSD, accountRUB int64
 	for ticker, pos := range freedomPositions {
 		accountUSD += portfoliotest.Realized(t, pos)
-		accountRUB += realizedInBase(pos, ticker)
+		accountRUB += d.realizedInBase(t, pos, ticker)
 	}
 	if accountUSD != 150_000 || accountRUB != -3_500_000 {
 		t.Errorf("Freedom KZ realized total = %d USD / %d RUB, want 150000 (+$1 500.00) / -3500000 (−35 000,00 ₽)", accountUSD, accountRUB)
@@ -607,6 +740,14 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Freedom KZ realized total = %d USD / %d RUB: the account's own «Зафиксировано» line must come out with opposite signs in the two display modes — that is what makes the plan's consequence visible without opening a single position",
 			accountUSD, accountRUB)
 	}
+}
+
+func TestSeedDemoIntelHasNoPurchaseDate(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	aapl := position(t, d.freedom, "AAPL", "Freedom holds Apple")
+	tbankPositions := d.tbank
+	freedomPositions := d.freedom
 
 	// Two different "no rouble figures" sentences on one screen (#66):
 	//
@@ -642,6 +783,18 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Т-Банк INTC after transferring everything = {qty %s cost %d}, want {0 0}",
 			tbankIntc.Quantity.String(), tbankIntc.CostMinor)
 	}
+}
+
+func TestSeedDemoEurobondIsValuedInAThirdCurrency(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	pool := d.pool
+	instStore := d.catalog
+	converter := d.conv
+	freedomPositions := d.freedom
+	on := demoToday
+	rateToday := d.rateToday(t)
 
 	// The third-currency valuation (#39): a euro face, a dollar position, a rouble
 	// space. Redone from the seeded face, quote and rates as portfolio.marketValue
@@ -714,6 +867,16 @@ func TestSeedDemo(t *testing.T) {
 	if got := decimal.NewFromInt(bond.CostMinor).Mul(bondLotRate).Round(0).IntPart(); got != 37_375_000 {
 		t.Errorf("KAZ32EUR cost in RUB = %d, want 37375000 (373 750,00 ₽ = 575000 × 65.00, that lot's own day)", got)
 	}
+}
+
+func TestSeedDemoWeWorkIsQuotedBelowACent(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	pool := d.pool
+	instStore := d.catalog
+	freedomPositions := d.freedom
+	on := demoToday
 
 	// The sub-cent quote (#30), pinned by its property: below a hundredth,
 	// above zero, on a share (other types have no price line).
@@ -742,6 +905,17 @@ func TestSeedDemo(t *testing.T) {
 	if got := weworkQuote.Price.Mul(wework.Quantity).Shift(2).Round(0).IntPart(); got != 1_250 {
 		t.Errorf("WEWKQ valuation = %d, want 1250 ($12,50 = 5000 × 0.0025) — a real, nonzero holding priced at a fraction of a cent", got)
 	}
+}
+
+func TestSeedDemoTotalConvertsEveryCurrency(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	pool := d.pool
+	converter := d.conv
+	tbankPositions := d.tbank
+	totals := d.totals
+	on := demoToday
 
 	// Every held currency has a rate into RUB, so GET /summary's total has
 	// nothing unconverted; mirrors handleSummary.
@@ -779,6 +953,16 @@ func TestSeedDemo(t *testing.T) {
 	if want := decimal.RequireFromString("305.50"); !sberQuote.Price.Equal(want) {
 		t.Errorf("SBER quote price = %s, want %s", sberQuote.Price.String(), want.String())
 	}
+}
+
+func TestSeedDemoBondPriceIsTheTradeDialogs(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	pool := d.pool
+	instStore := d.catalog
+	tbankPositions := d.tbank
+	tbankID := d.tbankID
 
 	// The OFZ row is what the trade dialog produces from 95,00 % (#77):
 	//
@@ -803,7 +987,7 @@ func TestSeedDemo(t *testing.T) {
 	// major, percent to fraction.
 	wantOFZPrice := decimal.NewFromInt(*ofzInst.FaceValueMinor).Shift(-2).
 		Mul(decimal.RequireFromString("95")).Shift(-2)
-	tbankOps, err := operation.NewStore(pool).ListForEngine(ctx, p.SpaceID, tbankID)
+	tbankOps, err := operation.NewStore(pool).ListForEngine(ctx, d.space, tbankID)
 	if err != nil {
 		t.Fatalf("ListForEngine Т-Банк: %v", err)
 	}
@@ -831,6 +1015,16 @@ func TestSeedDemo(t *testing.T) {
 	if ofzBuys != 1 {
 		t.Errorf("OFZ buys = %d, want exactly 1 — the arithmetic above is stated for a single purchase", ofzBuys)
 	}
+}
+
+func TestSeedDemoQuotesAreDatedBySessions(t *testing.T) {
+	t.Parallel()
+	d := seeded(t)
+	ctx := d.ctx
+	pool := d.pool
+	tbankPositions := d.tbank
+	freedomPositions := d.freedom
+	on := demoToday
 
 	// Quote dates are sessions (#90), shown as «Цена на …». They do not all
 	// share one date (that would read as a page stamp), and each is a weekday no
@@ -862,11 +1056,6 @@ func TestSeedDemo(t *testing.T) {
 	if len(sessions) < 2 {
 		t.Errorf("seeded quotes span %d distinct session dates (%v), want at least 2 — with one date on every row the «Цена на …» caption cannot be told apart from a page-wide stamp",
 			len(sessions), sessions)
-	}
-
-	// second run refuses (instance not empty)
-	if err := seedDemo(ctx, pool); err == nil {
-		t.Fatal("second seedDemo: want error")
 	}
 }
 
