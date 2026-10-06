@@ -36,8 +36,30 @@ function formatWith(
 const FULL_FRACTION_DIGITS = 2;
 const COMPACT_FRACTION_DIGITS = 0;
 
+// Every amount is kept in hundredths whatever its currency (decision Р-7): a
+// currency with no fraction, such as the yen, is written without one when the
+// amount is whole; a three-decimal one, such as the Kuwaiti dinar, keeps two.
+const wholeCurrencies = new Map<string, boolean>();
+
+function wholeCurrency(currency: string): boolean {
+  let whole = wholeCurrencies.get(currency);
+  if (whole === undefined) {
+    try {
+      whole =
+        new Intl.NumberFormat("ru-RU", { style: "currency", currency }).resolvedOptions()
+          .maximumFractionDigits === 0;
+    } catch {
+      whole = false;
+    }
+    wholeCurrencies.set(currency, whole);
+  }
+  return whole;
+}
+
 export function formatMinor(amountMinor: number, currency: string): string {
-  return formatWith(amountMinor, currency, FULL_FRACTION_DIGITS);
+  const digits =
+    amountMinor % 100 === 0 && wholeCurrency(currency) ? 0 : FULL_FRACTION_DIGITS;
+  return formatWith(amountMinor, currency, digits);
 }
 
 // Whether the compact form would render this amount's magnitude as zero,
