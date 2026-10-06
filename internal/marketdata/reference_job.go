@@ -43,18 +43,46 @@ type referencePricesWorker struct {
 	store       *Store
 	ops         instrumentFirstDays
 	instruments instrumentsByID
-	nav         NAVProvider
+	navs        []NAVProvider
 	foreign     ForeignQuoteProvider
 	log         *slog.Logger
 	now         func() time.Time
 }
 
 // NewReferencePricesWorker builds the River worker that stores reference
-// prices. Either provider may be nil, and its kind is then not fetched.
+// prices. A fund is valued by the first NAV source that publishes it; with
+// none, or a nil foreign feed, that kind is not fetched.
 func NewReferencePricesWorker(store *Store, ops instrumentFirstDays, instruments instrumentsByID,
-	nav NAVProvider, foreign ForeignQuoteProvider, log *slog.Logger,
+	navs []NAVProvider, foreign ForeignQuoteProvider, log *slog.Logger,
 ) river.Worker[RefreshReferencePricesArgs] {
-	return &referencePricesWorker{store: store, ops: ops, instruments: instruments, nav: nav, foreign: foreign, log: log, now: time.Now}
+	return &referencePricesWorker{store: store, ops: ops, instruments: instruments, navs: navs, foreign: foreign, log: log, now: time.Now}
+}
+
+// navFund is a fund and the NAV source that publishes it.
+type navFund struct {
+	source NAVProvider
+	ticker string
+}
+
+// navFunds is every fund the NAV sources publish, by ISIN, the earlier source
+// first. A source that does not answer is logged and skipped.
+func (w *referencePricesWorker) navFunds(ctx context.Context) (map[string]navFund, error) {
+	out := map[string]navFund{}
+	var failed error
+	for _, source := range w.navs {
+		funds, err := source.Funds(ctx)
+		if err != nil {
+			w.log.Warn("marketdata: list the funds with a published NAV failed", "source", source.Name(), "err", err)
+			failed = err
+			continue
+		}
+		for isin, ticker := range funds {
+			if _, known := out[isin]; !known {
+				out[isin] = navFund{source: source, ticker: ticker}
+			}
+		}
+	}
+	return out, failed
 }
 
 func (w *referencePricesWorker) Timeout(*river.Job[RefreshReferencePricesArgs]) time.Duration {
@@ -91,7 +119,7 @@ func (w *referencePricesWorker) Work(ctx context.Context, _ *river.Job[RefreshRe
 
 	today := utcDay(w.now())
 	var (
-		funds   map[string]string
+		funds   map[string]navFund
 		lastErr error
 	)
 	for _, id := range ids {
@@ -111,23 +139,23 @@ func (w *referencePricesWorker) Work(ctx context.Context, _ *river.Job[RefreshRe
 			fetchErr error
 		)
 		switch {
-		case paper.Type == instrument.TypeETF && isin != "" && w.nav != nil:
+		case paper.Type == instrument.TypeETF && isin != "" && len(w.navs) > 0:
 			if funds == nil {
-				if funds, err = w.nav.Funds(ctx); err != nil {
-					w.log.Warn("marketdata: list the funds with a published NAV failed", "source", w.nav.Name(), "err", err)
-					lastErr, funds = err, map[string]string{}
+				var listErr error
+				if funds, listErr = w.navFunds(ctx); listErr != nil {
+					lastErr = listErr
 				}
 			}
-			ticker, ok := funds[isin]
+			fund, ok := funds[isin]
 			if !ok {
 				continue
 			}
-			kind, source = ReferenceNAV, w.nav.Name()
+			kind, source = ReferenceNAV, fund.source.Name()
 			from = after(from, navCovered, id)
 			if from.After(today) {
 				continue
 			}
-			days, fetchErr = w.nav.NAVHistory(ctx, ticker, from)
+			days, fetchErr = fund.source.NAVHistory(ctx, fund.ticker, from)
 		case paper.Type == instrument.TypeShare && instrument.ForeignISIN(isin) && w.foreign != nil:
 			kind, source = ReferenceForeign, w.foreign.Name()
 			from = after(from, foreignCovered, id)

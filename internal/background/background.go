@@ -49,7 +49,7 @@ const (
 // papers no broker's calendar covers (Р-14), foreign papers' splits and
 // cryptocurrencies' prices (Р-20). A nil one is not fetched.
 type ReferenceSources struct {
-	NAV       marketdata.NAVProvider
+	NAV       []marketdata.NAVProvider
 	Foreign   marketdata.ForeignQuoteProvider
 	Dividends marketdata.DividendFeed
 	Splits    corporateaction.ForeignSplitsProvider
