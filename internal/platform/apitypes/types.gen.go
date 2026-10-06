@@ -842,6 +842,7 @@ func (e TradingModeKind) Valid() bool {
 const (
 	WithheldAbroadStateEstimated WithheldAbroadState = "estimated"
 	WithheldAbroadStateReported  WithheldAbroadState = "reported"
+	WithheldAbroadStateStated    WithheldAbroadState = "stated"
 	WithheldAbroadStateUnknown   WithheldAbroadState = "unknown"
 )
 
@@ -851,6 +852,8 @@ func (e WithheldAbroadState) Valid() bool {
 	case WithheldAbroadStateEstimated:
 		return true
 	case WithheldAbroadStateReported:
+		return true
+	case WithheldAbroadStateStated:
 		return true
 	case WithheldAbroadStateUnknown:
 		return true
@@ -1381,6 +1384,9 @@ type ExportAccount struct {
 	Status          string                    `json:"status"`
 	Type            string                    `json:"type"`
 	ValuedByBalance bool                      `json:"valued_by_balance"`
+
+	// WithheldStated Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first
+	WithheldStated []ExportWithheldStated `json:"withheld_stated"`
 }
 
 // ExportBalance defines model for ExportBalance.
@@ -1488,6 +1494,17 @@ type ExportSpace struct {
 	Id           openapi_types.UUID `json:"id"`
 	Name         string             `json:"name"`
 	TaxResidency string             `json:"tax_residency"`
+}
+
+// ExportWithheldStated defines model for ExportWithheldStated.
+type ExportWithheldStated struct {
+	InstrumentId openapi_types.UUID `json:"instrument_id"`
+
+	// PaidOn Date YYYY-MM-DD of the payment
+	PaidOn string `json:"paid_on"`
+
+	// TaxMinor In minor units of the payment's currency
+	TaxMinor int64 `json:"tax_minor"`
 }
 
 // FamilyReturn defines model for FamilyReturn.
@@ -2182,6 +2199,12 @@ type StatePurchasesRequest struct {
 	Purchases []StatedPurchase `json:"purchases"`
 }
 
+// StateWithheldRequest defines model for StateWithheldRequest.
+type StateWithheldRequest struct {
+	// TaxMinor The tax withheld abroad, in minor units of the payment's currency; 0 states that nothing was.
+	TaxMinor int64 `json:"tax_minor"`
+}
+
 // StatedPurchase defines model for StatedPurchase.
 type StatedPurchase struct {
 	// AcquiredOn Date YYYY-MM-DD the shares were bought: not after the day they arrived. Optional — a price without its day still counts, but cannot be converted into another currency (Position.has_undated_lots).
@@ -2680,13 +2703,13 @@ type WithheldAbroad struct {
 	// Currency The payment's currency, which every amount here is in, broker_tax and tax_in_base excepted.
 	Currency string `json:"currency"`
 
-	// GrossMinor ≈ The dividend before withholding: per_share × shares, rounded to a minor unit. Only when `state` is `estimated`.
+	// GrossMinor The dividend before withholding: ≈ per_share × shares, rounded to a minor unit, when `estimated`; received_minor + tax_minor when `stated`.
 	GrossMinor nullable.Nullable[int64] `json:"gross_minor,omitempty"`
 
 	// PerShare The declared dividend per share, from the calendar, in `currency`'s major units. Only when `state` is `estimated`.
 	PerShare nullable.Nullable[string] `json:"per_share,omitempty"`
 
-	// RatePercent ≈ tax_minor ÷ gross_minor as a percentage with one decimal, e.g. "10.0". Only when `state` is `estimated`.
+	// RatePercent tax_minor ÷ gross_minor as a percentage with one decimal, e.g. "10.0", when `estimated` or `stated`.
 	RatePercent nullable.Nullable[string] `json:"rate_percent,omitempty"`
 
 	// ReceivedMinor What arrived for this dividend, every row of the journal that pays it summed (a payment may come in parts).
@@ -2698,20 +2721,20 @@ type WithheldAbroad struct {
 	// Shares The shares the account held at the end of the last day a purchase still carried the right (the record date's eve when the calendar does not say). Only when `state` is `estimated`.
 	Shares nullable.Nullable[string] `json:"shares,omitempty"`
 
-	// State `estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
+	// State `estimated`: gross, tax and rate below are the estimate. `stated`: a person stated the tax from the broker's statement (PUT .../withheld-abroad); tax_minor is that figure, gross_minor is what arrived plus it, and per_share and shares are null. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
 	State WithheldAbroadState `json:"state"`
 
-	// TaxInBase ≈ tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null when not estimated, when the payment is already in the base currency, or when that day has no rate.
+	// TaxInBase tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null without a tax_minor, when the payment is already in the base currency, or when that day has no rate.
 	TaxInBase nullable.Nullable[CurrencyAmount] `json:"tax_in_base,omitempty"`
 
-	// TaxMinor ≈ gross_minor − received_minor, positive: money taken. Only when `state` is `estimated`.
+	// TaxMinor The tax taken, positive: ≈ gross_minor − received_minor when `estimated`; the stated figure when `stated`.
 	TaxMinor nullable.Nullable[int64] `json:"tax_minor,omitempty"`
 
 	// UnknownReason Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`.
 	UnknownReason nullable.Nullable[WithheldAbroadUnknownReason] `json:"unknown_reason,omitempty"`
 }
 
-// WithheldAbroadState `estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
+// WithheldAbroadState `estimated`: gross, tax and rate below are the estimate. `stated`: a person stated the tax from the broker's statement (PUT .../withheld-abroad); tax_minor is that figure, gross_minor is what arrived plus it, and per_share and shares are null. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
 type WithheldAbroadState string
 
 // WithheldAbroadUnknownReason Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`.
@@ -2878,6 +2901,9 @@ type UpdateOperationJSONRequestBody = CreateOperationRequest
 
 // StatePurchasesJSONRequestBody defines body for StatePurchases for application/json ContentType.
 type StatePurchasesJSONRequestBody = StatePurchasesRequest
+
+// StateWithheldAbroadJSONRequestBody defines body for StateWithheldAbroad for application/json ContentType.
+type StateWithheldAbroadJSONRequestBody = StateWithheldRequest
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest

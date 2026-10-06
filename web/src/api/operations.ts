@@ -194,6 +194,23 @@ export function useDeleteOperation() {
   });
 }
 
+// useStateWithheld states the tax withheld abroad from the dividend payment
+// a row belongs to (Р-14), or clears it with null, bringing the estimate back.
+export function useStateWithheld(operation: Operation) {
+  const invalidate = useInvalidateJournal();
+  return useMutation({
+    mutationFn: async (taxMinor: number | null): Promise<void> => {
+      const params = { path: { operationId: operation.id } };
+      const { response, error } =
+        taxMinor === null
+          ? await api.DELETE("/api/v1/operations/{operationId}/withheld-abroad", { params })
+          : await api.PUT("/api/v1/operations/{operationId}/withheld-abroad", { params, body: { tax_minor: taxMinor } });
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: () => invalidate([operation.account_id]),
+  });
+}
+
 // useCreateMoneyTransfer moves money between two of the family's accounts as
 // one transfer.
 export function useCreateMoneyTransfer() {

@@ -45,6 +45,7 @@ type accounts interface {
 
 type journals interface {
 	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
+	StatedWithheld(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID) ([]operation.StatedWithheld, error)
 }
 
 type instruments interface {
@@ -135,7 +136,11 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		if err != nil {
 			return apitypes.SpaceExport{}, err
 		}
-		doc.Accounts = append(doc.Accounts, exportAccount(a, history[a.ID], ops, usernames))
+		stated, err := h.journals.StatedWithheld(ctx, spaceID, []uuid.UUID{a.ID})
+		if err != nil {
+			return apitypes.SpaceExport{}, err
+		}
+		doc.Accounts = append(doc.Accounts, exportAccount(a, history[a.ID], ops, stated, usernames))
 		for _, o := range ops {
 			if o.InstrumentID != nil {
 				papers[*o.InstrumentID] = true
@@ -196,11 +201,19 @@ func (h *Handler) addPapers(ctx context.Context, doc *apitypes.SpaceExport, pape
 	return nil
 }
 
-func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []operation.Operation, usernames map[uuid.UUID]string) apitypes.ExportAccount {
+func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []operation.Operation,
+	stated []operation.StatedWithheld, usernames map[uuid.UUID]string,
+) apitypes.ExportAccount {
 	out := apitypes.ExportAccount{
 		Id: a.ID, Name: a.Name, Type: string(a.Type), Currency: a.Currency, Institution: a.Institution,
 		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance,
 		CreatedAt: a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
+		WithheldStated: []apitypes.ExportWithheldStated{},
+	}
+	for _, w := range stated {
+		out.WithheldStated = append(out.WithheldStated, apitypes.ExportWithheldStated{
+			InstrumentId: w.InstrumentID, PaidOn: w.PaidOn.Format(time.DateOnly), TaxMinor: w.TaxMinor,
+		})
 	}
 	if a.OwnerUserID != nil {
 		out.OwnerUsername = nullable.NewNullableWithValue(usernames[*a.OwnerUserID])

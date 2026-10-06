@@ -87,9 +87,10 @@ func get(t *testing.T, c *http.Client, url string) *http.Response {
 }
 
 // The whole space in one document: members without their passwords, every
-// account with its marks and its journal as stored — a move between accounts
-// with the purchases it carried — the papers named, the registry's events about
-// them and the prices stated by hand, and nothing of another paper.
+// account with its marks, its journal as stored — a move between accounts
+// with the purchases it carried — and the taxes withheld it was told of, the
+// papers named, the registry's events about them and the prices stated by
+// hand, and nothing of another paper.
 func TestTheExportHoldsTheWholeSpace(t *testing.T) {
 	s := newStack(t)
 	a := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Брокер","type":"brokerage","currency":"RUB"}`, http.StatusCreated)["id"].(string)
@@ -101,6 +102,11 @@ func TestTheExportHoldsTheWholeSpace(t *testing.T) {
 	resp, err := s.c.Do(mustRequest(t, http.MethodPut, s.url+"/api/v1/accounts/"+b+"/balance", `{"as_of":"2026-07-03","amount_minor":12345}`))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("balance: %v %v", err, resp)
+	}
+	div := post(t, s.c, s.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend","occurred_on":"2026-07-04","amount_minor":3000,"currency":"RUB"}`, a, sber), http.StatusCreated)["id"].(string)
+	resp, err = s.c.Do(mustRequest(t, http.MethodPut, s.url+"/api/v1/operations/"+div+"/withheld-abroad", `{"tax_minor":300}`))
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("state the tax withheld: %v %v", err, resp)
 	}
 	id := uuid.MustParse(sber)
 	if err := s.md.UpsertQuotes(t.Context(), []marketdata.Quote{
@@ -145,6 +151,7 @@ func TestTheExportHoldsTheWholeSpace(t *testing.T) {
 			Name        string           `json:"name"`
 			Institution string           `json:"institution"`
 			Balances    []map[string]any `json:"balances"`
+			Withheld    []map[string]any `json:"withheld_stated"`
 			Operations  []struct {
 				Type            string           `json:"type"`
 				Note            string           `json:"note"`
@@ -173,8 +180,11 @@ func TestTheExportHoldsTheWholeSpace(t *testing.T) {
 		byName[acc.Name] = i
 	}
 	broker, iis := doc.Accounts[byName["Брокер"]], doc.Accounts[byName["ИИС"]]
-	if len(broker.Operations) != 2 || broker.Operations[0].Type != "buy" || broker.Operations[0].Note != "первая" {
+	if len(broker.Operations) != 3 || broker.Operations[0].Type != "buy" || broker.Operations[0].Note != "первая" {
 		t.Errorf("Брокер's journal = %+v", broker.Operations)
+	}
+	if len(broker.Withheld) != 1 || broker.Withheld[0]["tax_minor"] != float64(300) || broker.Withheld[0]["paid_on"] != "2026-07-04" {
+		t.Errorf("Брокер's stated withholdings = %v, want the 300 stated on 2026-07-04", broker.Withheld)
 	}
 	if len(iis.Operations) != 1 || iis.Operations[0].Type != "transfer_in" || iis.Operations[0].TransferGroupID == nil ||
 		len(iis.Operations[0].Lots) != 1 || iis.Operations[0].Lots[0]["cost_minor"] != float64(40_000) {

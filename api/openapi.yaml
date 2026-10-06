@@ -1118,6 +1118,42 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/{operationId}/withheld-abroad:
+    put:
+      tags: [journal]
+      operationId: stateWithheldAbroad
+      description: >-
+        States the tax withheld abroad from the dividend payment this row belongs to, as the
+        broker's statement gives it (decision Р-14). It takes the place of the estimate in
+        Operation.withheld_abroad, whose `state` becomes `stated`. Stored per payment — account,
+        paper and day — so it holds for every row of that payment and survives an import
+        rewriting the row; an imported row may carry it. Only a dividend on a paper: anything
+        else is a 400.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StateWithheldRequest" }
+      responses:
+        "204": { description: Stated }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [journal]
+      operationId: clearWithheldAbroad
+      description: Removes the stated tax, bringing the estimate back. Nothing stated is not an error.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Cleared }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/positions:
     get:
       tags: [portfolio]
@@ -2147,7 +2183,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, created_at, balances, operations]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, created_at, balances, operations, withheld_stated]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -2166,6 +2202,10 @@ components:
           type: array
           description: The journal as stored, in the order it is folded
           items: { $ref: "#/components/schemas/ExportOperation" }
+        withheld_stated:
+          type: array
+          description: "Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first"
+          items: { $ref: "#/components/schemas/ExportWithheldStated" }
     ExportOperation:
       type: object
       required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots]
@@ -2192,6 +2232,13 @@ components:
           type: array
           description: "The purchases a move carried — quantity, cost and day bought — when it carried any"
           items: { $ref: "#/components/schemas/ExportLot" }
+    ExportWithheldStated:
+      type: object
+      required: [instrument_id, paid_on, tax_minor]
+      properties:
+        instrument_id: { type: string, format: uuid }
+        paid_on: { type: string, description: "Date YYYY-MM-DD of the payment" }
+        tax_minor: { type: integer, format: int64, description: "In minor units of the payment's currency" }
     ExportBalance:
       type: object
       required: [as_of, amount_minor]
@@ -2659,6 +2706,11 @@ components:
           description: "Which term stopped `in_base`, or null when nothing did. Null therefore covers two situations and `currency` tells them apart: either `in_base` is present, or `currency` already equals the space's base currency and there was nothing to convert in the first place — the operation's own amounts ARE the base-currency ones and no «not converted» caption belongs over them at all. Non-null exactly when `in_base` is null and `currency` differs from the base currency. Published wherever `in_base` is, and only there: the journal listing (GET /accounts/{accountId}/operations) computes both, while the create and transfer responses omit both, since those hand back an operation the client just submitted rather than a journal to read. It is the sharper twin of `has_undated_lots`: that one is a standing fact about the operation, published on every response that returns one whether or not there was ever anything to convert, while this one names the term the conversion actually stopped on — and this is the one to caption a row with, since an undated parcel is only the FIRST of three things that can stop it. Before this field existed the screen said «Нет курса на дату операции» over all three, which is false about a parcel whose purchase dates nobody ever recorded, and false again about a transfer whose own date has a perfectly good rate and whose PURCHASE date has none (#79)."
           allOf:
             - $ref: "#/components/schemas/OperationInBaseGap"
+    StateWithheldRequest:
+      type: object
+      required: [tax_minor]
+      properties:
+        tax_minor: { type: integer, format: int64, minimum: 0, maximum: 1000000000000000, description: "The tax withheld abroad, in minor units of the payment's currency; 0 states that nothing was." }
     WithheldAbroad:
       type: object
       required: [state, currency, received_minor, broker_tax]
@@ -2666,8 +2718,8 @@ components:
       properties:
         state:
           type: string
-          enum: [estimated, unknown, reported]
-          description: "`estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated."
+          enum: [estimated, stated, unknown, reported]
+          description: "`estimated`: gross, tax and rate below are the estimate. `stated`: a person stated the tax from the broker's statement (PUT .../withheld-abroad); tax_minor is that figure, gross_minor is what arrived plus it, and per_share and shares are null. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated."
         unknown_reason:
           type: string
           nullable: true
@@ -2675,15 +2727,15 @@ components:
           description: "Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`."
         currency: { type: string, description: "The payment's currency, which every amount here is in, broker_tax and tax_in_base excepted." }
         received_minor: { type: integer, format: int64, description: "What arrived for this dividend, every row of the journal that pays it summed (a payment may come in parts)." }
-        gross_minor: { type: integer, format: int64, nullable: true, description: "≈ The dividend before withholding: per_share × shares, rounded to a minor unit. Only when `state` is `estimated`." }
-        tax_minor: { type: integer, format: int64, nullable: true, description: "≈ gross_minor − received_minor, positive: money taken. Only when `state` is `estimated`." }
-        rate_percent: { type: string, nullable: true, description: "≈ tax_minor ÷ gross_minor as a percentage with one decimal, e.g. \"10.0\". Only when `state` is `estimated`." }
+        gross_minor: { type: integer, format: int64, nullable: true, description: "The dividend before withholding: ≈ per_share × shares, rounded to a minor unit, when `estimated`; received_minor + tax_minor when `stated`." }
+        tax_minor: { type: integer, format: int64, nullable: true, description: "The tax taken, positive: ≈ gross_minor − received_minor when `estimated`; the stated figure when `stated`." }
+        rate_percent: { type: string, nullable: true, description: "tax_minor ÷ gross_minor as a percentage with one decimal, e.g. \"10.0\", when `estimated` or `stated`." }
         per_share: { type: string, nullable: true, description: "The declared dividend per share, from the calendar, in `currency`'s major units. Only when `state` is `estimated`." }
         shares: { type: string, nullable: true, description: "The shares the account held at the end of the last day a purchase still carried the right (the record date's eve when the calendar does not say). Only when `state` is `estimated`." }
         record_date: { type: string, nullable: true, description: "Date YYYY-MM-DD: the matched dividend's record date. Set whenever a calendar entry was matched." }
         tax_in_base:
           nullable: true
-          description: "≈ tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null when not estimated, when the payment is already in the base currency, or when that day has no rate."
+          description: "tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null without a tax_minor, when the payment is already in the base currency, or when that day has no rate."
           allOf:
             - $ref: "#/components/schemas/CurrencyAmount"
         broker_tax:

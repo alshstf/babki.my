@@ -55,46 +55,58 @@ func foreignISIN(isin string) bool {
 	return isin != "" && !strings.HasPrefix(strings.ToUpper(isin), "RU")
 }
 
-// withheldAbroad answers, for each foreign dividend on the page, what was
-// withheld abroad. It reads each such row's whole account journal: a
-// payment's parts and the shares behind it may lie outside the page.
+// withheldAbroad answers, for each dividend on the page of a foreign paper or
+// with a stated tax, what was withheld abroad. It reads each such row's whole
+// account journal: a payment's parts and the shares behind it may lie outside
+// the page.
 func (h *Handler) withheldAbroad(ctx context.Context, spaceID uuid.UUID, page []Operation, base string,
 	rates *marketdata.RateMemo,
 ) (map[uuid.UUID]apitypes.WithheldAbroad, error) {
 	out := map[uuid.UUID]apitypes.WithheldAbroad{}
-	if h.calendar == nil || h.catalog == nil {
-		return out, nil
-	}
-	var ids []uuid.UUID
+	var ids, accounts []uuid.UUID
 	for _, o := range page {
 		if o.Type == TypeDividend && o.InstrumentID != nil {
 			ids = append(ids, *o.InstrumentID)
+			accounts = append(accounts, o.AccountID)
 		}
 	}
 	if len(ids) == 0 {
 		return out, nil
 	}
-	papers, err := h.catalog.ByIDs(ctx, ids)
+	statedList, err := h.store.StatedWithheld(ctx, spaceID, accounts)
 	if err != nil {
 		return nil, err
 	}
-	var foreign []uuid.UUID
-	for id, p := range papers {
-		if foreignISIN(p.ISIN) {
-			foreign = append(foreign, id)
+	stated := make(map[paymentKey]int64, len(statedList))
+	for _, w := range statedList {
+		stated[w.key()] = w.TaxMinor
+	}
+	foreign := map[uuid.UUID]bool{}
+	calendar := map[uuid.UUID][]marketdata.Dividend{}
+	if h.calendar != nil && h.catalog != nil {
+		papers, err := h.catalog.ByIDs(ctx, ids)
+		if err != nil {
+			return nil, err
 		}
-	}
-	if len(foreign) == 0 {
-		return out, nil
-	}
-	calendar, err := h.calendar.DividendsOf(ctx, foreign)
-	if err != nil {
-		return nil, err
+		var foreignIDs []uuid.UUID
+		for id, p := range papers {
+			if foreignISIN(p.ISIN) {
+				foreign[id] = true
+				foreignIDs = append(foreignIDs, id)
+			}
+		}
+		if calendar, err = h.calendar.DividendsOf(ctx, foreignIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	journals := map[uuid.UUID][]Operation{}
 	for _, o := range page {
-		if o.Type != TypeDividend || o.InstrumentID == nil || !foreignISIN(papers[*o.InstrumentID].ISIN) {
+		if o.Type != TypeDividend || o.InstrumentID == nil {
+			continue
+		}
+		statedTax, isStated := stated[paymentOf(o)]
+		if !isStated && !foreign[*o.InstrumentID] {
 			continue
 		}
 		journal, ok := journals[o.AccountID]
@@ -104,13 +116,15 @@ func (h *Handler) withheldAbroad(ctx context.Context, spaceID uuid.UUID, page []
 			}
 			journals[o.AccountID] = journal
 		}
-		w, err := estimateWithheld(o, journal, calendar[*o.InstrumentID])
-		if err != nil {
+		var w apitypes.WithheldAbroad
+		if isStated {
+			w = statedWithheld(o, journal, statedTax)
+		} else if w, err = estimateWithheld(o, journal, calendar[*o.InstrumentID]); err != nil {
 			return nil, err
 		}
-		if w.State == apitypes.WithheldAbroadStateEstimated && o.Currency != base {
+		if tax, getErr := w.TaxMinor.Get(); getErr == nil && o.Currency != base {
 			if res := rates.Rate(ctx, o.Currency, base, portfolio.RateDay(o)); res.Err == nil {
-				if minor, err := money.Minor(decimal.NewFromInt(w.TaxMinor.MustGet()).Mul(res.Rate)); err == nil {
+				if minor, err := money.Minor(decimal.NewFromInt(tax).Mul(res.Rate)); err == nil {
 					w.TaxInBase = nullable.NewNullableWithValue(apitypes.CurrencyAmount{Currency: base, AmountMinor: minor})
 				}
 			} else if !errors.Is(res.Err, marketdata.ErrNoRate) {
@@ -122,10 +136,9 @@ func (h *Handler) withheldAbroad(ctx context.Context, spaceID uuid.UUID, page []
 	return out, nil
 }
 
-// estimateWithheld is the answer for one dividend row d of a foreign paper,
-// given its account's journal and the paper's calendar.
-func estimateWithheld(d Operation, journal []Operation, calendar []marketdata.Dividend) (apitypes.WithheldAbroad, error) {
-	w := apitypes.WithheldAbroad{
+// emptyWithheld is the answer for d with nothing worked out yet.
+func emptyWithheld(d Operation, journal []Operation) apitypes.WithheldAbroad {
+	return apitypes.WithheldAbroad{
 		Currency: d.Currency, ReceivedMinor: d.AmountMinor, BrokerTax: brokerTaxOn(journal, *d.InstrumentID, d.OccurredOn),
 		GrossMinor: nullable.NewNullNullable[int64](), TaxMinor: nullable.NewNullNullable[int64](),
 		RatePercent: nullable.NewNullNullable[string](), PerShare: nullable.NewNullNullable[string](),
@@ -133,6 +146,33 @@ func estimateWithheld(d Operation, journal []Operation, calendar []marketdata.Di
 		TaxInBase:     nullable.NewNullNullable[apitypes.CurrencyAmount](),
 		UnknownReason: nullable.NewNullNullable[apitypes.WithheldAbroadUnknownReason](),
 	}
+}
+
+// statedWithheld is the answer for d when a person stated the tax: what
+// arrived that day on the paper, plus the tax, is the gross.
+func statedWithheld(d Operation, journal []Operation, tax int64) apitypes.WithheldAbroad {
+	w := emptyWithheld(d, journal)
+	w.State = apitypes.WithheldAbroadStateStated
+	w.ReceivedMinor = 0
+	for _, o := range journal {
+		if o.Type == TypeDividend && o.InstrumentID != nil && paymentOf(o) == paymentOf(d) {
+			w.ReceivedMinor += o.AmountMinor
+		}
+	}
+	gross := w.ReceivedMinor + tax
+	w.GrossMinor = nullable.NewNullableWithValue(gross)
+	w.TaxMinor = nullable.NewNullableWithValue(tax)
+	if gross > 0 {
+		w.RatePercent = nullable.NewNullableWithValue(
+			decimal.NewFromInt(tax).Div(decimal.NewFromInt(gross)).Shift(2).StringFixed(1))
+	}
+	return w
+}
+
+// estimateWithheld is the answer for one dividend row d of a foreign paper,
+// given its account's journal and the paper's calendar.
+func estimateWithheld(d Operation, journal []Operation, calendar []marketdata.Dividend) (apitypes.WithheldAbroad, error) {
+	w := emptyWithheld(d, journal)
 	unknown := func(reason apitypes.WithheldAbroadUnknownReason) (apitypes.WithheldAbroad, error) {
 		w.State = apitypes.WithheldAbroadStateUnknown
 		w.UnknownReason = nullable.NewNullableWithValue(reason)

@@ -73,6 +73,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/operations/money-transfer", edit(h.handleMoneyTransfer))
 	srv.Mount("GET /api/v1/instruments/{instrumentId}/operations", view(h.handleListByInstrument))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
+	srv.Mount("PUT /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleStateWithheld))
+	srv.Mount("DELETE /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleClearWithheld))
 	srv.Mount("POST /api/v1/operations/arrivals", edit(h.handleCreateArrival))
 	srv.Mount("GET /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals", view(h.handleListArrivals))
 }
