@@ -19,6 +19,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Node's types follow the Node the UI is built with (22, here and in CI),
+    # not the newest Node.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       web:
         patterns: ["*"]
@@ -43,6 +48,8 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Go moves as one: go.mod, CI and the image together, by hand.
+      - dependency-name: golang
     groups:
       images:
         patterns: ["*"]
