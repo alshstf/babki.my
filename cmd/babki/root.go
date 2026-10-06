@@ -29,6 +29,7 @@ import (
 	"babki.my/babki/internal/marketdata/coingecko"
 	"babki.my/babki/internal/marketdata/finex"
 	"babki.my/babki/internal/marketdata/moex"
+	"babki.my/babki/internal/marketdata/tcapital"
 	"babki.my/babki/internal/marketdata/yahoo"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
@@ -235,7 +236,11 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 		tinvest.NewRechecker(tinvest.NewStore(r.pool), enqueuer, r.log), r.log)
 	feed := yahoo.New(&http.Client{Timeout: referenceHTTPTimeout}, "")
 	references := background.ReferenceSources{
-		NAV:       finex.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+		// FinEx's funds first; T-Capital's closed funds of blocked assets (#334).
+		NAV: []marketdata.NAVProvider{
+			finex.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+			tcapital.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+		},
 		Foreign:   feed,
 		Dividends: feed,
 		Splits:    feed,

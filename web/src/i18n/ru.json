@@ -560,7 +560,7 @@
       "tinvestDividends": "Т-Инвестиции — календарь дивидендов",
       "moexSplits": "Мосбиржа — сплиты",
       "foreignSplits": "Yahoo Finance — сплиты иностранных бумаг",
-      "referencePrices": "FinEx и Yahoo Finance — СЧА фондов и цены западных бирж",
+      "referencePrices": "FinEx, Т-Капитал и Yahoo Finance — СЧА фондов, стоимость паёв закрытых фондов и цены западных бирж",
       "dividendCalendar": "Yahoo Finance — календарь дивидендов, если брокер его не даёт",
       "cryptoPrices": "CoinGecko — цены криптовалют (данные CoinGecko)"
     }

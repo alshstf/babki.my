@@ -77,7 +77,7 @@ func TestReferencePricesAreFetchedByKind(t *testing.T) {
 	var navAsked, foreignAsked []string
 	w := NewReferencePricesWorker(store, firstDays{
 		fxit: day("2026-07-10"), msft: day("2026-07-20"), dis: day("2026-07-20"), sber: day("2026-07-01"),
-	}, papers, stubNAV{&navAsked}, stubForeign{&foreignAsked}, slog.Default()).(*referencePricesWorker)
+	}, papers, []NAVProvider{stubNAV{&navAsked}}, stubForeign{&foreignAsked}, slog.Default()).(*referencePricesWorker)
 	w.now = func() time.Time { return day("2026-08-03").Add(15 * time.Hour) }
 
 	if err := w.Work(ctx, nil); err == nil {
@@ -140,5 +140,58 @@ func TestReferencePricesOnTakeTheLatestEarlierDay(t *testing.T) {
 	series, err := store.ReferenceSeries(ctx, id, ReferenceNAV, day("2026-08-01"), day("2026-08-31"))
 	if err != nil || len(series) != 2 {
 		t.Errorf("series = %+v, %v; want both days", series, err)
+	}
+}
+
+// stubClosedFunds publishes one closed fund FinEx does not, and FXIT too,
+// which FinEx answers first.
+type stubClosedFunds struct{ asked *[]string }
+
+func (s stubClosedFunds) Funds(context.Context) (map[string]string, error) {
+	return map[string]string{"RU000A1071G8": "TECH2", "IE00BD3QJ757": "FXIT-COPY"}, nil
+}
+
+func (s stubClosedFunds) NAVHistory(_ context.Context, ticker string, from time.Time) ([]DayPrice, error) {
+	*s.asked = append(*s.asked, ticker)
+	return []DayPrice{{Day: day("2026-07-31"), Price: decimal.RequireFromString("0.0198"), Currency: "RUB"}}, nil
+}
+
+func (stubClosedFunds) Name() string { return "stub-closed" }
+
+// A fund is valued by the first NAV source that publishes it: FinEx's own by
+// FinEx, a closed fund only the second source knows by that source (#334).
+func TestAFundIsValuedByTheFirstSourceThatPublishesIt(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := t.Context()
+	store, papers := NewStore(pool), instrument.NewStore(pool)
+	mk := func(inst instrument.Instrument) uuid.UUID {
+		created, err := papers.Create(ctx, inst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created.ID
+	}
+	fxit := mk(instrument.Instrument{Type: instrument.TypeETF, Name: "FinEx ИТ", Ticker: "IE00BD3QJ757", ISIN: "IE00BD3QJ757", Currency: "RUB"})
+	tech2 := mk(instrument.Instrument{Type: instrument.TypeETF, Name: "ЗПИФ Технологии", Ticker: "TECH2", ISIN: "RU000A1071G8", Currency: "RUB"})
+
+	var finexAsked, closedAsked []string
+	w := NewReferencePricesWorker(store, firstDays{fxit: day("2026-07-10"), tech2: day("2026-07-10")}, papers,
+		[]NAVProvider{stubNAV{&finexAsked}, stubClosedFunds{&closedAsked}}, nil, slog.Default()).(*referencePricesWorker)
+	w.now = func() time.Time { return day("2026-08-03") }
+	if err := w.Work(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(closedAsked) != 1 || closedAsked[0] != "TECH2" {
+		t.Errorf("the second source was asked %v, want only TECH2: FinEx answers FXIT", closedAsked)
+	}
+	prices, err := store.ReferencePricesOn(ctx, []uuid.UUID{fxit, tech2}, day("2026-08-03"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prices[tech2][ReferenceNAV]; got.Source != "stub-closed" || !got.Price.Equal(decimal.RequireFromString("0.0198")) {
+		t.Errorf("TECH2 = %+v, want 0.0198 from the closed funds' source", got)
+	}
+	if got := prices[fxit][ReferenceNAV]; got.Source != "stub-nav" {
+		t.Errorf("FXIT from %q, want FinEx's own", got.Source)
 	}
 }
