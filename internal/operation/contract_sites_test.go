@@ -183,7 +183,7 @@ func TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces(t *testing.T)
 	if err != nil {
 		t.Fatalf("read api/openapi.yaml: %v", err)
 	}
-	if got := strings.Count(string(body), "NOT EARLIER THAN "+want); got != 2 {
+	if got := strings.Count(string(body), "from "+want+" (a typo guard"); got != 2 {
 		t.Errorf("api/openapi.yaml states the %s floor %d times, want 2 "+
 			"(CreateOperationRequest.occurred_on and TransferRequest.occurred_on)", want, got)
 	}
