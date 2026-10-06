@@ -34,6 +34,11 @@ describe("formatMinor", () => {
     expect(out).toContain("1,00");
     expect(out).toContain("XXX");
   });
+  it("writes a currency with no fraction whole, unless the amount has one", () => {
+    expect(norm(formatMinor(123_400, "JPY"))).toBe("1 234 JPY");
+    expect(norm(formatMinor(123_450, "JPY"))).toBe("1 234,50 JPY");
+    expect(norm(formatMinor(123_400, "KWD"))).toBe("1 234,00 KWD");
+  });
 });
 
 describe("formatMinorCompact", () => {
