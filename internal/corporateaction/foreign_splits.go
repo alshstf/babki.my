@@ -25,7 +25,7 @@ func (RefreshForeignSplitsArgs) Kind() string { return "corporateaction.refresh_
 
 // ForeignSplitsProvider is the part of *yahoo.Client this worker needs.
 type ForeignSplitsProvider interface {
-	SymbolFor(ctx context.Context, isin string) (string, bool, error)
+	SymbolFor(ctx context.Context, isin, ticker string) (string, bool, error)
 	Splits(ctx context.Context, symbol string, from, to time.Time) ([]yahoo.Split, error)
 	SplitsURL(symbol string) string
 }
@@ -104,7 +104,7 @@ func (w *refreshForeignSplitsWorker) Work(ctx context.Context, _ *river.Job[Refr
 			continue
 		}
 		asked[isin] = true
-		symbol, found, err := w.feed.SymbolFor(ctx, isin)
+		symbol, found, err := w.feed.SymbolFor(ctx, isin, paper.Ticker)
 		if err != nil {
 			w.log.Warn("corporateaction: look a foreign paper up for its splits failed", "isin", isin, "err", err)
 			failed = append(failed, err)

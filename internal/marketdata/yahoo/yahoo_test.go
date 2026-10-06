@@ -22,6 +22,13 @@ func serve(t *testing.T, chart string) *yahoo.Client {
 		switch {
 		case r.URL.Path == "/v1/finance/search" && r.URL.Query().Get("q") == "US5949181045":
 			file = "search_msft.json"
+		case r.URL.Path == "/v1/finance/search" && r.URL.Query().Get("q") == "TSM":
+			// TSMC's ADR, by its ticker (recorded 2026-10-06, trimmed).
+			_, _ = w.Write([]byte(`{"quotes":[{"symbol":"TSM","quoteType":"EQUITY"},{"symbol":"TSMC34.SA","quoteType":"EQUITY"}]}`))
+			return
+		case r.URL.Path == "/v1/finance/search" && r.URL.Query().Get("q") == "T":
+			_, _ = w.Write([]byte(`{"quotes":[{"symbol":"TT","quoteType":"EQUITY"}]}`))
+			return
 		case r.URL.Path == "/v1/finance/search":
 			_, _ = w.Write([]byte(`{"quotes":[]}`))
 			return
@@ -47,11 +54,20 @@ func serve(t *testing.T, chart string) *yahoo.Client {
 
 func TestASharesSymbolIsFoundByItsISIN(t *testing.T) {
 	c := serve(t, "")
-	if s, ok, err := c.SymbolFor(context.Background(), "US5949181045"); err != nil || !ok || s != "MSFT" {
+	if s, ok, err := c.SymbolFor(context.Background(), "US5949181045", "MSFT-RM"); err != nil || !ok || s != "MSFT" {
 		t.Errorf("SymbolFor = %q, %v, %v; want MSFT", s, ok, err)
 	}
-	if _, ok, err := c.SymbolFor(context.Background(), "US8740391003"); err != nil || ok {
-		t.Errorf("an ISIN the search does not know: ok = %v, err = %v; want not found", ok, err)
+	if _, ok, err := c.SymbolFor(context.Background(), "US8740391003", ""); err != nil || ok {
+		t.Errorf("an ISIN the search does not know, and no ticker: ok = %v, err = %v; want not found", ok, err)
+	}
+	// A receipt the search does not find by ISIN is found by its ticker, the
+	// Moscow listing's «-RM» dropped; a symbol not spelled as the ticker is not
+	// taken.
+	if s, ok, err := c.SymbolFor(context.Background(), "US8740391003", "TSM-RM"); err != nil || !ok || s != "TSM" {
+		t.Errorf("TSMC by its ticker = %q, %v, %v; want TSM", s, ok, err)
+	}
+	if s, ok, err := c.SymbolFor(context.Background(), "US00206R1023", "T"); err != nil || ok {
+		t.Errorf("a ticker matching no symbol exactly = %q, %v, %v; want not found", s, ok, err)
 	}
 }
 

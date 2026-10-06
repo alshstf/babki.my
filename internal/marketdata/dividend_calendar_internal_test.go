@@ -17,7 +17,7 @@ import (
 // stubDividends knows Coca-Cola and TSMC, two dividends each.
 type stubDividends struct{ asked *[]string }
 
-func (stubDividends) SymbolFor(_ context.Context, isin string) (string, bool, error) {
+func (stubDividends) SymbolFor(_ context.Context, isin, _ string) (string, bool, error) {
 	switch isin {
 	case "US1912161007":
 		return "KO", true, nil

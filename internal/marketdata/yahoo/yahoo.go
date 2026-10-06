@@ -60,15 +60,34 @@ type wireSearch struct {
 	} `json:"quotes"`
 }
 
-// SymbolFor is the symbol of the first share or fund the search finds for isin.
-func (c *Client) SymbolFor(ctx context.Context, isin string) (string, bool, error) {
-	q := url.Values{"q": {isin}, "quotesCount": {"5"}, "newsCount": {"0"}}
+// SymbolFor is the symbol of the first share or fund the search finds for
+// isin. A depositary receipt is often not found by its ISIN (TSMC's), so the
+// paper's ticker is searched next, and only a symbol spelled exactly as the
+// ticker is taken: a ticker alone names different papers on different
+// exchanges. The «-RM» of a Moscow listing of a foreign share is not part of
+// its home symbol.
+func (c *Client) SymbolFor(ctx context.Context, isin, ticker string) (string, bool, error) {
+	if symbol, ok, err := c.search(ctx, isin, ""); err != nil || ok {
+		return symbol, ok, err
+	}
+	ticker = strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(ticker), "-RM"))
+	if ticker == "" {
+		return "", false, nil
+	}
+	return c.search(ctx, ticker, ticker)
+}
+
+// search is the first share or fund found for query; with exact set, only one
+// whose symbol is exact.
+func (c *Client) search(ctx context.Context, query, exact string) (string, bool, error) {
+	q := url.Values{"q": {query}, "quotesCount": {"5"}, "newsCount": {"0"}}
 	var resp wireSearch
 	if err := c.get(ctx, c.searchURL+"?"+q.Encode(), &resp); err != nil {
 		return "", false, err
 	}
 	for _, r := range resp.Quotes {
-		if (r.QuoteType == "EQUITY" || r.QuoteType == "ETF") && r.Symbol != "" {
+		if (r.QuoteType == "EQUITY" || r.QuoteType == "ETF") && r.Symbol != "" &&
+			(exact == "" || strings.EqualFold(r.Symbol, exact)) {
 			return r.Symbol, true, nil
 		}
 	}
