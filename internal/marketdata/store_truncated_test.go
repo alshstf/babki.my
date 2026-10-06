@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
@@ -54,6 +55,7 @@ func (r *truncatedRows) FieldDescriptions() []pgconn.FieldDescription {
 func (r *truncatedRows) Values() ([]any, error) { panic("truncatedRows: Values not used") }
 func (r *truncatedRows) RawValues() [][]byte    { panic("truncatedRows: RawValues not used") }
 func (r *truncatedRows) Conn() *pgx.Conn        { panic("truncatedRows: Conn not used") }
+func (r *truncatedRows) TypeMap() *pgtype.Map   { panic("truncatedRows: TypeMap not used") }
 
 // fixedRows answers every Query with the same result set.
 type fixedRows struct{ rows pgx.Rows }
