@@ -39,7 +39,17 @@ const (
 
 	// Splits are announced days ahead and take effect on a date.
 	corporateActionsInterval = 24 * time.Hour
+
+	// A fund's NAV is published days late; a home-exchange close once a day.
+	referencePricesInterval = 24 * time.Hour
 )
+
+// ReferenceSources are where the full valuation's reference prices come from
+// (decision Р-11); a nil one is not fetched.
+type ReferenceSources struct {
+	NAV     marketdata.NAVProvider
+	Foreign marketdata.ForeignQuoteProvider
+}
 
 // TinvestDeps is what the T-Invest workers need. Clients are made per token
 // and Rebuilders per run (a Resolver's cache is not safe for concurrent use),
@@ -64,6 +74,7 @@ func NewWorkers(
 	spaces *family.Store,
 	fxProvider marketdata.FxHistoryProvider,
 	quoteProvider marketdata.QuoteProvider,
+	references ReferenceSources,
 	tinvestDeps TinvestDeps,
 	caStore *corporateaction.Store,
 	caMaterializer *corporateaction.Materializer,
@@ -108,6 +119,8 @@ func NewWorkers(
 	}
 	river.AddWorker(workers, corporateaction.NewMaterializeAllWorker(caMaterializer, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeISINWorker(caMaterializer, log))
+	river.AddWorker(workers, marketdata.NewReferencePricesWorker(mdStore, operations, instruments,
+		references.NAV, references.Foreign, log))
 	return workers
 }
 
@@ -133,6 +146,7 @@ func Schedule() []jobs.Periodic {
 		{Every: tinvestDividendsInterval, Args: tinvest.RefreshDividendsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshMoexSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.MaterializeAllArgs{}},
+		{Every: referencePricesInterval, Args: marketdata.RefreshReferencePricesArgs{}},
 	}
 }
 
@@ -148,6 +162,7 @@ var sources = []jobs.SourceKind{
 	{Kind: tinvest.BackfillQuotesArgs{}.Kind(), Every: backfillFxInterval},
 	{Kind: tinvest.RefreshDividendsArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: corporateaction.RefreshMoexSplitsArgs{}.Kind(), Every: corporateActionsInterval},
+	{Kind: marketdata.RefreshReferencePricesArgs{}.Kind(), Every: referencePricesInterval},
 }
 
 // Sources reads how each source's jobs last ended.

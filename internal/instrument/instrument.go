@@ -62,6 +62,14 @@ var isinRe = regexp.MustCompile(`^[A-Z]{2}[A-Z0-9]{9}[0-9]$`)
 // ErrBadISIN reports an ISIN that is not one even after NormalizeISIN.
 var ErrBadISIN = errors.New("isin must be two letters, nine letters or digits and a digit, e.g. US0231351067")
 
+// ForeignISIN reports a paper whose issuer is not Russian, by its ISIN's
+// country: such a paper's dividend tax is taken abroad, and its home exchange
+// is not Moscow. A paper with no ISIN is not known to be foreign.
+func ForeignISIN(isin string) bool {
+	isin = strings.ToUpper(strings.TrimSpace(isin))
+	return isin != "" && !strings.HasPrefix(isin, "RU")
+}
+
 // NormalizeISIN trims and upper-cases an ISIN, the spelling the catalog and the
 // registry match on (#202). Empty stays empty.
 func NormalizeISIN(s string) (string, error) {

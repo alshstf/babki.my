@@ -1,0 +1,18 @@
+[
+ {
+  "ticker": "FXRL",
+  "isin": "IE00BQ1Y6480",
+  "start_date": "2016-02-24",
+  "closure_date": null,
+  "name": "Акции / Россия",
+  "currency_fond": "USD"
+ },
+ {
+  "ticker": "FXIT",
+  "isin": "IE00BD3QJ757",
+  "start_date": "2013-10-14",
+  "closure_date": null,
+  "name": "Акции / ИТ-Сектор США",
+  "currency_fond": "USD"
+ }
+]

@@ -32,15 +32,15 @@ func sourceOf(t *testing.T, list []jobs.Source, kind string) jobs.Source {
 	return jobs.Source{}
 }
 
-// The sources are the nine outside feeds, in the order a reader looks for
+// The sources are the ten outside feeds, in the order a reader looks for
 // them: the exchange's quotes first.
 func TestTheSourcesAreTheOutsideFeedsInTheirOrder(t *testing.T) {
 	list, err := background.Sources(context.Background(), testdb.New(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 9 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
-		t.Errorf("sources = %d starting with %q, want the nine in their fixed order", len(list), list[0].Kind)
+	if len(list) != 10 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
+		t.Errorf("sources = %d starting with %q, want the ten in their fixed order", len(list), list[0].Kind)
 	}
 }
 
@@ -53,7 +53,7 @@ func TestTheRunningQueueRecordsItsJobs(t *testing.T) {
 	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := background.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
-		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), caStore, caMaterializer, enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, background.ReferenceSources{}, stubTinvestDeps(t, pool), caStore, caMaterializer, enqueuer)
 	client, err := background.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatal(err)

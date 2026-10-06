@@ -26,7 +26,9 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/cbr"
+	"babki.my/babki/internal/marketdata/finex"
 	"babki.my/babki/internal/marketdata/moex"
+	"babki.my/babki/internal/marketdata/yahoo"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
@@ -150,6 +152,10 @@ func newMoexHTTPClient() *http.Client {
 	return &http.Client{Timeout: moexHTTPTimeout}
 }
 
+// referenceHTTPTimeout bounds every request for reference prices (FinEx NAV,
+// Yahoo Finance); a fund's whole history is about 200 KB.
+const referenceHTTPTimeout = 30 * time.Second
+
 // tinvestHTTPTimeout bounds every T-Invest request, set here with the
 // process's other timeouts; generous for a page, short against the sync's
 // fifteen minutes.
@@ -230,8 +236,12 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	caMaterializer := corporateaction.NewMaterializer(
 		caStore, operation.NewService(opStore), instStore,
 		tinvest.NewRechecker(tinvest.NewStore(r.pool), enqueuer, r.log), r.log)
+	references := background.ReferenceSources{
+		NAV:     finex.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+		Foreign: yahoo.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+	}
 	workers := background.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
-		fxProvider, quoteProvider, tinvestDeps, caStore, caMaterializer, enqueuer)
+		fxProvider, quoteProvider, references, tinvestDeps, caStore, caMaterializer, enqueuer)
 	client, err := background.NewClient(r.pool, workers, enqueuer, r.log)
 	if err != nil {
 		return nil, err

@@ -96,7 +96,7 @@ func TestStartingTheQueueQueuesTheCorporateActionJobs(t *testing.T) {
 	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := background.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
-		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool),
+		stubFxProvider{}, stubQuoteProvider{}, background.ReferenceSources{}, stubTinvestDeps(t, pool),
 		caStore, caMaterializer, enqueuer)
 	client, err := background.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
@@ -160,7 +160,7 @@ func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := background.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		operation.NewStore(pool), account.NewStore(pool), fam,
-		stubFxProvider{}, stubQuoteProvider{}, deps, caStore, caMaterializer, enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, background.ReferenceSources{}, deps, caStore, caMaterializer, enqueuer)
 	client, err := background.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -254,7 +254,7 @@ func TestTheRegistrysRetryJobHasAWorker(t *testing.T) {
 	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := background.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
-		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), caStore, caMaterializer, enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, background.ReferenceSources{}, stubTinvestDeps(t, pool), caStore, caMaterializer, enqueuer)
 	client, err := background.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

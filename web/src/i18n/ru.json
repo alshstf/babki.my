@@ -524,7 +524,8 @@
       "tinvestQuotes": "Т-Инвестиции — цены",
       "tinvestHistory": "Т-Инвестиции — история цен",
       "tinvestDividends": "Т-Инвестиции — календарь дивидендов",
-      "moexSplits": "Мосбиржа — сплиты"
+      "moexSplits": "Мосбиржа — сплиты",
+      "referencePrices": "FinEx и Yahoo Finance — СЧА фондов и цены западных бирж"
     }
   },
   "instrumentPage": {
