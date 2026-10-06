@@ -542,7 +542,7 @@ func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portf
 		if qty.IsZero() && pc.CostMinor == 0 {
 			continue
 		}
-		out = append(out, portfolio.ReleasedLot{Quantity: qty, CostMinor: pc.CostMinor, AcquiredOn: pc.AcquiredOn, RateOn: pc.RateOn})
+		out = append(out, portfolio.ReleasedLot{From: pc.From, Quantity: qty, CostMinor: pc.CostMinor, AcquiredOn: pc.AcquiredOn, RateOn: pc.RateOn})
 	}
 	return out
 }
@@ -559,6 +559,7 @@ func rescaleLots(pieces []ReleasedLot, from, to decimal.Decimal) []ReleasedLot {
 	scaled := make([]ReleasedLot, 0, len(pieces))
 	for _, pc := range pieces {
 		scaled = append(scaled, ReleasedLot{
+			From:       pc.From,
 			Quantity:   pc.Quantity.Mul(to).Div(from),
 			CostMinor:  pc.CostMinor,
 			AcquiredOn: pc.AcquiredOn,

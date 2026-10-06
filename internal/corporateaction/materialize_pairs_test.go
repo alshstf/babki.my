@@ -7,6 +7,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/portfolio"
 )
@@ -493,5 +494,51 @@ func TestASplitAndAConversionOfOnePaperApplyInOrder(t *testing.T) {
 	}
 	if got.CostMinor != 323_000 {
 		t.Errorf("the new paper cost %d, want the 323000 that was paid", got.CostMinor)
+	}
+}
+
+// The registry's departing legs name the lots they take, and a leg written
+// before lots had numbers is rewritten with them on the next run.
+func TestTheRegistrysLegsNameTheirLots(t *testing.T) {
+	f := newFixture(t)
+	f.catalogue(t, producedISIN, "T")
+	f.buy(t, f.accountID, "2021-07-02", "2", -1_282_920)
+	f.buy(t, f.accountID, "2021-07-05", "2", -1_296_940)
+	f.conversionEvent(t, "2024-02-27", 1, 1)
+
+	numbers := func() (named, unnamed int) {
+		journal, err := f.ops.ListForEngine(f.ctx, f.spaceID, f.accountID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range journal {
+			if o.Type != operation.TypeExchangeOut {
+				continue
+			}
+			for _, pc := range o.TransferLots {
+				if pc.From.IsZero() {
+					unnamed++
+				} else {
+					named++
+				}
+			}
+		}
+		return named, unnamed
+	}
+	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
+		t.Fatal(err)
+	}
+	if named, unnamed := numbers(); named != 2 || unnamed != 0 {
+		t.Fatalf("the conversion's leg names %d lots and leaves %d unnamed, want both purchases named", named, unnamed)
+	}
+
+	if _, err := f.pool.Exec(f.ctx, `UPDATE operation_transfer_lots SET from_origin = NULL, from_seq = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
+		t.Fatal(err)
+	}
+	if named, unnamed := numbers(); named != 2 || unnamed != 0 {
+		t.Errorf("after the next run the leg names %d lots and leaves %d unnamed, want it rewritten with both", named, unnamed)
 	}
 }

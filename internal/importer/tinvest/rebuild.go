@@ -893,7 +893,7 @@ func sameLots(a, b []operation.ReleasedLot) bool {
 		return false
 	}
 	for i := range a {
-		if !a[i].Quantity.Equal(b[i].Quantity) || a[i].CostMinor != b[i].CostMinor || !sameTime(a[i].AcquiredOn, b[i].AcquiredOn) {
+		if a[i].From != b[i].From || !a[i].Quantity.Equal(b[i].Quantity) || a[i].CostMinor != b[i].CostMinor || !sameTime(a[i].AcquiredOn, b[i].AcquiredOn) {
 			return false
 		}
 	}

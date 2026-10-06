@@ -654,7 +654,7 @@ func sameLots(want, stored []operation.ReleasedLot) bool {
 		return false
 	}
 	for i := range want {
-		if !want[i].Quantity.Equal(stored[i].Quantity) || want[i].CostMinor != stored[i].CostMinor {
+		if want[i].From != stored[i].From || !want[i].Quantity.Equal(stored[i].Quantity) || want[i].CostMinor != stored[i].CostMinor {
 			return false
 		}
 		switch {
