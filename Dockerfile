@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags embedui \
     -o /out/babki ./cmd/babki
 
 # --- Runtime ---
-FROM alpine:3.21
+FROM alpine:3.24
 LABEL org.opencontainers.image.source="https://github.com/alshstf/babki.my" \
       org.opencontainers.image.description="Учёт личных и семейных финансов с фокусом на инвестиции" \
       org.opencontainers.image.licenses="FSL-1.1-ALv2"
