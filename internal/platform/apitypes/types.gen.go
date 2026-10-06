@@ -1337,7 +1337,7 @@ type DataSource struct {
 	// EverySeconds How often it runs
 	EverySeconds int `json:"every_seconds"`
 
-	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits
+	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, marketdata.refresh_reference_prices
 	Kind string `json:"kind"`
 
 	// LastError The last failure's text, cut to 300 characters; empty when it never failed

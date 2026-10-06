@@ -1,0 +1,35 @@
+{
+ "chart": {
+  "result": [
+   {
+    "meta": {
+     "currency": "USD",
+     "symbol": "MSFT",
+     "exchangeName": "NMS",
+     "exchangeTimezoneName": "America/New_York"
+    },
+    "timestamp": [
+     1759152600,
+     1759239000,
+     1759325400,
+     1759411800,
+     1759498200
+    ],
+    "indicators": {
+     "quote": [
+      {
+       "close": [
+        514.5999755859375,
+        517.9500122070312,
+        519.7100219726562,
+        515.739990234375,
+        517.3499755859375
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}

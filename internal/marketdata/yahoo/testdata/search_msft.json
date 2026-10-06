@@ -1,0 +1,10 @@
+{
+ "quotes": [
+  {
+   "symbol": "MSFT",
+   "quoteType": "EQUITY",
+   "exchange": "NMS",
+   "shortname": "Microsoft Corporation"
+  }
+ ]
+}

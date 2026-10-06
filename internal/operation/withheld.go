@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,12 +48,6 @@ const maxPaymentLag = 120 * 24 * time.Hour
 // estimate above it says the inputs do not describe this payment.
 var maxPlausibleRate = decimal.New(5, -1)
 
-// foreignISIN reports a paper whose issuer is not Russian: a Russian issuer's
-// tax comes as the broker's own row, a foreign one is taken abroad unseen.
-func foreignISIN(isin string) bool {
-	return isin != "" && !strings.HasPrefix(strings.ToUpper(isin), "RU")
-}
-
 // withheldAbroad answers, for each dividend on the page of a foreign paper or
 // with a stated tax, what was withheld abroad. It reads each such row's whole
 // account journal: a payment's parts and the shares behind it may lie outside
@@ -90,7 +83,7 @@ func (h *Handler) withheldAbroad(ctx context.Context, spaceID uuid.UUID, page []
 		}
 		var foreignIDs []uuid.UUID
 		for id, p := range papers {
-			if foreignISIN(p.ISIN) {
+			if instrument.ForeignISIN(p.ISIN) {
 				foreign[id] = true
 				foreignIDs = append(foreignIDs, id)
 			}

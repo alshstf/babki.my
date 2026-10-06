@@ -102,7 +102,7 @@ func TestAnImportInTheQueueGetsTheRegistrysRows(t *testing.T) {
 	opStore := operation.NewStore(pool)
 	workers := background.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		opStore, account.NewStore(pool), fam,
-		stubFxProvider{}, stubQuoteProvider{}, deps, caStore, caMaterializer, enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, background.ReferenceSources{}, deps, caStore, caMaterializer, enqueuer)
 	client, err := background.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
