@@ -7,8 +7,8 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/corporateaction"
-	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
 )
 
