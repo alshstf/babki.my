@@ -42,10 +42,6 @@ const (
 
 	// A fund's NAV is published days late; a home-exchange close once a day.
 	referencePricesInterval = 24 * time.Hour
-
-	// Moves recorded before lots had numbers are numbered at start; a daily
-	// rerun finds nothing once they are.
-	numberLotsInterval = 24 * time.Hour
 )
 
 // ReferenceSources are the feeds beyond the exchange and the broker: the full
@@ -133,7 +129,6 @@ func NewWorkers(
 		references.NAV, references.Foreign, log))
 	river.AddWorker(workers, marketdata.NewDividendCalendarWorker(mdStore, operations, instruments,
 		references.Dividends, log))
-	river.AddWorker(workers, operation.NewNumberLotsWorker(operation.NewService(operations), log))
 	return workers
 }
 
@@ -162,7 +157,6 @@ func Schedule() []jobs.Periodic {
 		{Every: corporateActionsInterval, Args: corporateaction.MaterializeAllArgs{}},
 		{Every: referencePricesInterval, Args: marketdata.RefreshReferencePricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshDividendCalendarArgs{}},
-		{Every: numberLotsInterval, Args: operation.NumberLotsArgs{}},
 	}
 }
 

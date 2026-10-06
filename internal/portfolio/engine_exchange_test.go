@@ -25,6 +25,12 @@ func exchangeLegs(dayN int, a, b *uuid.UUID, from, to string,
 	return out, in
 }
 
+// takenFrom is l as a departing leg records it: taken from the lot o brought.
+func takenFrom(o portfolio.Operation, l portfolio.ReleasedLot) portfolio.ReleasedLot {
+	l.From = portfolio.LotID{Origin: "op/" + o.ID.String()}
+	return l
+}
+
 func lot(qty string, cost int64, dayN int) portfolio.ReleasedLot {
 	l := portfolio.ReleasedLot{Quantity: d(qty), CostMinor: cost}
 	if dayN > 0 {
@@ -38,9 +44,9 @@ func lot(qty string, cost int64, dayN int) portfolio.ReleasedLot {
 // money and dates.
 func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 	// 2 receipts at 6414.60 (fee 6.41 capitalized) and 1 at 6567.20.
-	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "2", "6414.60", -1_282_920, 641)
-	buy2 := op(portfolio.TypeBuy, 3, &lkoh, "1", "6567.20", -656_720, 0)
-	pieces := []portfolio.ReleasedLot{lot("2", 1_283_561, 2), lot("1", 656_720, 3)}
+	buy1 := named(op(portfolio.TypeBuy, 2, &lkoh, "2", "6414.60", -1_282_920, 641))
+	buy2 := named(op(portfolio.TypeBuy, 3, &lkoh, "1", "6567.20", -656_720, 0))
+	pieces := []portfolio.ReleasedLot{takenFrom(buy1, lot("2", 1_283_561, 2)), takenFrom(buy2, lot("1", 656_720, 3))}
 	out, in := exchangeLegs(5, &lkoh, &sber, "3", "3", pieces, pieces)
 
 	pos, err := portfolio.Compute([]portfolio.Operation{buy1, buy2, out, in})
@@ -89,8 +95,8 @@ func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 
 // A 1-for-10 conversion restates units, not cost.
 func TestExchangeRestatesQuantityWithoutRestatingCost(t *testing.T) {
-	buy := op(portfolio.TypeBuy, 2, &lkoh, "10", "500", -5_000_000, 0)
-	outLots := []portfolio.ReleasedLot{lot("10", 5_000_000, 2)}
+	buy := named(op(portfolio.TypeBuy, 2, &lkoh, "10", "500", -5_000_000, 0))
+	outLots := []portfolio.ReleasedLot{takenFrom(buy, lot("10", 5_000_000, 2))}
 	inLots := []portfolio.ReleasedLot{lot("1", 5_000_000, 2)}
 	out, in := exchangeLegs(5, &lkoh, &sber, "10", "1", outLots, inLots)
 
@@ -119,8 +125,8 @@ func TestExchangeRestatesQuantityWithoutRestatingCost(t *testing.T) {
 
 // An undated parcel stays undated through a conversion.
 func TestExchangeKeepsAnUndatedParcelUndated(t *testing.T) {
-	arrive := op(portfolio.TypeTransferIn, 2, &lkoh, "5", "", 500_000, 0)
-	pieces := []portfolio.ReleasedLot{lot("5", 500_000, 0)}
+	arrive := named(op(portfolio.TypeTransferIn, 2, &lkoh, "5", "", 500_000, 0))
+	pieces := []portfolio.ReleasedLot{takenFrom(arrive, lot("5", 500_000, 0))}
 	inPieces := []portfolio.ReleasedLot{lot("50", 500_000, 0)}
 	out, in := exchangeLegs(5, &lkoh, &sber, "5", "50", pieces, inPieces)
 
@@ -146,9 +152,9 @@ func TestExchangeKeepsAnUndatedParcelUndated(t *testing.T) {
 func TestExchangeOutReleasesTheRecordedLotsNotAFreshSlice(t *testing.T) {
 	// Two lots: day 2 (cheap) and day 3 (dear). The breakdown names the DAY 3
 	// one, which is not what a fresh FIFO release would take.
-	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "1", "100", -100_000, 0)
-	buy2 := op(portfolio.TypeBuy, 3, &lkoh, "1", "900", -900_000, 0)
-	pieces := []portfolio.ReleasedLot{lot("1", 900_000, 3)}
+	buy1 := named(op(portfolio.TypeBuy, 2, &lkoh, "1", "100", -100_000, 0))
+	buy2 := named(op(portfolio.TypeBuy, 3, &lkoh, "1", "900", -900_000, 0))
+	pieces := []portfolio.ReleasedLot{takenFrom(buy2, lot("1", 900_000, 3))}
 	out, in := exchangeLegs(5, &lkoh, &sber, "1", "1", pieces, pieces)
 
 	pos, err := portfolio.Compute([]portfolio.Operation{buy1, buy2, out, in})
@@ -197,8 +203,8 @@ func TestExchangeLegWithoutABreakdownIsRefused(t *testing.T) {
 
 // Each leg's pieces must sum to its own row's quantity.
 func TestExchangeBreakdownMustSumToItsOwnLeg(t *testing.T) {
-	buy := op(portfolio.TypeBuy, 2, &lkoh, "10", "100", -1_000_000, 0)
-	outLots := []portfolio.ReleasedLot{lot("10", 1_000_000, 2)}
+	buy := named(op(portfolio.TypeBuy, 2, &lkoh, "10", "100", -1_000_000, 0))
+	outLots := []portfolio.ReleasedLot{takenFrom(buy, lot("10", 1_000_000, 2))}
 	// The arriving leg claims 100 units while its pieces sum to 99.
 	inLots := []portfolio.ReleasedLot{lot("99", 1_000_000, 2)}
 	out, in := exchangeLegs(5, &lkoh, &sber, "10", "100", outLots, inLots)
@@ -225,10 +231,10 @@ func TestExchangeConservesBasisOverRandomJournals(t *testing.T) {
 			qty := decimal.NewFromInt(int64(1 + rng.Intn(50)))
 			amount := int64(1+rng.Intn(500_000)) * -1
 			day := 2 + b
-			ops = append(ops, op(portfolio.TypeBuy, day, &lkoh,
-				qty.String(), "", amount, 0))
+			buy := named(op(portfolio.TypeBuy, day, &lkoh, qty.String(), "", amount, 0))
+			ops = append(ops, buy)
 			spent += -amount
-			lots = append(lots, lot(qty.String(), -amount, day))
+			lots = append(lots, takenFrom(buy, lot(qty.String(), -amount, day)))
 			held = held.Add(qty)
 		}
 		// Convert the whole holding at a ratio the corporate action names.
@@ -268,9 +274,9 @@ func TestExchangeIsNotCash(t *testing.T) {
 	if !portfolio.MovesCash(portfolio.Operation{Type: portfolio.TypeDividend}) {
 		t.Error("a dividend does not count as cash")
 	}
-	buy := op(portfolio.TypeBuy, 2, &lkoh, "10", "100", -1_000_000, 0)
+	buy := named(op(portfolio.TypeBuy, 2, &lkoh, "10", "100", -1_000_000, 0))
 	deposit := op(portfolio.TypeDeposit, 1, nil, "", "", 1_000_000, 0)
-	pieces := []portfolio.ReleasedLot{lot("10", 1_000_000, 2)}
+	pieces := []portfolio.ReleasedLot{takenFrom(buy, lot("10", 1_000_000, 2))}
 	out, in := exchangeLegs(5, &lkoh, &sber, "10", "10", pieces, pieces)
 	cash, err := portfolio.Cash([]portfolio.Operation{deposit, buy, out, in})
 	if err != nil {

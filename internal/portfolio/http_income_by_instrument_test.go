@@ -93,11 +93,12 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 		// A conversion's two legs, built as the service builds them.
 		{TypeExchangeOut, func(id uuid.UUID) []Operation {
 			acquired := on(1)
+			buy := Operation{ID: uuid.New(), Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000}
 			return []Operation{
-				{Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000},
+				buy,
 				{
 					Type: TypeExchangeOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 100_000,
-					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 100_000, AcquiredOn: &acquired}},
+					TransferLots: []ReleasedLot{{From: buy.lotID(0), Quantity: *qty("10"), CostMinor: 100_000, AcquiredOn: &acquired}},
 				},
 			}
 		}},
@@ -113,11 +114,12 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 		// A spin-off's two legs.
 		{TypeSpinoffOut, func(id uuid.UUID) []Operation {
 			acquired := on(1)
+			buy := Operation{ID: uuid.New(), Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000}
 			return []Operation{
-				{Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000},
+				buy,
 				{
 					Type: TypeSpinoffOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", AmountMinor: 40_000,
-					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 40_000, AcquiredOn: &acquired}},
+					TransferLots: []ReleasedLot{{From: buy.lotID(0), Quantity: *qty("10"), CostMinor: 40_000, AcquiredOn: &acquired}},
 				},
 			}
 		}},
