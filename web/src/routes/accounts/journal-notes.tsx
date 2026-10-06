@@ -78,9 +78,23 @@ export function JournalNotes({
           {t("accounts.journal.stale", { balance, date })}
         </div>
       )}
-      {journal.unpriced_positions > 0 && (
+      {journal.full_amount_minor !== journal.amount_minor && (
+        <div
+          data-testid={`account-journal-full-${account.id}`}
+          className="text-muted-foreground"
+          title={t("summary.fullValuationHint")}
+        >
+          {t("accounts.journal.full", { amount: formatMinor(journal.full_amount_minor, journal.currency) })}
+        </div>
+      )}
+      {journal.not_traded_positions > 0 && (
+        <div className="text-muted-foreground">
+          {t("accounts.journal.notTraded", { count: journal.not_traded_positions })}
+        </div>
+      )}
+      {journal.unpriced_positions - journal.not_traded_positions > 0 && (
         <div className="text-amber-600">
-          {t("accounts.journal.unpriced", { count: journal.unpriced_positions })}
+          {t("accounts.journal.unpriced", { count: journal.unpriced_positions - journal.not_traded_positions })}
         </div>
       )}
       {journal.negative_cash.length > 0 && (

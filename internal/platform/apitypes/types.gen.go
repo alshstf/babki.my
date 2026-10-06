@@ -223,6 +223,27 @@ func (e CostBasisPerimeter) Valid() bool {
 	}
 }
 
+// Defines values for FullValuation.
+const (
+	FullValuationLiquid        FullValuation = "liquid"
+	FullValuationNav           FullValuation = "nav"
+	FullValuationNavAndForeign FullValuation = "nav_and_foreign"
+)
+
+// Valid indicates whether the value is a known member of the FullValuation enum.
+func (e FullValuation) Valid() bool {
+	switch e {
+	case FullValuationLiquid:
+		return true
+	case FullValuationNav:
+		return true
+	case FullValuationNavAndForeign:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ImportField.
 const (
 	ImportFieldAmount     ImportField = "amount"
@@ -583,6 +604,30 @@ func (e OperationType) Valid() bool {
 	}
 }
 
+// Defines values for PriceSource.
+const (
+	PriceSourceForeign PriceSource = "foreign"
+	PriceSourceManual  PriceSource = "manual"
+	PriceSourceMarket  PriceSource = "market"
+	PriceSourceNav     PriceSource = "nav"
+)
+
+// Valid indicates whether the value is a known member of the PriceSource enum.
+func (e PriceSource) Valid() bool {
+	switch e {
+	case PriceSourceForeign:
+		return true
+	case PriceSourceManual:
+		return true
+	case PriceSourceMarket:
+		return true
+	case PriceSourceNav:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RealizedGap.
 const (
 	NoRate RealizedGap = "no_rate"
@@ -916,11 +961,14 @@ type AccountCurrencyTotal struct {
 
 // AccountJournal defines model for AccountJournal.
 type AccountJournal struct {
-	// AmountMinor Open holdings at their market value plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below).
+	// AmountMinor THE LIQUID WORTH (decision Р-11): open holdings at the market price they can be sold at now — none for a paper that does not trade — plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below).
 	AmountMinor int64 `json:"amount_minor"`
 
 	// Currency The space's base currency (ISO-4217), same as Summary.base_currency
 	Currency string `json:"currency"`
+
+	// FullAmountMinor The same worth by the FULL valuation (decision Р-11): every holding at its full price — a fund's net asset value or a foreign share's home-exchange close where the space allows it, else its latest price of any source (Position.price_source) — plus the same cash. amount_minor is the liquid one.
+	FullAmountMinor int64 `json:"full_amount_minor"`
 
 	// MissingRates Currencies held with no rate into the base currency today; what is held in them is left out of amount_minor. Sorted; empty when everything converted.
 	MissingRates []string `json:"missing_rates"`
@@ -928,10 +976,13 @@ type AccountJournal struct {
 	// NegativeCash Currencies whose cash by the journal is below zero: money spent that the journal never saw arrive, usually a deposit nobody recorded. Sorted; empty when none.
 	NegativeCash []string `json:"negative_cash"`
 
+	// NotTradedPositions Of unpriced_positions, how many full_amount_minor still values: papers that do not trade now but have a price of another kind.
+	NotTradedPositions int `json:"not_traded_positions"`
+
 	// Reconciliation The journal's figure against the account's latest balance mark. Null when there is no balance mark, or the mark cannot be put into the base currency for want of a rate.
 	Reconciliation nullable.Nullable[AccountReconciliation] `json:"reconciliation"`
 
-	// UnpricedPositions Open holdings with no market value at all — no quote, or a kind of paper with no valuation model — counted as nothing.
+	// UnpricedPositions Open holdings amount_minor counts as nothing: no market price within a month (the paper does not trade, or nothing prices it), or a kind of paper with no valuation model.
 	UnpricedPositions int `json:"unpriced_positions"`
 }
 
@@ -1530,6 +1581,9 @@ type FamilyReturn struct {
 	To          string `json:"to"`
 }
 
+// FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
+type FullValuation string
+
 // ImportAddedPaper defines model for ImportAddedPaper.
 type ImportAddedPaper struct {
 	// Code The code as the table named the paper
@@ -1987,6 +2041,15 @@ type Position struct {
 	IncomeMinor int64      `json:"income_minor"`
 	Instrument  Instrument `json:"instrument"`
 
+	// LastTradedOn Date YYYY-MM-DD of the paper's latest market price, set only when that price is older than a month and the liquid valuation therefore counts the holding as nothing: the paper has not traded since.
+	LastTradedOn nullable.Nullable[string] `json:"last_traded_on,omitempty"`
+
+	// LiquidValueInBaseMinor liquid_value_minor in the space's base currency, struck once from the valuation's own currency at today's rate. Null when liquid_value_minor is, or no rate.
+	LiquidValueInBaseMinor nullable.Nullable[int64] `json:"liquid_value_in_base_minor,omitempty"`
+
+	// LiquidValueMinor What the holding can be sold for now, in the position's own `currency` (decision Р-11): its latest MARKET price — a price stated by hand is not one — if that price is no older than a month, valued as market_value_minor is and converted at today's rate. Null when the paper does not trade (see last_traded_on), when it has no market price at all, or when there is no valuation or rate: the liquid valuation then counts the holding as nothing. Equal to market_value_minor when the full valuation is struck from that same market price.
+	LiquidValueMinor nullable.Nullable[int64] `json:"liquid_value_minor,omitempty"`
+
 	// MarketValueCurrency Currency of market_value_minor. Equal to `currency` (the position's own currency) whenever a conversion happened; otherwise the raw valuation currency (the quote's currency for share/etf, the instrument's face_currency for bond). Null exactly when market_value_minor is null.
 	MarketValueCurrency nullable.Nullable[string] `json:"market_value_currency,omitempty"`
 
@@ -2013,6 +2076,9 @@ type Position struct {
 
 	// PriceOn Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe.
 	PriceOn nullable.Nullable[string] `json:"price_on,omitempty"`
+
+	// PriceSource Where `price` comes from (decision Р-11): `market` — an exchange's or a broker's quote; `manual` — stated by a person; `nav` — the fund's net asset value per unit, its manager's figure rather than a price it sells at; `foreign` — the share's close on its home exchange, while here it may not trade. Which of them a paper is valued at is the space's FullValuation: a published NAV or home-exchange close first, then the latest price of any source. Null exactly when `price` is.
+	PriceSource nullable.Nullable[PriceSource] `json:"price_source,omitempty"`
 
 	// Quantity Decimal as string
 	Quantity string `json:"quantity"`
@@ -2085,6 +2151,9 @@ type PositionsResponse struct {
 	RealizedTotal RealizedTotal `json:"realized_total"`
 }
 
+// PriceSource defines model for PriceSource.
+type PriceSource string
+
 // RealizedCurrencyTotal defines model for RealizedCurrencyTotal.
 type RealizedCurrencyTotal struct {
 	// Currency ISO-4217 of the positions this figure adds up — their own currency, not the base one
@@ -2131,10 +2200,13 @@ type SessionInfo struct {
 
 	// CostBasisRules What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them.
 	// THIS IS THE STATEMENT OF RECORD, AND IT IS A PROPERTY OF THE SPACE RATHER THAN OF ANY ONE PAYLOAD. It qualifies EVERY cost basis this API publishes, wherever the figure appears — not only the ones on PositionsResponse. The journal has one of its own: a transfer's `Operation.amount_minor` (and its `in_base` twin) is the cost basis of the shares moved, picked by the very same queue of earliest purchases that produces Position.cost_minor, so it is a figure this object speaks about. GET /accounts/{accountId}/operations does not repeat it, and now does so as a choice rather than for want of anywhere to put it: OperationsResponse has been an envelope since #86, and this statement is still not in it, because one truth published in three places is two more places to forget when the truth changes. A client therefore reads this once, from the session it loads anyway, and applies it to every cost basis it renders — including the journal's, which otherwise shows a FIFO-derived amount with nothing said about it.
-	CostBasisRules CostBasisRules     `json:"cost_basis_rules"`
-	Role           Role               `json:"role"`
-	SpaceId        openapi_types.UUID `json:"space_id"`
-	SpaceName      string             `json:"space_name"`
+	CostBasisRules CostBasisRules `json:"cost_basis_rules"`
+
+	// FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
+	FullValuation FullValuation      `json:"full_valuation"`
+	Role          Role               `json:"role"`
+	SpaceId       openapi_types.UUID `json:"space_id"`
+	SpaceName     string             `json:"space_name"`
 
 	// TaxResidency The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU.
 	TaxResidency string   `json:"tax_residency"`
@@ -2254,6 +2326,12 @@ type SummaryJournal struct {
 
 	// DifferingDifferenceMinor The sum of difference_minor over those accounts, in the base currency: negative when the total may be short by that much, positive when it may be over
 	DifferingDifferenceMinor int64 `json:"differing_difference_minor"`
+
+	// FullDifferenceMinor What the full valuation adds to the total, in the base currency: the sum over the accounts counted by their journal of full_amount_minor − amount_minor. The family's full valuation is total_in_base_minor plus this (decision Р-11).
+	FullDifferenceMinor int64 `json:"full_difference_minor"`
+
+	// NotTradedPositions Of unpriced_positions, the holdings that do not trade now but have a full valuation (AccountJournal.not_traded_positions summed)
+	NotTradedPositions int `json:"not_traded_positions"`
 
 	// PinnedToBalance Active brokerage accounts with operations counted by their balance by the family's choice (valued_by_balance)
 	PinnedToBalance int `json:"pinned_to_balance"`
@@ -2674,6 +2752,9 @@ type UpdateMemberRequest struct {
 type UpdateSpaceRequest struct {
 	// BaseCurrency ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. Changing it changes the currency every converted figure in this API is published in; nothing stored is rewritten, since those figures are computed on the way out.
 	BaseCurrency *string `json:"base_currency,omitempty"`
+
+	// FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
+	FullValuation *FullValuation `json:"full_valuation,omitempty"`
 
 	// TaxResidency ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent.
 	TaxResidency *string `json:"tax_residency,omitempty"`

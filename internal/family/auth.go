@@ -305,20 +305,24 @@ func (s *Service) UpdateMemberRole(ctx context.Context, p Principal, targetID uu
 // SpaceSettings is a partial update of the space; nil leaves a field alone, so
 // an accidental "" is refused rather than ignored.
 type SpaceSettings struct {
-	BaseCurrency *string
-	TaxResidency *string
+	BaseCurrency  *string
+	TaxResidency  *string
+	FullValuation *string
 }
 
-// UpdateSpace changes the base currency and/or the owner's tax residency
-// (owner only). An empty request is refused rather than answered as success.
+// UpdateSpace changes the base currency, the owner's tax residency and/or
+// where the full valuation starts (owner only). An empty request is refused rather than answered as success.
 // The country must have a row in the rules table, not just the ISO shape: the
 // application cannot speak for a country it has no rules for.
 func (s *Service) UpdateSpace(ctx context.Context, p Principal, in SpaceSettings) (Space, error) {
 	if p.Role != RoleOwner {
 		return Space{}, ErrForbidden
 	}
-	if in.BaseCurrency == nil && in.TaxResidency == nil {
-		return Space{}, fmt.Errorf("%w: nothing to update: give base_currency, tax_residency or both", ErrValidation)
+	if in.BaseCurrency == nil && in.TaxResidency == nil && in.FullValuation == nil {
+		return Space{}, fmt.Errorf("%w: nothing to update: give base_currency, tax_residency or full_valuation", ErrValidation)
+	}
+	if in.FullValuation != nil && !FullValuation(*in.FullValuation).Valid() {
+		return Space{}, fmt.Errorf("%w: full_valuation must be liquid, nav or nav_and_foreign", ErrValidation)
 	}
 	if in.BaseCurrency != nil && !currency.Valid(*in.BaseCurrency) {
 		return Space{}, fmt.Errorf("%w: base_currency must be an uppercase ISO-4217 code (e.g. RUB)", ErrValidation)
@@ -333,7 +337,7 @@ func (s *Service) UpdateSpace(ctx context.Context, p Principal, in SpaceSettings
 				ErrValidation, *in.TaxResidency, strings.Join(taxResidencyCodes(), ", "))
 		}
 	}
-	if err := s.store.UpdateSpaceSettings(ctx, p.SpaceID, in.BaseCurrency, in.TaxResidency); err != nil {
+	if err := s.store.UpdateSpaceSettings(ctx, p.SpaceID, in.BaseCurrency, in.TaxResidency, in.FullValuation); err != nil {
 		return Space{}, err
 	}
 	return s.store.SpaceByID(ctx, p.SpaceID)

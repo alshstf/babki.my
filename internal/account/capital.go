@@ -69,8 +69,9 @@ func (h *Handler) capital(ctx context.Context, spaceID uuid.UUID, base string, d
 			worth := AccountWorth{AccountID: a.ID, Complete: true}
 			if journal != nil && journal[i].Operations > 0 {
 				j := journal[i]
-				worth.Minor, worth.ByJournal = j.Minor, true
-				worth.Complete = j.Unpriced == 0 && len(j.MissingRates) == 0
+				// The capital chart is drawn on the full worth (decision Р-11).
+				worth.Minor, worth.ByJournal = j.FullMinor, true
+				worth.Complete = j.FullUnpriced == 0 && len(j.FullMissingRates) == 0
 			} else if mark, ok := markOn(marks[a.ID], day); ok {
 				minor, converted, err := h.inBaseOn(ctx, mark, a.Currency, base, day)
 				if err != nil {

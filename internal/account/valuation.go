@@ -17,22 +17,30 @@ import (
 )
 
 // JournalValue is what a brokerage account is worth by its journal, as the
-// portfolio engine values it; cmd/babki wires the engine in.
+// portfolio engine values it; cmd/babki wires the engine in. It is struck
+// twice (decision Р-11): liquid (Minor and the fields beside it) and full.
 type JournalValue struct {
 	// Currency is the space's base currency, the one Minor is in.
 	Currency string
-	// Minor is the holdings at market value plus the cash, converted.
+	// Minor is the holdings the market prices now plus the cash, converted.
 	Minor int64
 	// ByCurrency is that worth by currency, before conversion.
 	ByCurrency map[string]int64
 	// Operations is the journal's size; zero means the account has no journal.
 	Operations int
-	// Unpriced counts the holdings with no valuation, counted as nothing.
+	// Unpriced counts the holdings Minor counts as nothing.
 	Unpriced int
+	// NotTraded is how many of Unpriced the full worth still values.
+	NotTraded int
 	// MissingRates names the currencies left out of Minor for want of a rate.
 	MissingRates []string
 	// NegativeCash names the currencies whose cash by the journal is below zero.
 	NegativeCash []string
+	// FullMinor and the fields after it are the full worth's.
+	FullMinor        int64
+	FullByCurrency   map[string]int64
+	FullUnpriced     int
+	FullMissingRates []string
 }
 
 type journalValuer interface {
@@ -177,12 +185,14 @@ func (v valuation) describe(row *apitypes.AccountWithBalance) {
 		return
 	}
 	j := apitypes.AccountJournal{
-		AmountMinor:       v.journal.Minor,
-		Currency:          v.journal.Currency,
-		UnpricedPositions: v.journal.Unpriced,
-		MissingRates:      nonNil(v.journal.MissingRates),
-		NegativeCash:      nonNil(v.journal.NegativeCash),
-		Reconciliation:    nullable.NewNullNullable[apitypes.AccountReconciliation](),
+		AmountMinor:        v.journal.Minor,
+		FullAmountMinor:    v.journal.FullMinor,
+		Currency:           v.journal.Currency,
+		UnpricedPositions:  v.journal.Unpriced,
+		NotTradedPositions: v.journal.NotTraded,
+		MissingRates:       nonNil(v.journal.MissingRates),
+		NegativeCash:       nonNil(v.journal.NegativeCash),
+		Reconciliation:     nullable.NewNullNullable[apitypes.AccountReconciliation](),
 	}
 	if v.reconciliation != nil {
 		j.Reconciliation = nullable.NewNullableWithValue(*v.reconciliation)
@@ -234,7 +244,10 @@ func addJournals(totals []CurrencyTotal, vals map[uuid.UUID]valuation) ([]Curren
 
 // journalSummary says what the total owes to journals rather than balances.
 func journalSummary(vals map[uuid.UUID]valuation) (apitypes.SummaryJournal, error) {
-	var out apitypes.SummaryJournal
+	var (
+		out apitypes.SummaryJournal
+		err error
+	)
 	for id, v := range vals {
 		if !v.byJournal {
 			out.PinnedToBalance++
@@ -242,6 +255,10 @@ func journalSummary(vals map[uuid.UUID]valuation) (apitypes.SummaryJournal, erro
 		}
 		out.Accounts++
 		out.UnpricedPositions += v.journal.Unpriced
+		out.NotTradedPositions += v.journal.NotTraded
+		if out.FullDifferenceMinor, err = money.Add(out.FullDifferenceMinor, v.journal.FullMinor-v.journal.Minor); err != nil {
+			return out, fmt.Errorf("%w: the full valuation behind the family total, adding account %s", err, id)
+		}
 		if v.reconciliation != nil && v.reconciliation.Status == apitypes.Differs {
 			out.Differing++
 			sum, err := money.Add(out.DifferingDifferenceMinor, v.reconciliation.DifferenceMinor)

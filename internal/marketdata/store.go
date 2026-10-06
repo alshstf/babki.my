@@ -254,6 +254,31 @@ func (s *Store) QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day tim
 	return out, rows.Err()
 }
 
+// MarketQuotesOn is QuotesOn with only the market's prices: a price stated
+// by hand is not one the paper can be sold at (decision Р-11).
+func (s *Store) MarketQuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day time.Time) (map[uuid.UUID]Quote, error) {
+	out := make(map[uuid.UUID]Quote, len(instrumentIDs))
+	if len(instrumentIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (instrument_id) `+quoteCols+` FROM quotes
+		WHERE instrument_id = ANY($1) AND on_date <= $2 AND source <> $3
+		ORDER BY instrument_id, on_date DESC`, instrumentIDs, day, ManualQuoteSource)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		q, err := scanQuote(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[q.InstrumentID] = q
+	}
+	return out, rows.Err()
+}
+
 // PriceSeries returns the quotes in [from, to], oldest first.
 func (s *Store) PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]Quote, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+quoteCols+` FROM quotes

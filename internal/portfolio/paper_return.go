@@ -17,20 +17,24 @@ import (
 
 // PaperReturnBasis reckons one paper's period, from (exclusive) to to
 // (inclusive), across every account of the space it has been on: its worth at
-// either end — all the units held, at that day's closing price — and the money
-// that went into it or came out of it in between, in the currency it is valued
-// in. A buy puts money in and a sale, a payout or a redemption takes it out,
+// either end — all the units held, at that day's full price (decision Р-11) —
+// and the money
+// that went into it or came out of it in between, in the currency it is
+// valued in. A buy puts money in and a sale, a payout or a redemption takes it out,
 // each with its commission; a tax withheld takes back part of a payout. A move
 // between two of the family's accounts is no flow at all: the paper stays in
 // the family. Shares that arrive from outside — from another broker, or as the
-// result of a conversion — come in at that day's closing price, as on an
-// account (see ReturnBasis), and shares converted away leave at it. A spin-off
-// carries part of the paper's worth onto another paper, which no closing price
-// says; a period with one is not complete.
+// result of a conversion — come in at that day's full price, as on an account
+// (see ReturnBasis), and shares converted away leave at it. A spin-off carries
+// part of the paper's worth onto another paper, which no price says; a period
+// with one is not complete.
 func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uuid.UUID, from, to time.Time) (ReturnBasis, error) {
-	history, ok := h.quotes.(quoteHistory)
-	if !ok {
+	if _, ok := h.quotes.(priceStore); !ok {
 		return ReturnBasis{}, ErrNoQuoteHistory
+	}
+	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	if err != nil {
+		return ReturnBasis{}, err
 	}
 	finder, ok := h.ops.(holdingAccounts)
 	if !ok {
@@ -72,15 +76,12 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 	for i, day := range []time.Time{from, to} {
 		v := JournalValue{Currency: paper.Currency}
 		if held[i].IsPositive() {
-			quotes, err := history.QuotesOn(ctx, []uuid.UUID{instrumentID}, day)
+			book, err := h.pricesOn(ctx, []uuid.UUID{instrumentID}, day, sp.FullValuation, pastWindows)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
-			q, quoted := quotes[instrumentID]
-			if quoted && q.On.Before(day.AddDate(0, 0, -staleQuoteDays)) {
-				quoted = false
-			}
-			minor, currency, gap, err := marketValue(paper.Type, paper.FaceValueMinor, paper.FaceCurrency, held[i], q, quoted)
+			q, quoted := book.full[instrumentID]
+			minor, currency, gap, err := marketValue(paper.Type, paper.FaceValueMinor, paper.FaceCurrency, held[i], q.Quote, quoted)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -105,7 +106,7 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 			if o.InstrumentID == nil || *o.InstrumentID != instrumentID || !o.OccurredOn.After(from) || o.OccurredOn.After(to) {
 				continue
 			}
-			flow, known, err := h.paperFlow(ctx, history, o)
+			flow, known, err := h.paperFlow(ctx, sp.FullValuation, o)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -144,7 +145,7 @@ func journalTo(ops []Operation, day time.Time) []Operation {
 // paperFlow is the money one row of the paper's journal moved into or out of
 // it, signed from the investor's side (in negative); known is false when it
 // cannot be had — a moved parcel with no price on its day, or a spin-off.
-func (h *Handler) paperFlow(ctx context.Context, history quoteHistory, o Operation) (datedMinor, bool, error) {
+func (h *Handler) paperFlow(ctx context.Context, setting family.FullValuation, o Operation) (datedMinor, bool, error) {
 	flow := datedMinor{from: o.Currency, on: o.OccurredOn}
 	switch o.Type {
 	case TypeTransferIn, TypeTransferOut:
@@ -158,7 +159,7 @@ func (h *Handler) paperFlow(ctx context.Context, history quoteHistory, o Operati
 		flow.minor = o.AmountMinor - o.FeeMinor
 		return flow, true, nil
 	}
-	worth, currency, known, err := h.parcelWorth(ctx, history, o)
+	worth, currency, known, err := h.parcelWorth(ctx, setting, o)
 	if err != nil || !known {
 		return flow, false, err
 	}

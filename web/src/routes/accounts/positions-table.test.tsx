@@ -119,6 +119,9 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     currency: "USD",
     market_value_minor: 305_50,
     market_value_currency: "USD",
+    // The ordinary case: the market price is both valuations (decision Р-11).
+    liquid_value_minor: 305_50,
+    price_source: "market",
     price: "305.5",
     // More than a month old on purpose: these rows show «цена не
     // обновлялась». Fresh-price tests pass their own date.
@@ -2764,5 +2767,39 @@ describe("PositionsTable", () => {
       expect(visibleText(indicator)).toBe("");
       expect(announcedText(indicator)).toBe(CAPTION.noRateLotDate);
     });
+  });
+});
+
+// Р-11: the full valuation above says where its price came from, and the
+// liquid one — what can be sold now — is said beneath it when it differs.
+describe("PositionsTable — the two valuations", () => {
+  const show = (overrides: Partial<Position>) =>
+    wrap(<PositionsTable positions={[makePosition({ price_on: daysAgo(2), ...overrides })]} mode="native" baseCurrency="RUB" />);
+
+  it("says nothing more for a paper the market prices", () => {
+    show({});
+    expect(screen.queryByTestId("position-liquid")).toBeNull();
+    expect(screen.queryByTestId("position-not-traded")).toBeNull();
+    expect(screen.queryByTestId("position-price-nav")).toBeNull();
+  });
+
+  it("names a fund's net asset value and what the units sell for now", () => {
+    show({ price_source: "nav", liquid_value_minor: 65_00 });
+    expect(screen.getByTestId("position-price-nav").textContent).toBe("по стоимости чистых активов фонда");
+    expect(norm(screen.getByTestId("position-liquid").textContent ?? "")).toBe(
+      norm(`продать сейчас: ${formatMinor(65_00, "USD")}`),
+    );
+  });
+
+  it("names a foreign share's home exchange", () => {
+    show({ price_source: "foreign", liquid_value_minor: 300_00 });
+    expect(screen.getByTestId("position-price-foreign").textContent).toBe("по цене на бирже эмитента");
+  });
+
+  it("says a paper does not trade, and since when", () => {
+    show({ liquid_value_minor: null, last_traded_on: "2022-02-25" });
+    expect(screen.getByTestId("position-not-traded").textContent).toBe(
+      "не торгуется с 25.02.2022 — в «Итого» не входит",
+    );
   });
 });

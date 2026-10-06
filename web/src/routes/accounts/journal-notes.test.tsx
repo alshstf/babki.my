@@ -49,8 +49,10 @@ function brokerage(
     balance: { as_of: "2026-10-02", amount_minor: 54_000_000 },
     journal: {
       amount_minor: 19_500_000,
+      full_amount_minor: 19_500_000,
       currency: "RUB",
       unpriced_positions: 0,
+      not_traded_positions: 0,
       missing_rates: [],
       negative_cash: [],
       reconciliation,

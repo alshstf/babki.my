@@ -147,14 +147,14 @@ func (h *Handler) positionsResponse(ctx context.Context, spaceID, accountID uuid
 	if err != nil {
 		return apitypes.PositionsResponse{}, 0, err
 	}
-	quotes, err := h.quotes.LatestQuotes(ctx, instrumentIDs)
-	if err != nil {
-		return apitypes.PositionsResponse{}, 0, err
-	}
-
 	// One "today" for the whole request, shared by valuations, their conversions
 	// and the prefetch.
 	now := time.Now().UTC()
+	book, err := h.pricesOn(ctx, instrumentIDs, now, sp.FullValuation, todayWindows)
+	if err != nil {
+		return apitypes.PositionsResponse{}, 0, err
+	}
+	quotes := book.fullQuotes()
 
 	// Both per request.
 	rates := marketdata.NewRateMemo(h.conv)
@@ -180,6 +180,9 @@ func (h *Handler) positionsResponse(ctx context.Context, spaceID, accountID uuid
 		}
 		apiPos, err := h.toAPI(ctx, pos, inst, quotes, now, rates)
 		if err != nil {
+			return apitypes.PositionsResponse{}, 0, err
+		}
+		if err := h.addLiquid(ctx, &apiPos, pos, inst, book, sp.BaseCurrency, now, rates); err != nil {
 			return apitypes.PositionsResponse{}, 0, err
 		}
 

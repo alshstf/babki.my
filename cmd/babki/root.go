@@ -45,15 +45,7 @@ type journalValues struct{ positions *portfolio.Handler }
 
 func (j journalValues) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (account.JournalValue, error) {
 	v, err := j.positions.ValueFromJournal(ctx, spaceID, accountID)
-	return account.JournalValue{
-		Currency:     v.Currency,
-		Minor:        v.Minor,
-		ByCurrency:   v.ByCurrency,
-		Operations:   v.Operations,
-		Unpriced:     v.Unpriced,
-		MissingRates: v.MissingRates,
-		NegativeCash: v.NegativeCash,
-	}, err
+	return account.JournalValue(v), err
 }
 
 func (j journalValues) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (account.JournalValue, error) {

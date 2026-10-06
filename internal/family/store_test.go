@@ -104,7 +104,7 @@ func TestBaseCurrency(t *testing.T) {
 		t.Fatalf("SpaceByID base_currency = %q, want RUB", got.BaseCurrency)
 	}
 
-	if err := st.UpdateSpaceSettings(ctx, sp.ID, strp("USD"), nil); err != nil {
+	if err := st.UpdateSpaceSettings(ctx, sp.ID, strp("USD"), nil, nil); err != nil {
 		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
 	got, err = st.SpaceByID(ctx, sp.ID)
@@ -127,7 +127,7 @@ func TestBaseCurrency(t *testing.T) {
 	}
 
 	// Nonexistent space id: ErrNoRows.
-	if err := st.UpdateSpaceSettings(ctx, uuid.New(), strp("EUR"), nil); !errors.Is(err, pgx.ErrNoRows) {
+	if err := st.UpdateSpaceSettings(ctx, uuid.New(), strp("EUR"), nil, nil); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("UpdateSpaceSettings on missing space = %v, want pgx.ErrNoRows", err)
 	}
 }
@@ -158,7 +158,7 @@ func TestTaxResidencyColumn(t *testing.T) {
 	}
 
 	// Updating one setting leaves the other alone: nil means unchanged.
-	if err := st.UpdateSpaceSettings(ctx, sp.ID, nil, strp("DE")); err != nil {
+	if err := st.UpdateSpaceSettings(ctx, sp.ID, nil, strp("DE"), nil); err != nil {
 		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
 	got, err := st.SpaceByID(ctx, sp.ID)
@@ -168,7 +168,7 @@ func TestTaxResidencyColumn(t *testing.T) {
 	if got.TaxResidency != "DE" || got.BaseCurrency != "RUB" {
 		t.Fatalf("after residency-only update = %s/%s, want DE/RUB", got.TaxResidency, got.BaseCurrency)
 	}
-	if err := st.UpdateSpaceSettings(ctx, sp.ID, strp("EUR"), nil); err != nil {
+	if err := st.UpdateSpaceSettings(ctx, sp.ID, strp("EUR"), nil, nil); err != nil {
 		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
 	if got, err = st.SpaceByID(ctx, sp.ID); err != nil {
@@ -207,7 +207,7 @@ func TestDistinctBaseCurrencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSpaceWithOwner Abroad: %v", err)
 	}
-	if err := st.UpdateSpaceSettings(ctx, usdSpace.ID, strp("USD"), nil); err != nil {
+	if err := st.UpdateSpaceSettings(ctx, usdSpace.ID, strp("USD"), nil, nil); err != nil {
 		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
 

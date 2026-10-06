@@ -45,11 +45,11 @@ func scanUser(row pgx.Row) (User, error) {
 }
 
 // spaceCols and scanSpace are the one way a space is read.
-const spaceCols = `id, name, base_currency, tax_residency, created_at`
+const spaceCols = `id, name, base_currency, tax_residency, full_valuation, created_at`
 
 func scanSpace(row pgx.Row) (Space, error) {
 	var sp Space
-	err := row.Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.TaxResidency, &sp.CreatedAt)
+	err := row.Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.TaxResidency, &sp.FullValuation, &sp.CreatedAt)
 	return sp, err
 }
 
@@ -202,11 +202,12 @@ func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
 // UpdateSpaceSettings updates the given settings in one statement; nil leaves a
 // column alone. Validation is Service.UpdateSpace's. pgx.ErrNoRows if the space
 // does not exist.
-func (s *Store) UpdateSpaceSettings(ctx context.Context, spaceID uuid.UUID, baseCurrency, taxResidency *string) error {
+func (s *Store) UpdateSpaceSettings(ctx context.Context, spaceID uuid.UUID, baseCurrency, taxResidency, fullValuation *string) error {
 	ct, err := s.db.Exec(ctx, `UPDATE spaces
 		SET base_currency = COALESCE($2, base_currency),
-		    tax_residency = COALESCE($3, tax_residency)
-		WHERE id = $1`, spaceID, baseCurrency, taxResidency)
+		    tax_residency = COALESCE($3, tax_residency),
+		    full_valuation = COALESCE($4, full_valuation)
+		WHERE id = $1`, spaceID, baseCurrency, taxResidency, fullValuation)
 	if err == nil && ct.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}

@@ -29,6 +29,10 @@ import { COMMON_CURRENCIES, isCurrencyCode } from "@/lib/currencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 
+type FullValuation = NonNullable<UpdateSpaceBody["full_valuation"]>;
+
+const FULL_VALUATIONS: FullValuation[] = ["nav_and_foreign", "nav", "liquid"];
+
 export function SettingsPage() {
   const { t } = useTranslation();
   const { data: session } = useSession();
@@ -51,6 +55,9 @@ export function SettingsPage() {
       : "",
   );
   const [country, setCountry] = useState(() => session?.tax_residency ?? "");
+  const [fullValuation, setFullValuation] = useState<FullValuation>(
+    () => session?.full_valuation ?? "nav_and_foreign",
+  );
 
   if (!isOwner) {
     return (
@@ -65,8 +72,9 @@ export function SettingsPage() {
   const validCurrency = isCurrencyCode(effectiveCurrency);
   const currencyChanged = effectiveCurrency !== session?.base_currency;
   const countryChanged = country !== session?.tax_residency;
+  const fullValuationChanged = fullValuation !== session?.full_valuation;
   const canSave =
-    (currencyChanged || countryChanged) &&
+    (currencyChanged || countryChanged || fullValuationChanged) &&
     (!currencyChanged || validCurrency) &&
     !updateSpace.isPending;
 
@@ -76,6 +84,7 @@ export function SettingsPage() {
     const body: UpdateSpaceBody = {};
     if (currencyChanged) body.base_currency = effectiveCurrency;
     if (countryChanged) body.tax_residency = country;
+    if (fullValuationChanged) body.full_valuation = fullValuation;
     updateSpace.mutate(body);
   };
 
@@ -187,6 +196,31 @@ export function SettingsPage() {
             {selectedRules && (
               <CostBasisNotice rules={selectedRules} confirmWhenSupported />
             )}
+          </div>
+
+          {/* Where the full valuation starts (decision Р-11); the «Итого» is
+              the liquid one whatever is chosen here. */}
+          <div className="grid gap-2">
+            <Label htmlFor="full-valuation">{t("settings.fullValuation")}</Label>
+            <Select
+              value={fullValuation}
+              onValueChange={(v) => {
+                setFullValuation(v as FullValuation);
+                updateSpace.reset();
+              }}
+            >
+              <SelectTrigger id="full-valuation">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FULL_VALUATIONS.map((v) => (
+                  <SelectItem key={v} value={v}>
+                    {t(`settings.fullValuations.${v}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{t("settings.fullValuationHint")}</p>
           </div>
 
           {updateSpace.isError && (

@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -40,10 +41,12 @@ func TestAnAccountIsValuedFromItsJournal(t *testing.T) {
 	sber := createInstrument(t, c, url, `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	gamma := createInstrument(t, c, url, `{"type":"share","name":"Гамма","ticker":"GAMMA","currency":"RUB"}`)
 	// GAMMA, closed out below, has no quote: a closed position is not a holding
-	// with no price and must not be counted as one.
+	// with no price and must not be counted as one. Today's prices, so the
+	// papers trade and the liquid worth counts them.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
 	for id, q := range map[string][2]string{acme.ID: {"120", "USD"}, sber.ID: {"310", "RUB"}} {
 		quotes.byInstrument[uuid.MustParse(id)] = marketdata.Quote{
-			InstrumentID: uuid.MustParse(id), On: mustDate(t, "2026-07-28"),
+			InstrumentID: uuid.MustParse(id), On: today,
 			Price: decimal.RequireFromString(q[0]), Currency: q[1],
 		}
 	}
@@ -75,8 +78,8 @@ func TestAnAccountIsValuedFromItsJournal(t *testing.T) {
 	// Dollars: ACME 10 × 120 = 1 200, cash 1 500 − 1 000 − 50 = 450, BETA
 	// unpriced → 1 650 $ × 90 = 148 500 ₽. Rubles: SBER 10 × 310 = 3 100, cash
 	// 5 000 − 3 000 − 160 + 180 = 2 020 → 5 120 ₽. In all 153 620 ₽.
-	if got.Minor != 15_362_000 {
-		t.Errorf("value = %d, want 15362000", got.Minor)
+	if got.Minor != 15_362_000 || got.FullMinor != 15_362_000 {
+		t.Errorf("value = %d liquid, %d full, want 15362000 both", got.Minor, got.FullMinor)
 	}
 	if want := map[string]int64{"USD": 165_000, "RUB": 512_000}; !maps.Equal(got.ByCurrency, want) {
 		t.Errorf("by currency = %v, want %v", got.ByCurrency, want)

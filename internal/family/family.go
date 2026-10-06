@@ -37,7 +37,25 @@ type Space struct {
 	// deciding which cost basis rules apply. It belongs to the space because
 	// residency is the person's: one country governs every account.
 	TaxResidency string
-	CreatedAt    time.Time
+	// FullValuation is where the full valuation starts (decision Р-11).
+	FullValuation FullValuation
+	CreatedAt     time.Time
+}
+
+// FullValuation is which reference prices the full valuation may use: none
+// (it equals the liquid one), funds' NAV, or NAV and foreign shares' home
+// exchange prices.
+type FullValuation string
+
+const (
+	FullValuationLiquid        FullValuation = "liquid"
+	FullValuationNAV           FullValuation = "nav"
+	FullValuationNAVAndForeign FullValuation = "nav_and_foreign"
+)
+
+// Valid reports a known value.
+func (v FullValuation) Valid() bool {
+	return v == FullValuationLiquid || v == FullValuationNAV || v == FullValuationNAVAndForeign
 }
 
 // CostBasisRules is what TaxResidency implies (see TaxRulesFor).

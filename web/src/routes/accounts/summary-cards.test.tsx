@@ -24,7 +24,15 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
     total_in_base_minor: 123_456_700,
     unconverted: [],
     rates_on: localToday(),
-    journal: { accounts: 0, differing: 0, differing_difference_minor: 0, pinned_to_balance: 0, unpriced_positions: 0 },
+    journal: {
+      accounts: 0,
+      differing: 0,
+      differing_difference_minor: 0,
+      pinned_to_balance: 0,
+      unpriced_positions: 0,
+      not_traded_positions: 0,
+      full_difference_minor: 0,
+    },
     ...overrides,
   };
 }
@@ -171,6 +179,8 @@ describe("SummaryCards", () => {
             differing_difference_minor: -34_500_000,
             pinned_to_balance: 1,
             unpriced_positions: 3,
+            not_traded_positions: 0,
+            full_difference_minor: 0,
           },
         })}
         mode="native"
@@ -187,5 +197,41 @@ describe("SummaryCards", () => {
     expect(screen.getByTestId("summary-journal-unpriced")).toHaveTextContent(
       "бумаг без цены посчитано нулём: 3",
     );
+  });
+});
+
+// Р-11: the total is the liquid worth; the full one is said beneath it, and
+// the holdings it adds are told apart from those nothing prices.
+describe("SummaryCards — the full valuation", () => {
+  const journal = (overrides: Partial<Summary["journal"]>): Summary["journal"] => ({
+    accounts: 1,
+    differing: 0,
+    differing_difference_minor: 0,
+    pinned_to_balance: 0,
+    unpriced_positions: 0,
+    not_traded_positions: 0,
+    full_difference_minor: 0,
+    ...overrides,
+  });
+
+  it("says nothing when the two are one", () => {
+    wrap(<SummaryCards summary={makeSummary()} mode="native" />);
+    expect(screen.queryByTestId("summary-full-valuation")).toBeNull();
+  });
+
+  it("adds what does not sell now beneath the total", () => {
+    wrap(
+      <SummaryCards
+        summary={makeSummary({ journal: journal({ full_difference_minor: 5_000_000, unpriced_positions: 3, not_traded_positions: 2 }) })}
+        mode="native"
+      />,
+    );
+    expect(norm(screen.getByTestId("summary-full-valuation").textContent ?? "")).toBe(
+      norm(`полная оценка: ${formatMinorCompact(123_456_700 + 5_000_000, "RUB")}`),
+    );
+    expect(screen.getByTestId("summary-journal-not-traded").textContent).toBe(
+      "не торгуются сейчас и в итог не вошли: 2",
+    );
+    expect(screen.getByTestId("summary-journal-unpriced").textContent).toBe("бумаг без цены посчитано нулём: 1");
   });
 });

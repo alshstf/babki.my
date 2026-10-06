@@ -111,6 +111,7 @@ func toSessionInfo(u User, p Principal, sp Space) apitypes.SessionInfo {
 		SpaceName:      sp.Name,
 		BaseCurrency:   sp.BaseCurrency,
 		TaxResidency:   sp.TaxResidency,
+		FullValuation:  apitypes.FullValuation(sp.FullValuation),
 		CostBasisRules: CostBasisRulesAPI(sp.CostBasisRules()),
 	}
 }
@@ -235,8 +236,8 @@ func (h *Handler) handleListTaxResidencies(w http.ResponseWriter, r *http.Reques
 	httpjson.Write(w, http.StatusOK, out)
 }
 
-// handleUpdateSpace changes the base currency and/or the tax residency; checks
-// live in Service.UpdateSpace.
+// handleUpdateSpace changes the space's settings; checks live in
+// Service.UpdateSpace.
 func (h *Handler) handleUpdateSpace(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFromContext(r.Context())
 	var req apitypes.UpdateSpaceRequest
@@ -244,7 +245,7 @@ func (h *Handler) handleUpdateSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sp, err := h.svc.UpdateSpace(r.Context(), p, SpaceSettings{
-		BaseCurrency: req.BaseCurrency, TaxResidency: req.TaxResidency,
+		BaseCurrency: req.BaseCurrency, TaxResidency: req.TaxResidency, FullValuation: (*string)(req.FullValuation),
 	})
 	if err != nil {
 		WriteError(w, err)
