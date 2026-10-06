@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // journalRow is one row of a journal page, as far as these tests read it.
@@ -20,17 +22,17 @@ type journalRow struct {
 
 func accountJournal(t *testing.T, c *http.Client, url, accountID string) []journalRow {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
 	var page struct {
 		Operations []journalRow `json:"operations"`
 	}
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	return page.Operations
 }
 
 func moneyTransfer(t *testing.T, c *http.Client, url, body string) *http.Response {
 	t.Helper()
-	return do(t, c, "POST", url+"/api/v1/operations/money-transfer", body)
+	return apitest.Do(t, c, "POST", url+"/api/v1/operations/money-transfer", body)
 }
 
 // Money moved from one account to another is a withdrawal on the first and a
@@ -40,7 +42,7 @@ func TestMoneyMovedBetweenAccountsIsOneTransfer(t *testing.T) {
 	url, c := newAPI(t)
 	from := createID(t, c, url+"/api/v1/accounts", `{"name":"Т-Банк","type":"brokerage","currency":"RUB"}`)
 	to := createID(t, c, url+"/api/v1/accounts", `{"name":"Альфа","type":"brokerage","currency":"RUB"}`)
-	do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
+	apitest.Do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
 		`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-01","amount_minor":500000,"currency":"RUB"}`, from))
 
 	resp := moneyTransfer(t, c, url, fmt.Sprintf(
@@ -50,7 +52,7 @@ func TestMoneyMovedBetweenAccountsIsOneTransfer(t *testing.T) {
 		t.Fatalf("money transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	if pair.Out.Type != "withdrawal" || pair.Out.AmountMinor != -200_000 || pair.In.Type != "deposit" || pair.In.AmountMinor != 200_000 {
 		t.Fatalf("pair = %+v, want a withdrawal of 2000 ₽ and a deposit of 2000 ₽", pair)
 	}
@@ -84,7 +86,7 @@ func TestMoneyMovedBetweenAccountsIsOneTransfer(t *testing.T) {
 		}
 	}
 
-	if resp := do(t, c, "DELETE", url+"/api/v1/operations/"+pair.In.ID, ""); resp.StatusCode != http.StatusNoContent {
+	if resp := apitest.Do(t, c, "DELETE", url+"/api/v1/operations/"+pair.In.ID, ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete the deposit = %d", resp.StatusCode)
 	}
 	for _, row := range accountJournal(t, c, url, from) {
@@ -106,7 +108,7 @@ func TestMoneyConvertedOnTheWayArrivesAsReceived(t *testing.T) {
 		t.Fatalf("money transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	rows := accountJournal(t, c, url, to)
 	if len(rows) != 1 || rows[0].AmountMinor != 10_000 || rows[0].Currency != "USD" {
 		t.Errorf("the deposit = %+v, want 100 $", rows)
@@ -121,7 +123,7 @@ func TestAMoneyTransferIsRefusedForWhatEachHalfWouldBeRefusedFor(t *testing.T) {
 	a := createID(t, c, url+"/api/v1/accounts", `{"name":"А","type":"brokerage","currency":"RUB"}`)
 	b := createID(t, c, url+"/api/v1/accounts", `{"name":"Б","type":"brokerage","currency":"RUB"}`)
 	archived := createID(t, c, url+"/api/v1/accounts", `{"name":"В архиве","type":"brokerage","currency":"RUB"}`)
-	do(t, c, "DELETE", url+"/api/v1/accounts/"+archived, "")
+	apitest.Do(t, c, "DELETE", url+"/api/v1/accounts/"+archived, "")
 	body := func(from, to, rest string) string {
 		return fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"occurred_on":"2026-07-02",%s}`, from, to, rest)
 	}
@@ -153,9 +155,9 @@ func TestASharesTransferNamesTheOtherAccount(t *testing.T) {
 	a := createID(t, c, url+"/api/v1/accounts", `{"name":"А","type":"brokerage","currency":"RUB"}`)
 	b := createID(t, c, url+"/api/v1/accounts", `{"name":"Б","type":"brokerage","currency":"RUB"}`)
 	sber := createID(t, c, url+"/api/v1/instruments", `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
-	do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
+	apitest.Do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-07-01","quantity":"10","price":"100","currency":"RUB"}`, a, sber))
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"4","occurred_on":"2026-07-02"}`, a, b, sber))
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("transfer = %d", resp.StatusCode)
@@ -181,12 +183,12 @@ func TestAPapersRowsAcrossEveryAccount(t *testing.T) {
 		fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-01","amount_minor":1000000,"currency":"RUB"}`, b),
 		fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-07-04","quantity":"5","price":"110","currency":"RUB"}`, b, sber),
 	} {
-		if resp := do(t, c, "POST", url+"/api/v1/operations", op); resp.StatusCode != http.StatusCreated {
+		if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations", op); resp.StatusCode != http.StatusCreated {
 			b, _ := io.ReadAll(resp.Body)
 			t.Fatalf("create = %d: %s", resp.StatusCode, b)
 		}
 	}
-	resp := do(t, c, "GET", url+"/api/v1/instruments/"+sber+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/instruments/"+sber+"/operations", "")
 	var page struct {
 		Operations []struct {
 			AccountID  string `json:"account_id"`
@@ -194,13 +196,13 @@ func TestAPapersRowsAcrossEveryAccount(t *testing.T) {
 		} `json:"operations"`
 		HasMore bool `json:"has_more"`
 	}
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	if len(page.Operations) != 2 || page.Operations[0].AccountID != b || page.Operations[1].AccountID != a ||
 		page.Operations[0].OccurredOn != "2026-07-04" || page.HasMore {
 		t.Errorf("SBER's rows = %+v, want Б's buy then А's, and nothing else", page)
 	}
-	resp = do(t, c, "GET", url+"/api/v1/instruments/"+sber+"/operations?limit=1", "")
-	decodeJSON(t, resp, &page)
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/instruments/"+sber+"/operations?limit=1", "")
+	apitest.Decode(t, resp, &page)
 	if len(page.Operations) != 1 || !page.HasMore {
 		t.Errorf("a page of one = %+v, want one row and more to come", page)
 	}

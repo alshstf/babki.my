@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // fakeJournals stands in for the portfolio engine: each account's journal worth
@@ -81,7 +82,7 @@ type journalSummary struct {
 
 func getJSON(t *testing.T, c *http.Client, url string, out any) {
 	t.Helper()
-	resp := do(t, c, "GET", url, "")
+	resp := apitest.Do(t, c, "GET", url, "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET %s = %d: %s", url, resp.StatusCode, b)
@@ -93,7 +94,7 @@ func getJSON(t *testing.T, c *http.Client, url string, out any) {
 
 func createAccount(t *testing.T, url string, c *http.Client, name, typ, currency string) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		fmt.Sprintf(`{"name":%q,"type":%q,"currency":%q}`, name, typ, currency))
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create %s: %d", name, resp.StatusCode)
@@ -107,7 +108,7 @@ func createAccount(t *testing.T, url string, c *http.Client, name, typ, currency
 
 func balanceOn(t *testing.T, url string, c *http.Client, id string, on time.Time, minor int64) {
 	t.Helper()
-	resp := do(t, c, "PUT", url+"/api/v1/accounts/"+id+"/balance",
+	resp := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+id+"/balance",
 		fmt.Sprintf(`{"as_of":%q,"amount_minor":%d}`, on.Format("2006-01-02"), minor))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("set balance: %d", resp.StatusCode)
@@ -159,7 +160,7 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	journals.byAccount[gone] = account.JournalValue{
 		Currency: "RUB", Minor: 1_000_000, ByCurrency: map[string]int64{"RUB": 1_000_000}, Operations: 3,
 	}
-	if resp := do(t, c, "DELETE", url+"/api/v1/accounts/"+gone, ""); resp.StatusCode != http.StatusNoContent {
+	if resp := apitest.Do(t, c, "DELETE", url+"/api/v1/accounts/"+gone, ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("archive: %d", resp.StatusCode)
 	}
 
@@ -197,7 +198,7 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	}
 
 	// Pinned, Альфа counts by its balance and still reports its journal.
-	resp := do(t, c, "PATCH", url+"/api/v1/accounts/"+alfa, `{"valued_by_balance":true}`)
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+alfa, `{"valued_by_balance":true}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pin = %d", resp.StatusCode)
 	}
@@ -215,7 +216,7 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	}
 
 	// A PATCH that does not name the flag leaves it alone.
-	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+alfa, `{"name":"Альфа-Инвестиции"}`)
+	resp = apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+alfa, `{"name":"Альфа-Инвестиции"}`)
 	var renamed journalRow
 	_ = json.NewDecoder(resp.Body).Decode(&renamed)
 	if !renamed.ValuedByBalance {
@@ -394,7 +395,7 @@ func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
 		t.Errorf("last point is %s, want today", last.Day)
 	}
 
-	resp := do(t, c, "GET", url+"/api/v1/capital?from=2016-01-01&step=week", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/capital?from=2016-01-01&step=week", "")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("ten years by week = %d, want 400", resp.StatusCode)
 	}

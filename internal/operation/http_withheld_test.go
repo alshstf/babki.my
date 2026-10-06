@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // withheldBody decodes a journal row's withheld_abroad.
@@ -59,11 +60,11 @@ func TestTheJournalEstimatesTheTaxWithheldAbroad(t *testing.T) {
 	russian := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
 		"occurred_on":"2021-09-29","amount_minor":14,"currency":"USD"}`, acc, sber))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
 	var page struct {
 		Operations []withheldItem `json:"operations"`
 	}
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	rows := map[string]withheldItem{}
 	for _, o := range page.Operations {
 		rows[o.ID] = o
@@ -105,11 +106,11 @@ func TestAStatedTaxTakesThePlaceOfTheEstimate(t *testing.T) {
 
 	withheldOf := func() *withheldBody {
 		t.Helper()
-		resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
+		resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
 		var page struct {
 			Operations []withheldItem `json:"operations"`
 		}
-		decodeJSON(t, resp, &page)
+		apitest.Decode(t, resp, &page)
 		for _, o := range page.Operations {
 			if o.ID == div {
 				return o.WithheldAbroad
@@ -119,7 +120,7 @@ func TestAStatedTaxTakesThePlaceOfTheEstimate(t *testing.T) {
 		return nil
 	}
 
-	if resp := do(t, c, "PUT", url+"/api/v1/operations/"+div+"/withheld-abroad", `{"tax_minor":2}`); resp.StatusCode != 204 {
+	if resp := apitest.Do(t, c, "PUT", url+"/api/v1/operations/"+div+"/withheld-abroad", `{"tax_minor":2}`); resp.StatusCode != 204 {
 		t.Fatalf("state the tax = %d, want 204", resp.StatusCode)
 	}
 	w := withheldOf()
@@ -127,14 +128,14 @@ func TestAStatedTaxTakesThePlaceOfTheEstimate(t *testing.T) {
 		t.Errorf("stated: %+v, want tax 2 of 16, 12.5", w)
 	}
 
-	if resp := do(t, c, "DELETE", url+"/api/v1/operations/"+div+"/withheld-abroad", ""); resp.StatusCode != 204 {
+	if resp := apitest.Do(t, c, "DELETE", url+"/api/v1/operations/"+div+"/withheld-abroad", ""); resp.StatusCode != 204 {
 		t.Fatalf("clear = %d, want 204", resp.StatusCode)
 	}
 	if w := withheldOf(); w.State != "estimated" || *w.TaxMinor != 6 {
 		t.Errorf("after clearing: %+v, want the estimate of 6 back", w)
 	}
 
-	if resp := do(t, c, "PUT", url+"/api/v1/operations/"+deposit+"/withheld-abroad", `{"tax_minor":2}`); resp.StatusCode != 400 {
+	if resp := apitest.Do(t, c, "PUT", url+"/api/v1/operations/"+deposit+"/withheld-abroad", `{"tax_minor":2}`); resp.StatusCode != 400 {
 		t.Errorf("a tax on a deposit = %d, want 400", resp.StatusCode)
 	}
 }

@@ -1,14 +1,11 @@
 package operation_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +15,7 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
@@ -56,17 +54,8 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv marketdata.RateSource) (str
 	// compared on one running stack (http_transfer_in_base_test.go).
 	portfolio.NewHandler(portfolio.NewService(opStore, instStore, mdStore, marketdata.NewConverter(mdStore), famStore), auth, sm).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, client
+	base, client := apitest.Serve(t, srv.Handler())
+	return base, client
 }
 
 // newAPIWithConverter is the standard fixture: the full stack with a real
@@ -91,30 +80,6 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	t.Helper()
 	url, c, _ := newAPIWithConverter(t)
 	return url, c
-}
-
-func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
-	t.Helper()
-	var rd io.Reader
-	if body != "" {
-		rd = strings.NewReader(body)
-	}
-	req, _ := http.NewRequest(method, url, rd)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
-	}
-	return resp
-}
-
-func decodeJSON(t *testing.T, resp *http.Response, dst any) {
-	t.Helper()
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
 }
 
 type idResp struct {
@@ -144,51 +109,51 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 
 	// two accounts and one instrument, created via the API (matching the
 	// brief's full-stack fixture requirement).
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create acc1 = %d: %s", resp.StatusCode, b)
 	}
 	var acc1 idResp
-	decodeJSON(t, resp, &acc1)
+	apitest.Decode(t, resp, &acc1)
 
-	resp = do(t, c, "POST", url+"/api/v1/accounts",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер 2","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create acc2 = %d: %s", resp.StatusCode, b)
 	}
 	var acc2 idResp
-	decodeJSON(t, resp, &acc2)
+	apitest.Decode(t, resp, &acc2)
 
-	resp = do(t, c, "POST", url+"/api/v1/instruments",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
 	}
 	var sber idResp
-	decodeJSON(t, resp, &sber)
+	apitest.Decode(t, resp, &sber)
 
 	// POST buy -> 201
 	buyBody := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"RUB","fee_minor":10}`, acc1.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", buyBody)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", buyBody)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("buy = %d: %s", resp.StatusCode, b)
 	}
 	var buy opResp
-	decodeJSON(t, resp, &buy)
+	apitest.Decode(t, resp, &buy)
 	if buy.ID == "" || buy.Quantity == nil || *buy.Quantity != "10" ||
 		buy.Price == nil || *buy.Price != "100" || buy.AmountMinor != -100000 {
 		t.Fatalf("buy = %+v", buy)
 	}
 
 	// GET operations list: one item, quantity/price as strings
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("list acc1 = %d", resp.StatusCode)
 	}
@@ -197,7 +162,7 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	var page1 struct {
 		Operations []opResp `json:"operations"`
 	}
-	decodeJSON(t, resp, &page1)
+	apitest.Decode(t, resp, &page1)
 	list1 := page1.Operations
 	if len(list1) != 1 || list1[0].ID != buy.ID || list1[0].Quantity == nil || *list1[0].Quantity != "10" {
 		t.Fatalf("list1 after buy = %+v", list1)
@@ -207,7 +172,7 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	oversellBody := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 		"occurred_on":"2026-07-02","quantity":"999","amount_minor":999000,"currency":"RUB"}`,
 		acc1.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", oversellBody)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", oversellBody)
 	if resp.StatusCode != 409 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("oversell = %d, want 409: %s", resp.StatusCode, b)
@@ -217,13 +182,13 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	transferBody := fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,
 		"instrument_id":%q,"quantity":"4","occurred_on":"2026-07-05"}`,
 		acc1.ID, acc2.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", transferBody)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", transferBody)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var transfer transferResp
-	decodeJSON(t, resp, &transfer)
+	apitest.Decode(t, resp, &transfer)
 	if transfer.Out.ID == "" || transfer.In.ID == "" ||
 		transfer.Out.AccountId != acc1.ID || transfer.In.AccountId != acc2.ID ||
 		transfer.Out.Type != "transfer_out" || transfer.In.Type != "transfer_in" ||
@@ -232,36 +197,36 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	}
 
 	// GET operations of both accounts see the respective leg
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
-	decodeJSON(t, resp, &page1)
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
+	apitest.Decode(t, resp, &page1)
 	list1 = page1.Operations
 	if len(list1) != 2 {
 		t.Fatalf("list acc1 after transfer = %+v, want 2", list1)
 	}
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/operations", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/operations", "")
 	var page2 struct {
 		Operations []opResp `json:"operations"`
 	}
-	decodeJSON(t, resp, &page2)
+	apitest.Decode(t, resp, &page2)
 	list2 := page2.Operations
 	if len(list2) != 1 || list2[0].ID != transfer.In.ID {
 		t.Fatalf("list acc2 after transfer = %+v", list2)
 	}
 
 	// DELETE the transfer group -> 204, both legs disappear
-	resp = do(t, c, "DELETE", url+"/api/v1/operations/"+transfer.Out.ID, "")
+	resp = apitest.Do(t, c, "DELETE", url+"/api/v1/operations/"+transfer.Out.ID, "")
 	if resp.StatusCode != 204 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("delete transfer = %d: %s", resp.StatusCode, b)
 	}
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
-	decodeJSON(t, resp, &page1)
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
+	apitest.Decode(t, resp, &page1)
 	list1 = page1.Operations
 	if len(list1) != 1 {
 		t.Fatalf("list acc1 after delete transfer = %+v, want 1 (buy only)", list1)
 	}
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/operations", "")
-	decodeJSON(t, resp, &page2)
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/operations", "")
+	apitest.Decode(t, resp, &page2)
 	list2 = page2.Operations
 	if len(list2) != 0 {
 		t.Fatalf("list acc2 after delete transfer = %+v, want 0", list2)
@@ -271,14 +236,14 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	sellBody := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 		"occurred_on":"2026-07-03","quantity":"5","price":"110",
 		"amount_minor":55000,"currency":"RUB"}`, acc1.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", sellBody)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", sellBody)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("sell = %d: %s", resp.StatusCode, b)
 	}
 
 	// DELETE buy while the sell still depends on it -> 409
-	resp = do(t, c, "DELETE", url+"/api/v1/operations/"+buy.ID, "")
+	resp = apitest.Do(t, c, "DELETE", url+"/api/v1/operations/"+buy.ID, "")
 	if resp.StatusCode != 409 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("delete buy with live sell = %d, want 409: %s", resp.StatusCode, b)
@@ -288,27 +253,27 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	badBody := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-01","quantity":"abc","amount_minor":-1000,"currency":"RUB"}`,
 		acc1.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", badBody)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", badBody)
 	if resp.StatusCode != 400 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("invalid quantity = %d, want 400: %s", resp.StatusCode, b)
 	}
 
 	// viewer can read but not write
-	if resp = do(t, c, "POST", url+"/api/v1/members",
+	if resp = apitest.Do(t, c, "POST", url+"/api/v1/members",
 		`{"username":"vera","display_name":"V","password":"password9","role":"viewer"}`); resp.StatusCode != 201 {
 		t.Fatalf("create viewer = %d", resp.StatusCode)
 	}
 	jar, _ := cookiejar.New(nil)
 	vera := &http.Client{Jar: jar}
-	if resp = do(t, vera, "POST", url+"/api/v1/auth/login",
+	if resp = apitest.Do(t, vera, "POST", url+"/api/v1/auth/login",
 		`{"username":"vera","password":"password9"}`); resp.StatusCode != 200 {
 		t.Fatalf("vera login = %d", resp.StatusCode)
 	}
 	viewerBuyBody := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-01","quantity":"1","price":"1",
 		"amount_minor":-100,"currency":"RUB"}`, acc1.ID, sber.ID)
-	if resp = do(t, vera, "POST", url+"/api/v1/operations", viewerBuyBody); resp.StatusCode != 403 {
+	if resp = apitest.Do(t, vera, "POST", url+"/api/v1/operations", viewerBuyBody); resp.StatusCode != 403 {
 		t.Errorf("vera create = %d, want 403", resp.StatusCode)
 	}
 }
@@ -323,10 +288,10 @@ func TestATradeWithoutAnAmountGetsTheServersOwn(t *testing.T) {
 
 	post := func(body string) (int, journalItem) {
 		t.Helper()
-		resp := do(t, c, "POST", url+"/api/v1/operations", body)
+		resp := apitest.Do(t, c, "POST", url+"/api/v1/operations", body)
 		var item journalItem
 		if resp.StatusCode == 201 {
-			decodeJSON(t, resp, &item)
+			apitest.Decode(t, resp, &item)
 		}
 		return resp.StatusCode, item
 	}

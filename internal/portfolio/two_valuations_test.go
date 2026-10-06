@@ -15,6 +15,7 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
@@ -208,7 +209,7 @@ func TestAForeignBrokersAccountSellsAtTheHomeExchangesClose(t *testing.T) {
 		t.Fatalf("on a Russian broker's account: liquid %s, full %s; want null and 2 × 180 $", value(p.LiquidValueMinor), value(p.MarketValueMinor))
 	}
 
-	resp := do(t, f.c, http.MethodPatch, f.url+"/api/v1/accounts/"+f.account, `{"trades_abroad":true}`)
+	resp := apitest.Do(t, f.c, http.MethodPatch, f.url+"/api/v1/accounts/"+f.account, `{"trades_abroad":true}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("switch the account: %d", resp.StatusCode)
 	}

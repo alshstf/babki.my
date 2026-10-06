@@ -12,6 +12,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // operationInBase mirrors apitypes.OperationInBase for decoding in tests.
@@ -49,53 +50,53 @@ type journalItem struct {
 // Envelope tests use getJournalPage (http_pagination_test.go).
 func listJournal(t *testing.T, url string, c *http.Client, accountID string) []journalItem {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("list operations = %d: %s", resp.StatusCode, b)
 	}
 	var page journalPage
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	return page.Operations
 }
 
 // mkAccount creates an account in currency and returns its id.
 func mkAccount(t *testing.T, url string, c *http.Client, name, currency string) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		fmt.Sprintf(`{"name":%q,"type":"brokerage","currency":%q}`, name, currency))
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create %s account = %d: %s", currency, resp.StatusCode, b)
 	}
 	var a idResp
-	decodeJSON(t, resp, &a)
+	apitest.Decode(t, resp, &a)
 	return a.ID
 }
 
 // mkInstrument creates an instrument and returns its id.
 func mkInstrument(t *testing.T, url string, c *http.Client, body string) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/instruments", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments", body)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
 	}
 	var i idResp
-	decodeJSON(t, resp, &i)
+	apitest.Decode(t, resp, &i)
 	return i.ID
 }
 
 // mkOperation creates one operation and returns its id.
 func mkOperation(t *testing.T, url string, c *http.Client, body string) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/operations", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations", body)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create operation = %d: %s", resp.StatusCode, b)
 	}
 	var o idResp
-	decodeJSON(t, resp, &o)
+	apitest.Decode(t, resp, &o)
 	return o.ID
 }
 
@@ -276,7 +277,7 @@ func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
 		"occurred_on":"2019-03-12","amount_minor":-10000,"currency":"USD"}`, acc))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
 	if resp.StatusCode != http.StatusInternalServerError {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with in_base: null: %s",

@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // What a client may say about a 409 (#23):
@@ -20,30 +22,30 @@ import (
 func TestConflictIsNotOnlyAnOversell(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create account = %d: %s", resp.StatusCode, b)
 	}
 	var acc idResp
-	decodeJSON(t, resp, &acc)
+	apitest.Decode(t, resp, &acc)
 
-	resp = do(t, c, "POST", url+"/api/v1/instruments",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
 	}
 	var sber idResp
-	decodeJSON(t, resp, &sber)
+	apitest.Decode(t, resp, &sber)
 
 	// The row that settles the position's currency, and the one the refusal
 	// below will name. Its date is deliberately the LATER of the two.
 	stored := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-10","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", stored)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", stored)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("first buy = %d, want 201: %s", resp.StatusCode, b)
@@ -53,7 +55,7 @@ func TestConflictIsNotOnlyAnOversell(t *testing.T) {
 	posted := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-01","quantity":"5","price":"1",
 		"amount_minor":-500,"currency":"USD"}`, acc.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", posted)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", posted)
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 409 {
 		t.Fatalf("buy in a second currency = %d, want 409: %s", resp.StatusCode, body)
@@ -70,7 +72,7 @@ func TestConflictIsNotOnlyAnOversell(t *testing.T) {
 	oversell := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 		"occurred_on":"2026-07-20","quantity":"999","amount_minor":999000,"currency":"RUB"}`,
 		acc.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations", oversell)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations", oversell)
 	if resp.StatusCode != 409 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("oversell = %d, want 409: %s", resp.StatusCode, b)

@@ -12,6 +12,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -27,10 +28,10 @@ type periodResp struct {
 
 func paperReturn(t *testing.T, c *http.Client, url, id, from, to string) (int, periodResp) {
 	t.Helper()
-	resp := do(t, c, "GET", fmt.Sprintf("%s/api/v1/instruments/%s/return?from=%s&to=%s", url, id, from, to), "")
+	resp := apitest.Do(t, c, "GET", fmt.Sprintf("%s/api/v1/instruments/%s/return?from=%s&to=%s", url, id, from, to), "")
 	var out periodResp
 	if resp.StatusCode == http.StatusOK {
-		decodeJSON(t, resp, &out)
+		apitest.Decode(t, resp, &out)
 	}
 	return resp.StatusCode, out
 }
@@ -49,14 +50,14 @@ func TestAPapersReturnAcrossTheFamily(t *testing.T) {
 	sber := createInstrument(t, c, url, `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`).ID
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-01-10","amount_minor":1000000,"currency":"RUB"}`, a))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-01-10","quantity":"10","price":"100","fee_minor":100,"currency":"RUB"}`, a, sber))
-	if resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"2","occurred_on":"2026-02-01"}`, a, b, sber)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("transfer = %d", resp.StatusCode)
 	}
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend","occurred_on":"2026-02-15","amount_minor":5000,"currency":"RUB"}`, a, sber))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"tax","occurred_on":"2026-02-15","amount_minor":-650,"currency":"RUB"}`, a, sber))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell","occurred_on":"2026-03-01","quantity":"4","price":"120","currency":"RUB"}`, a, sber))
-	if resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+	if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-03-15","quantity":"3","currency":"RUB"}`, cAcc, sber)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("arrival = %d", resp.StatusCode)
 	}

@@ -18,6 +18,7 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
 )
@@ -135,7 +136,7 @@ func positionsScreen(t *testing.T, size int, tune func(*ratetest.Counting)) scre
 	instruments.calls, journal.calls, spaces.calls, quotes.calls = 0, 0, 0, 0
 	before := poolTrips(pool)
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET positions = %d, want 200", resp.StatusCode)
 	}
@@ -143,7 +144,7 @@ func positionsScreen(t *testing.T, size int, tune func(*ratetest.Counting)) scre
 		spaces: spaces.calls, journal: journal.calls, instruments: instruments.calls,
 		quotes: quotes.calls, rate: int(conv.Singles.Load()), batch: int(conv.Batches.Load()),
 	}
-	decodeJSON(t, resp, &cost.body)
+	apitest.Decode(t, resp, &cost.body)
 	// Read trips after the body is drained, so a handler still working after the
 	// headers would be counted.
 	cost.trips = poolTrips(pool) - before
@@ -369,12 +370,12 @@ func TestPositionsGapIsFiledNotAskedAgain(t *testing.T) {
 
 	// Zero the counters so they hold only the GET below.
 	conv.Reset()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET positions = %d, want 200", resp.StatusCode)
 	}
 	var body positionsResp
-	decodeJSON(t, resp, &body)
+	apitest.Decode(t, resp, &body)
 
 	var gaps, converted int
 	for _, p := range body.Positions {
@@ -448,12 +449,12 @@ func TestPositionsSharedRateMemoKeepsTargetsApart(t *testing.T) {
 		"occurred_on":"2026-03-01","quantity":"1","price":"800",
 		"amount_minor":-80000,"currency":"EUR"}`, acc.ID, bond.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET positions = %d, want 200", resp.StatusCode)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	byID := make(map[string]positionResp, len(got.Positions))
 	for _, p := range got.Positions {
 		byID[p.Instrument.Id] = p
@@ -516,7 +517,7 @@ func TestPositionsAbsentInstrumentIsLoud(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET positions whose instrument has no catalog row = %d, want 404 — a position must never be dropped from the list in silence", resp.StatusCode)
 	}

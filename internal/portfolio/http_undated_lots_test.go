@@ -10,19 +10,20 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
 // positionsByTicker fetches an account's positions keyed by ticker.
 func positionsByTicker(t *testing.T, c *http.Client, url, accountID string) map[string]positionResp {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d, want 200: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	out := make(map[string]positionResp, len(got.Positions))
 	for _, p := range got.Positions {
 		out[p.Instrument.Ticker] = p

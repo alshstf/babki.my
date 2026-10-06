@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // summaryResponse mirrors apitypes.Summary for decoding in tests.
@@ -28,7 +29,7 @@ func TestSummaryEndpoint(t *testing.T) {
 	url, c := newAPI(t)
 
 	mk := func(body string) string {
-		resp := do(t, c, "POST", url+"/api/v1/accounts", body)
+		resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts", body)
 		if resp.StatusCode != 201 {
 			t.Fatalf("create: %d", resp.StatusCode)
 		}
@@ -40,10 +41,10 @@ func TestSummaryEndpoint(t *testing.T) {
 	}
 	id1 := mk(`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	id2 := mk(`{"name":"Кредитка","type":"credit_card","currency":"RUB"}`)
-	do(t, c, "PUT", url+"/api/v1/accounts/"+id1+"/balance", `{"as_of":"2026-07-20","amount_minor":100000}`)
-	do(t, c, "PUT", url+"/api/v1/accounts/"+id2+"/balance", `{"as_of":"2026-07-20","amount_minor":-25000}`)
+	apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+id1+"/balance", `{"as_of":"2026-07-20","amount_minor":100000}`)
+	apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+id2+"/balance", `{"as_of":"2026-07-20","amount_minor":-25000}`)
 
-	resp := do(t, c, "GET", url+"/api/v1/summary", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -92,7 +93,7 @@ func TestSummaryTotalInBaseCurrencyTwoCurrencies(t *testing.T) {
 	}
 
 	mk := func(currency, body string) {
-		resp := do(t, c, "POST", url+"/api/v1/accounts", body)
+		resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts", body)
 		if resp.StatusCode != 201 {
 			t.Fatalf("create %s account: %d", currency, resp.StatusCode)
 		}
@@ -100,7 +101,7 @@ func TestSummaryTotalInBaseCurrencyTwoCurrencies(t *testing.T) {
 			ID string `json:"id"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&a)
-		if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+		if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
 			`{"as_of":"2026-07-20","amount_minor":`+balanceFor(currency)+`}`); resp.StatusCode != 200 {
 			t.Fatalf("set %s balance: %d", currency, resp.StatusCode)
 		}
@@ -108,7 +109,7 @@ func TestSummaryTotalInBaseCurrencyTwoCurrencies(t *testing.T) {
 	mk("USD", `{"name":"US cash","type":"cash","currency":"USD"}`)
 	mk("EUR", `{"name":"EU cash","type":"cash","currency":"EUR"}`)
 
-	resp := do(t, c, "GET", url+"/api/v1/summary", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -157,7 +158,7 @@ func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 	}
 
 	mk := func(name, currency, amountMinor string) {
-		resp := do(t, c, "POST", url+"/api/v1/accounts",
+		resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 			`{"name":"`+name+`","type":"cash","currency":"`+currency+`"}`)
 		if resp.StatusCode != 201 {
 			t.Fatalf("create %s account: %d", currency, resp.StatusCode)
@@ -166,7 +167,7 @@ func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 			ID string `json:"id"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&a)
-		if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+		if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
 			`{"as_of":"2026-07-20","amount_minor":`+amountMinor+`}`); resp.StatusCode != 200 {
 			t.Fatalf("set %s balance: %d", currency, resp.StatusCode)
 		}
@@ -174,7 +175,7 @@ func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 	mk("US cash", "USD", "10000")  // 100.00 USD -> 9000.00 RUB (900000 minor)
 	mk("KZT cash", "KZT", "50000") // no rate available at all
 
-	resp := do(t, c, "GET", url+"/api/v1/summary", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -199,7 +200,7 @@ func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 func TestSummaryNoRatesAtAllYieldsNullTotal(t *testing.T) {
 	url, c, _ := newAPIWithConverter(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"US cash","type":"cash","currency":"USD"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create account: %d", resp.StatusCode)
@@ -208,12 +209,12 @@ func TestSummaryNoRatesAtAllYieldsNullTotal(t *testing.T) {
 		ID string `json:"id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&a)
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
 		`{"as_of":"2026-07-20","amount_minor":10000}`); resp.StatusCode != 200 {
 		t.Fatalf("set balance: %d", resp.StatusCode)
 	}
 
-	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -237,12 +238,12 @@ func TestSummaryNoRatesAtAllYieldsNullTotal(t *testing.T) {
 func TestSummaryBaseCurrencyComesFromSpace(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "PATCH", url+"/api/v1/space", `{"base_currency":"USD"}`)
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/space", `{"base_currency":"USD"}`)
 	if resp.StatusCode != 200 {
 		t.Fatalf("patch space base_currency: %d", resp.StatusCode)
 	}
 
-	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -270,7 +271,7 @@ func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 	url, c, _ := newAPIWithConverter(t)
 
 	// Create RUB account (base currency) with a non-zero balance
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Base RUB","type":"cash","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create RUB account: %d", resp.StatusCode)
@@ -279,13 +280,13 @@ func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 		ID string `json:"id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&rubAcc)
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+rubAcc.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+rubAcc.ID+"/balance",
 		`{"as_of":"2026-07-20","amount_minor":100000}`); resp.StatusCode != 200 {
 		t.Fatalf("set RUB balance: %d", resp.StatusCode)
 	}
 
 	// Create KZT account (NOT base currency, NO fx rate) with zero balance
-	resp = do(t, c, "POST", url+"/api/v1/accounts",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Zero KZT","type":"cash","currency":"KZT"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create KZT account: %d", resp.StatusCode)
@@ -296,7 +297,7 @@ func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&kztAcc)
 	// Note: not setting a balance for KZT account, so it has net_minor=0
 
-	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -336,7 +337,7 @@ func TestSummaryRatesOnReflectsStaleRateNotToday(t *testing.T) {
 		t.Fatalf("seed fx rates: %v", err)
 	}
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts", `{"name":"US cash","type":"cash","currency":"USD"}`)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"US cash","type":"cash","currency":"USD"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create USD account: %d", resp.StatusCode)
 	}
@@ -344,12 +345,12 @@ func TestSummaryRatesOnReflectsStaleRateNotToday(t *testing.T) {
 		ID string `json:"id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&a)
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
 		`{"as_of":"2026-07-20","amount_minor":10000}`); resp.StatusCode != 200 {
 		t.Fatalf("set balance: %d", resp.StatusCode)
 	}
 
-	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}
@@ -383,12 +384,12 @@ func TestSummaryConvertsViaInverseRate(t *testing.T) {
 		t.Fatalf("seed fx rates: %v", err)
 	}
 
-	resp := do(t, c, "PATCH", url+"/api/v1/space", `{"base_currency":"USD"}`)
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/space", `{"base_currency":"USD"}`)
 	if resp.StatusCode != 200 {
 		t.Fatalf("patch space base_currency: %d", resp.StatusCode)
 	}
 
-	resp = do(t, c, "POST", url+"/api/v1/accounts", `{"name":"RUB cash","type":"cash","currency":"RUB"}`)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"RUB cash","type":"cash","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create RUB account: %d", resp.StatusCode)
 	}
@@ -396,12 +397,12 @@ func TestSummaryConvertsViaInverseRate(t *testing.T) {
 		ID string `json:"id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&a)
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
 		`{"as_of":"2026-07-20","amount_minor":785000}`); resp.StatusCode != 200 {
 		t.Fatalf("set RUB balance: %d", resp.StatusCode)
 	}
 
-	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/summary", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("summary = %d", resp.StatusCode)
 	}

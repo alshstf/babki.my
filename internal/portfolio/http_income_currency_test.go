@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -48,13 +49,13 @@ func TestIncomeArrivingInSeveralCurrencies(t *testing.T) {
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"tax",
 		"occurred_on":"2026-07-06","amount_minor":-39000,"currency":"RUB"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -118,13 +119,13 @@ func TestInBaseGoesNullWhenAnIncomeCurrencyHasNoRate(t *testing.T) {
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"tax",
 		"occurred_on":"2026-07-06","amount_minor":-1000,"currency":"EUR"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -163,7 +164,7 @@ func TestIncomeByCurrencyIsEmptyWhenNothingWasPaid(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)

@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // moneyInBase mirrors apitypes.MoneyInBase for decoding in tests.
@@ -32,7 +33,7 @@ type accountListItem struct {
 // listAccounts fetches and decodes GET /api/v1/accounts.
 func listAccounts(t *testing.T, url string, c *http.Client) []accountListItem {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("list accounts = %d", resp.StatusCode)
 	}
@@ -46,7 +47,7 @@ func listAccounts(t *testing.T, url string, c *http.Client) []accountListItem {
 // mkAccount creates a cash account in currency and returns its id.
 func mkAccount(t *testing.T, url string, c *http.Client, name, currency string) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"`+name+`","type":"cash","currency":"`+currency+`"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create %s account: %d", currency, resp.StatusCode)
@@ -61,7 +62,7 @@ func mkAccount(t *testing.T, url string, c *http.Client, name, currency string) 
 // setBalance sets an account's balance via PUT .../balance.
 func setBalance(t *testing.T, url string, c *http.Client, accountID string, amountMinor int64) {
 	t.Helper()
-	resp := do(t, c, "PUT", url+"/api/v1/accounts/"+accountID+"/balance",
+	resp := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+accountID+"/balance",
 		`{"as_of":"2026-07-20","amount_minor":`+decimal.NewFromInt(amountMinor).String()+`}`)
 	if resp.StatusCode != 200 {
 		t.Fatalf("set balance: %d", resp.StatusCode)
@@ -162,7 +163,7 @@ func TestListBalanceInBaseNullWhenNoRate(t *testing.T) {
 	id := mkAccount(t, url, c, "GBP cash", "GBP")
 	setBalance(t, url, c, id, 10000)
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("list accounts = %d, want 200 (missing rate must not fail the request)", resp.StatusCode)
 	}

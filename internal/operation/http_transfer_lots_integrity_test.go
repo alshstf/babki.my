@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // A stored breakdown that no longer sums to its operation fails the journal
@@ -28,7 +29,7 @@ func TestJournalRefusesTransferWithCorruptedBreakdown(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-05-13","quantity":"10","price":"180","amount_minor":-180000,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -36,7 +37,7 @@ func TestJournalRefusesTransferWithCorruptedBreakdown(t *testing.T) {
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	inID, err := uuid.Parse(pair.In.ID)
 	if err != nil {
 		t.Fatalf("parse transfer_in id: %v", err)
@@ -69,7 +70,7 @@ func TestJournalRefusesTransferWithCorruptedBreakdown(t *testing.T) {
 		{"transfer_out (source account journal)", from},
 		{"transfer_in (destination account journal)", to},
 	} {
-		resp := do(t, c, "GET", url+"/api/v1/accounts/"+tc.accountID+"/operations", "")
+		resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+tc.accountID+"/operations", "")
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusOK {
 			t.Errorf("%s: GET operations with a corrupted breakdown = 200: %s — "+

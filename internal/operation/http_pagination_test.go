@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // hasMore is the server's answer to "is that all". A client comparing the
@@ -31,13 +32,13 @@ type journalPage struct {
 // getJournalPage fetches one page and decodes the envelope.
 func getJournalPage(t *testing.T, url string, c *http.Client, accountID, query string) journalPage {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations?"+query, "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations?"+query, "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations?%s = %d: %s", query, resp.StatusCode, b)
 	}
 	var page journalPage
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	return page
 }
 
@@ -170,7 +171,7 @@ func TestJournalRefusesAPageItCannotHonour(t *testing.T) {
 		"offset=-1",
 		"offset=half",
 	} {
-		resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+bad, "")
+		resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+bad, "")
 		if resp.StatusCode != 400 {
 			b, _ := io.ReadAll(resp.Body)
 			t.Errorf("GET operations?%s = %d, want 400: %s", bad, resp.StatusCode, b)
@@ -223,7 +224,7 @@ func TestEmptyJournalAnswersAnEmptyList(t *testing.T) {
 	url, c := newAPI(t)
 	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)

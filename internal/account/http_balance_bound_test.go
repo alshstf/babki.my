@@ -10,6 +10,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -53,7 +54,7 @@ func newBoundedAccount(t *testing.T) (string, *http.Client, string) {
 // putBalance sends one balance mark and returns the response, whatever it is.
 func putBalance(t *testing.T, url string, c *http.Client, id string, amountMinor int64) *http.Response {
 	t.Helper()
-	return do(t, c, "PUT", url+"/api/v1/accounts/"+id+"/balance",
+	return apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+id+"/balance",
 		fmt.Sprintf(`{"as_of":"2026-07-20","amount_minor":%d}`, amountMinor))
 }
 

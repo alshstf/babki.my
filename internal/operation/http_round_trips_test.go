@@ -12,6 +12,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // journalCost is what one GET of the journal page cost and answered.
@@ -55,14 +56,14 @@ func journalScreen(t *testing.T, size int, tune func(*ratetest.Counting)) journa
 	conv.Reset()
 	before := poolTrips(pool)
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations?limit=200", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations?limit=200", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
 	cost := journalCost{trips: poolTrips(pool) - before, rate: conv.Singles.Load(), batch: conv.Batches.Load()}
 	var page journalPage
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	cost.body = page.Operations
 	return cost
 }
@@ -119,13 +120,13 @@ func dayCounter(t *testing.T, first string) func() string {
 // 201. The body is whole so a caller may add cost_minor or not.
 func mkTransfer(t *testing.T, url string, c *http.Client, body string) transferResp {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", body)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	return pair
 }
 
@@ -266,13 +267,13 @@ func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
 		"occurred_on":"2024-06-01","amount_minor":-20000,"currency":"USD"}`, acc))
 
 	conv.Reset()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?limit=200", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?limit=200", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
 	var page journalPage
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	rows := page.Operations
 
 	var gaps, converted int

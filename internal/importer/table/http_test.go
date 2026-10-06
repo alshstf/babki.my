@@ -6,8 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -17,6 +15,7 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -38,16 +37,8 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(pool), exchangeStub{}), instStore, auth, sm).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	c := &http.Client{Jar: jar}
-	resp, err := c.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, c
+	base, c := apitest.Serve(t, srv.Handler())
+	return base, c
 }
 
 func call(t *testing.T, c *http.Client, method, url, body string, want int, out any) {

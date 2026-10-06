@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -20,13 +21,13 @@ import (
 // lives.
 func accountPositions(t *testing.T, c *http.Client, url, accountID string) positionsResp {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d, want 200: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	return got
 }
 
@@ -521,7 +522,7 @@ func TestRealizedTotalRefusesToPublishASumThatWouldWrap(t *testing.T) {
 	}
 
 	sellAndBuy(beta.ID)
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusInternalServerError {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("two positions summing past int64: GET positions = %d, want 500 — twice %d is not an int64 of kopecks, and the 200 carries a wrapped total under a header the owner reads as their money: %s",

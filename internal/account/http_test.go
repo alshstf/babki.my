@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -57,41 +57,15 @@ func newAPIWithJournals(t *testing.T, journals *fakeJournals) (string, *http.Cli
 		account.NewHandler(account.NewStore(pool), famStore, converter, nil, auth, sm).Mount(srv)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, client, mdStore
-}
-
-func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
-	t.Helper()
-	var rd io.Reader
-	if body != "" {
-		rd = strings.NewReader(body)
-	}
-	req, _ := http.NewRequest(method, url, rd)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
-	}
-	return resp
+	base, client := apitest.Serve(t, srv.Handler())
+	return base, client, mdStore
 }
 
 func TestAccountsCRUDAndBalance(t *testing.T) {
 	url, c := newAPI(t)
 
 	// create
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокерский Т-Банк","type":"brokerage","currency":"RUB","institution":"Т-Банк"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
@@ -115,17 +89,17 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		// stored "rub" would match no rate.
 		`{"name":"X","type":"cash","currency":"rub"}`,
 	} {
-		if resp = do(t, c, "POST", url+"/api/v1/accounts", bad); resp.StatusCode != 400 {
+		if resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts", bad); resp.StatusCode != 400 {
 			t.Errorf("create %s = %d, want 400", bad, resp.StatusCode)
 		}
 	}
 
 	// set balance + read list
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
 		`{"as_of":"2026-07-20","amount_minor":150000000}`); resp.StatusCode != 200 {
 		t.Fatalf("set balance = %d", resp.StatusCode)
 	}
-	resp = do(t, c, "GET", url+"/api/v1/accounts", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts", "")
 	var list []struct {
 		Name    string `json:"name"`
 		Balance *struct {
@@ -145,14 +119,14 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		`{"as_of":"2099-01-01","amount_minor":1}`,
 		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, dayAfterTomorrow),
 	} {
-		if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance", bad); resp.StatusCode != 400 {
+		if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance", bad); resp.StatusCode != 400 {
 			t.Errorf("balance %s = %d, want 400", bad, resp.StatusCode)
 		}
 	}
 
 	// today's date is the inclusive boundary and must be accepted
 	today := time.Now().UTC().Format("2006-01-02")
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
 		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, today)); resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("balance as_of=today = %d, want 200: %s", resp.StatusCode, b)
@@ -160,42 +134,42 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 
 	// Tomorrow (UTC) is within the slack and accepted.
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
-	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
+	if resp = apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
 		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, tomorrow)); resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("balance as_of=tomorrow = %d, want 200: %s", resp.StatusCode, b)
 	}
 
 	// patch: empty name is rejected
-	if resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
+	if resp = apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
 		`{"name":""}`); resp.StatusCode != 400 {
 		t.Errorf("patch empty name = %d, want 400", resp.StatusCode)
 	}
 
 	// patch + archive
-	if resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
+	if resp = apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
 		`{"name":"Брокер Т"}`); resp.StatusCode != 200 {
 		t.Fatalf("patch = %d", resp.StatusCode)
 	}
-	if resp = do(t, c, "DELETE", url+"/api/v1/accounts/"+acc.ID, ""); resp.StatusCode != 204 {
+	if resp = apitest.Do(t, c, "DELETE", url+"/api/v1/accounts/"+acc.ID, ""); resp.StatusCode != 204 {
 		t.Fatalf("archive = %d", resp.StatusCode)
 	}
 
 	// viewer cannot write
-	if resp = do(t, c, "POST", url+"/api/v1/members",
+	if resp = apitest.Do(t, c, "POST", url+"/api/v1/members",
 		`{"username":"vera","display_name":"V","password":"password9","role":"viewer"}`); resp.StatusCode != 201 {
 		t.Fatalf("create viewer = %d", resp.StatusCode)
 	}
 	jar, _ := cookiejar.New(nil)
 	vera := &http.Client{Jar: jar}
-	if resp = do(t, vera, "POST", url+"/api/v1/auth/login",
+	if resp = apitest.Do(t, vera, "POST", url+"/api/v1/auth/login",
 		`{"username":"vera","password":"password9"}`); resp.StatusCode != 200 {
 		t.Fatalf("vera login = %d", resp.StatusCode)
 	}
-	if resp = do(t, vera, "GET", url+"/api/v1/accounts", ""); resp.StatusCode != 200 {
+	if resp = apitest.Do(t, vera, "GET", url+"/api/v1/accounts", ""); resp.StatusCode != 200 {
 		t.Errorf("vera list = %d, want 200", resp.StatusCode)
 	}
-	if resp = do(t, vera, "POST", url+"/api/v1/accounts",
+	if resp = apitest.Do(t, vera, "POST", url+"/api/v1/accounts",
 		`{"name":"X","type":"cash","currency":"RUB"}`); resp.StatusCode != 403 {
 		t.Errorf("vera create = %d, want 403", resp.StatusCode)
 	}
@@ -212,7 +186,7 @@ type accountOwner struct {
 func TestAccountOwnerUserIDNullable(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "GET", url+"/api/v1/auth/me", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/auth/me", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("me = %d", resp.StatusCode)
 	}
@@ -227,7 +201,7 @@ func TestAccountOwnerUserIDNullable(t *testing.T) {
 	}
 
 	// create with an explicit owner
-	resp = do(t, c, "POST", url+"/api/v1/accounts",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		fmt.Sprintf(`{"name":"Owned","type":"cash","currency":"RUB","owner_user_id":%q}`, me.User.ID))
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
@@ -240,7 +214,7 @@ func TestAccountOwnerUserIDNullable(t *testing.T) {
 	}
 
 	// PATCH without owner_user_id leaves the owner unchanged
-	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+created.ID, `{"name":"Owned renamed"}`)
+	resp = apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+created.ID, `{"name":"Owned renamed"}`)
 	if resp.StatusCode != 200 {
 		t.Fatalf("patch rename = %d", resp.StatusCode)
 	}
@@ -251,7 +225,7 @@ func TestAccountOwnerUserIDNullable(t *testing.T) {
 	}
 
 	// PATCH with an explicit null clears the owner (account becomes shared)
-	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+created.ID, `{"owner_user_id":null}`)
+	resp = apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+created.ID, `{"owner_user_id":null}`)
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("patch clear owner = %d: %s", resp.StatusCode, b)
@@ -284,17 +258,8 @@ func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	account.NewHandler(account.NewStore(pool), famStore, conv, nil, auth, sm).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, client
+	base, client := apitest.Serve(t, srv.Handler())
+	return base, client
 }
 
 // A real rate failure fails the request rather than showing balance_in_base:
@@ -307,7 +272,7 @@ func TestListRealRateErrorFailsRequest(t *testing.T) {
 	id := mkAccount(t, url, c, "US cash", "USD")
 	setBalance(t, url, c, id, 12345)
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts", "")
 	if resp.StatusCode != http.StatusInternalServerError {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET accounts with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with balance_in_base: null: %s",
@@ -322,7 +287,7 @@ func TestAnUnknownOwnerIsA400OnBothDoors(t *testing.T) {
 	url, c := newAPI(t)
 	stranger := uuid.New().String()
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Ничей","type":"cash","currency":"RUB","owner_user_id":"`+stranger+`"}`)
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 400 {
@@ -332,7 +297,7 @@ func TestAnUnknownOwnerIsA400OnBothDoors(t *testing.T) {
 		t.Errorf("create refused with %s, want a message naming owner_user_id", body)
 	}
 
-	resp = do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Мой","type":"cash","currency":"RUB"}`)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Мой","type":"cash","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create = %d: %s", resp.StatusCode, b)
@@ -342,7 +307,7 @@ func TestAnUnknownOwnerIsA400OnBothDoors(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&acc)
 
-	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
+	resp = apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
 		`{"owner_user_id":"`+stranger+`"}`)
 	body, _ = io.ReadAll(resp.Body)
 	if resp.StatusCode != 400 {
@@ -370,18 +335,18 @@ func TestAnAccountSaysWhetherItsBrokerTradesAbroad(t *testing.T) {
 		return a.ID, a.TradesAbroad
 	}
 
-	if _, abroad := read(do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Т-Банк","type":"brokerage","currency":"RUB"}`)); abroad {
+	if _, abroad := read(apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Т-Банк","type":"brokerage","currency":"RUB"}`)); abroad {
 		t.Error("a new account trades abroad unasked")
 	}
-	id, abroad := read(do(t, c, "POST", url+"/api/v1/accounts",
+	id, abroad := read(apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Freedom KZ","type":"brokerage","currency":"USD","trades_abroad":true}`))
 	if !abroad {
 		t.Error("an account created as trading abroad does not say so")
 	}
-	if _, abroad := read(do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"trades_abroad":false}`)); abroad {
+	if _, abroad := read(apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"trades_abroad":false}`)); abroad {
 		t.Error("the switch did not turn off")
 	}
-	if _, abroad := read(do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"name":"Freedom"}`)); abroad {
+	if _, abroad := read(apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"name":"Freedom"}`)); abroad {
 		t.Error("an edit that does not name the switch changed it")
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // The journal is narrowed by type, by paper and by period, each on its own
@@ -22,14 +24,14 @@ func TestTheJournalIsFilteredByTypePaperAndPeriod(t *testing.T) {
 
 	count := func(query string) int {
 		t.Helper()
-		resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+query, "")
+		resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+query, "")
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s = %d", query, resp.StatusCode)
 		}
 		var page struct {
 			Operations []struct{} `json:"operations"`
 		}
-		decodeJSON(t, resp, &page)
+		apitest.Decode(t, resp, &page)
 		return len(page.Operations)
 	}
 	for query, want := range map[string]int{
@@ -47,7 +49,7 @@ func TestTheJournalIsFilteredByTypePaperAndPeriod(t *testing.T) {
 		}
 	}
 	for _, query := range []string{"type=gift", "instrument_id=nope", "from=10.01.2026"} {
-		if resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+query, ""); resp.StatusCode != http.StatusBadRequest {
+		if resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+query, ""); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%q = %d, want 400", query, resp.StatusCode)
 		}
 	}

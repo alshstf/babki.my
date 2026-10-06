@@ -5,20 +5,22 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // journalStatedBasis reads one account's journal page and returns, by operation
 // type, the raw stated_basis_change_minor each row carries.
 func journalStatedBasis(t *testing.T, c *http.Client, url, accountID string) map[string]string {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("journal of %s = %d", accountID, resp.StatusCode)
 	}
 	var page struct {
 		Operations []map[string]json.RawMessage `json:"operations"`
 	}
-	decodeJSON(t, resp, &page)
+	apitest.Decode(t, resp, &page)
 	out := map[string]string{}
 	for _, op := range page.Operations {
 		var typ string
@@ -34,12 +36,12 @@ func journalStatedBasis(t *testing.T, c *http.Client, url, accountID string) map
 func TestTheJournalSaysHowMuchATypedBasisChangedTheFamilysCost(t *testing.T) {
 	f := newArrivalFixture(t)
 	other := createID(t, f.c, f.url+"/api/v1/accounts", `{"name":"Другой","type":"brokerage","currency":"RUB"}`)
-	if resp := do(t, f.c, "POST", f.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+	if resp := apitest.Do(t, f.c, "POST", f.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-06-01","quantity":"10","price":"100","amount_minor":-100000,"currency":"RUB"}`, other, f.sberID)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("buy = %d", resp.StatusCode)
 	}
 	third := createID(t, f.c, f.url+"/api/v1/accounts", `{"name":"Третий","type":"brokerage","currency":"RUB"}`)
-	if resp := do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
+	if resp := apitest.Do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-01","cost_minor":150000}`,
 		other, third, f.sberID)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("transfer with a typed basis = %d", resp.StatusCode)
@@ -58,7 +60,7 @@ func TestTheJournalSaysHowMuchATypedBasisChangedTheFamilysCost(t *testing.T) {
 	}
 
 	// The queue's own move: nothing to say.
-	if resp := do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
+	if resp := apitest.Do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"4","occurred_on":"2026-07-02"}`,
 		f.accountID, other, f.sberID)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("transfer = %d", resp.StatusCode)

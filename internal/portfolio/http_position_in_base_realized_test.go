@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -431,7 +432,7 @@ func TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate(t *testing.T) {
 func TestPositionInBaseRealizedRateErrorFailsRequest(t *testing.T) {
 	url, c, accountID := realizedRateHoleAPI(t, errors.New("connection reset by peer"))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusInternalServerError {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions with a failing rate lookup on the day of a sale = %d, want 500 — a real outage must not be served as a 200 with in_base.realized_pnl_minor: null: %s",
