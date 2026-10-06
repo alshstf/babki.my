@@ -22,7 +22,7 @@ func TestTheSchemaNamesExactlyTheKindsAndSourcesTheCodeKnows(t *testing.T) {
 		t.Errorf("kinds: the schema allows %v, the code knows %v", inSchema, inCode)
 	}
 
-	sources := []string{SourceManual, SourceMOEX}
+	sources := []string{SourceManual, SourceMOEX, SourceYahoo}
 	slices.Sort(sources)
 	if inSchema := testdb.CheckLiterals(t, pool, "instrument_events_source_check"); !slices.Equal(inSchema, sources) {
 		t.Errorf("sources: the schema allows %v, the code knows %v", inSchema, sources)

@@ -98,6 +98,9 @@ const (
 	// SourceMOEX marks a row the exchange job wrote. It is rewritten on every
 	// run, so it is not a person's to edit or delete.
 	SourceMOEX = "moex_iss"
+	// SourceYahoo marks a split of a foreign paper the share feed's job wrote;
+	// like the exchange's, it is rewritten on every run.
+	SourceYahoo = "yahoo"
 	// SourceManual marks a row a person recorded, with the evidence in
 	// SourceRef.
 	SourceManual = "manual"
@@ -246,7 +249,7 @@ func (e Event) Validate() error {
 		}
 	}
 	switch e.Source {
-	case SourceMOEX:
+	case SourceMOEX, SourceYahoo:
 	case SourceManual:
 		if e.SourceRef == "" {
 			return fmt.Errorf("%w: a hand-recorded event must link to the evidence for it", family.ErrValidation)
@@ -258,7 +261,7 @@ func (e Event) Validate() error {
 			return fmt.Errorf("%w: note must be at most %d characters", family.ErrValidation, MaxNoteRunes)
 		}
 	default:
-		return fmt.Errorf("%w: source must be %s or %s", family.ErrValidation, SourceMOEX, SourceManual)
+		return fmt.Errorf("%w: source must be %s, %s or %s", family.ErrValidation, SourceMOEX, SourceYahoo, SourceManual)
 	}
 	return nil
 }

@@ -1576,7 +1576,7 @@ export interface components {
             note: string;
         };
         DataSource: {
-            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar */
+            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar */
             kind: string;
             /** @description How often it runs */
             every_seconds: number;
@@ -1710,10 +1710,10 @@ export interface components {
          */
         InstrumentEventKind: "split" | "conversion" | "spin_off";
         /**
-         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. Not a person's to remove — the job rewrites it from the exchange on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. Neither is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
          * @enum {string}
          */
-        InstrumentEventSource: "moex_iss" | "manual";
+        InstrumentEventSource: "moex_iss" | "yahoo" | "manual";
         /** @description One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds. */
         InstrumentEvent: {
             /** Format: uuid */

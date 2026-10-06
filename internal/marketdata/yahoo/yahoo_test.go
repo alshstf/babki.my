@@ -128,3 +128,18 @@ func TestDividendsAreReadFromTheChartsEvents(t *testing.T) {
 		})
 	}
 }
+
+// Splits are read from the chart's events, dated by the exchange's day.
+func TestSplitsAreReadFromTheChartsEvents(t *testing.T) {
+	// Amazon, June 2022 (recorded 2026-10-06).
+	body := `{"chart":{"result":[{"meta":{"currency":"USD","exchangeTimezoneName":"America/New_York"},
+		"events":{"splits":{"1654056000":{"date":1654522200,"numerator":20.0,"denominator":1.0,"splitRatio":"20:1"}}}}],"error":null}}`
+	got, err := serve(t, body).Splits(context.Background(), "AMZN",
+		time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2022, 12, 31, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].On.Format(time.DateOnly) != "2022-06-06" || got[0].Numerator.String() != "20" || got[0].Denominator.String() != "1" {
+		t.Errorf("splits = %+v, want 20:1 on 2022-06-06", got)
+	}
+}
