@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -174,34 +173,6 @@ func TestTheContractDeclaresNoRuleOnTheLoginCredentials(t *testing.T) {
 			t.Errorf("api/openapi.yaml LoginRequest.%s declares minLength %d, want none: Login checks no length at all, "+
 				"and a password accepted while the count was in bytes is one this floor would lock its owner out of",
 				field, *prop.MinLength)
-		}
-	}
-}
-
-// credentialFormSites are the two dialogs whose copies of the rules enable
-// their Save buttons; held to the Go constants.
-var credentialFormSites = []string{
-	"web/src/routes/setup.tsx",
-	"web/src/routes/family/member-dialog.tsx",
-}
-
-func TestTheCredentialFormsRefuseAtTheRulesTheServerEnforces(t *testing.T) {
-	// Compared as text: the username as a JS regex literal, the password as a
-	// comparison with the same integer. JavaScript counts UTF-16 units, so four
-	// emoji pass the form and fail the server; accepted for this audience.
-	wantUsername := "/" + family.UsernamePattern + "/"
-	wantPassword := "password.length >= " + strconv.Itoa(family.MinPasswordRunes)
-	for _, rel := range credentialFormSites {
-		body := string(repoFile(t, rel))
-		if !strings.Contains(body, wantUsername) {
-			t.Errorf("%s does not contain the regex literal %s (family.UsernamePattern): "+
-				"its Save button would enable for a username the server refuses, or stay disabled "+
-				"for one the server would take", rel, wantUsername)
-		}
-		if !strings.Contains(body, wantPassword) {
-			t.Errorf("%s does not contain %q (family.MinPasswordRunes): "+
-				"its Save button would enable for a password the server refuses, or stay disabled "+
-				"for one the server would take", rel, wantPassword)
 		}
 	}
 }

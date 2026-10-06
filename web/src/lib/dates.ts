@@ -8,13 +8,12 @@ export function localToday(): string {
   return `${y}-${m}-${day}`;
 }
 
-// EARLIEST_OPERATION_DATE is the server's oldest accepted operation date
-// (minOccurredOn), copied so a date field refuses at the keystroke; a typo guard
-// (1026 for 2026 would land at the front of the queue). Tied to the server by
-// TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces. The four
-// operation dialogs use it as `min`; the balance dialog does not: a mistyped
-// mark is visible and the latest mark wins anyway.
-export const EARLIEST_OPERATION_DATE = "1900-01-01";
+// EARLIEST_OPERATION_DATE is the server's oldest accepted operation date,
+// generated from it (api/constants.gen.ts) so a date field refuses at the
+// keystroke; a typo guard (1026 for 2026 would land at the front of the queue).
+// The four operation dialogs use it as `min`; the balance dialog does not: a
+// mistyped mark is visible and the latest mark wins anyway.
+export { EARLIEST_OPERATION_DATE } from "@/api/constants.gen";
 
 // formatDate renders "YYYY-MM-DD" as short ru-RU ("20.07.2026"); malformed
 // input gives "", so callers can drop the phrase.

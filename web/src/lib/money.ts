@@ -1,3 +1,5 @@
+import { MAX_AMOUNT_MINOR } from "@/api/constants.gen";
+
 // Money helpers. Amounts travel as int64 minor units (kopecks/cents);
 // conversion to major units happens only here.
 
@@ -144,10 +146,10 @@ export function formatPriceIn(value: string, currency: string): string | null {
 }
 
 // MAX_AMOUNT_MINOR is the largest sum a field sends: 10^15 minor units, the
-// server's money.MaxAmountMinor, here so the field refuses at the keystroke. It is
-// also below Number.MAX_SAFE_INTEGER, so every value the parser returns is
-// exact.
-export const MAX_AMOUNT_MINOR = 1_000_000_000_000_000;
+// server's own, generated from it (api/constants.gen.ts) so the field refuses at
+// the keystroke. It is also below Number.MAX_SAFE_INTEGER, so every value the
+// parser returns is exact.
+export { MAX_AMOUNT_MINOR };
 
 // Why an amount field cannot send what was typed: "malformed" (not a number
 // of the field's shape) or "tooLarge" (past MAX_AMOUNT_MINOR). Two different

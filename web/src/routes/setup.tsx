@@ -13,6 +13,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ApiError, isConflict } from "@/api/operations";
 import { SessionNotKept, useSetup, useSetupStatus } from "@/api/session";
 import { MAX_PERSON_NAME } from "@/lib/text-limits";
+import { MIN_PASSWORD_LENGTH, USERNAME } from "@/api/constants.gen";
 
 export function SetupPage() {
   const { t } = useTranslation();
@@ -26,8 +27,8 @@ export function SetupPage() {
   const [password, setPassword] = useState("");
 
   const valid =
-    spaceName && displayName && /^[a-z0-9_]{3,32}$/.test(username) &&
-    password.length >= 8 &&
+    spaceName && displayName && USERNAME.test(username) &&
+    password.length >= MIN_PASSWORD_LENGTH &&
     (!codeRequired || code.trim() !== "");
 
   return (

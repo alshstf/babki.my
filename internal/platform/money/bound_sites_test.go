@@ -3,9 +3,7 @@ package money_test
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -123,29 +121,5 @@ func TestTheContractStatesTheBoundTheServerEnforces(t *testing.T) {
 			t.Errorf("api/openapi.yaml %s.minimum = %d, want %d (enforced in %s): %s",
 				site.where, *site.declared.Minimum, site.min, site.enforced, site.floor)
 		}
-	}
-}
-
-// webMaxAmountRe matches the declaration, not the digits in a comment.
-var webMaxAmountRe = regexp.MustCompile(`export const MAX_AMOUNT_MINOR = ([\d_]+);`)
-
-func TestTheAmountFieldRefusesAtTheBoundTheServerEnforces(t *testing.T) {
-	const rel = "web/src/lib/money.ts"
-	found := webMaxAmountRe.FindStringSubmatch(repoFile(t, rel))
-	if found == nil {
-		// A rename or reformat, not a different value.
-		t.Fatalf("no `export const MAX_AMOUNT_MINOR = <digits>;` in %s. "+
-			"It holds the frontend's copy of money.MaxAmountMinor (%d); if the declaration was renamed or "+
-			"reformatted, teach webMaxAmountRe its new shape rather than leaving the two untied",
-			rel, money.MaxAmountMinor)
-	}
-	web, err := strconv.ParseInt(strings.ReplaceAll(found[1], "_", ""), 10, 64)
-	if err != nil {
-		t.Fatalf("MAX_AMOUNT_MINOR in %s is %q, which is not an int64: %v", rel, found[1], err)
-	}
-	if web != money.MaxAmountMinor {
-		t.Errorf("MAX_AMOUNT_MINOR in %s = %d, want %d (money.MaxAmountMinor): "+
-			"the field would refuse a sum the server takes, or send one it refuses",
-			rel, web, money.MaxAmountMinor)
 	}
 }

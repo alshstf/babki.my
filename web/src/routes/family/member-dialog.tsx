@@ -23,10 +23,9 @@ import { useCreateMember, type Role } from "@/api/members";
 import { MAX_PERSON_NAME } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 import { useOnOpen } from "@/lib/use-on-open";
+import { MIN_PASSWORD_LENGTH, USERNAME } from "@/api/constants.gen";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
-
-const USERNAME_RE = /^[a-z0-9_]{3,32}$/;
 
 export function MemberDialog({
   open,
@@ -52,7 +51,7 @@ export function MemberDialog({
   });
 
   const valid =
-    USERNAME_RE.test(username) && displayName.trim() !== "" && password.length >= 8;
+    USERNAME.test(username) && displayName.trim() !== "" && password.length >= MIN_PASSWORD_LENGTH;
 
   const submit = () => {
     create.mutate(
