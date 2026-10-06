@@ -650,7 +650,8 @@ export function PositionsTable({
                             </div>
                           )
                         ))}
-                      {position.price_on && staleSince(position.price_on) && (
+                      {/* «Не торгуется с …» already dates a stale market price. */}
+                      {position.price_on && staleSince(position.price_on) && position.last_traded_on !== position.price_on && (
                         <div
                           data-testid="position-price-stale"
                           className="text-xs text-amber-600"
