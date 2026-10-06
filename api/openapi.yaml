@@ -449,14 +449,13 @@ paths:
       tags: [portfolio]
       operationId: getAccountReturn
       description: >-
-        What an account earned over a period, by its journal: its worth at the end of `from` and
-        at the end of `to` (holdings at those days' closing prices, cash, those days' rates), the
-        money that crossed its edge in between — deposits and withdrawals at their day's rate,
-        shares that arrived or left at their closing price that day — the profit (end − start −
-        money put in net), and the money-weighted annual rate (XIRR). Income, fees and taxes are
-        not flows: they are what the return is made of. `complete` is false when a figure could
-        not be had (a holding with no price, a currency with no rate); the published figures then
-        leave it out. 400 for dates out of order or in the future.
+        What an account earned over a period, by its journal: its worth at the end of `from`
+        and of `to` (holdings at those days' closes, cash, those days' rates), the money
+        that crossed its edge in between (deposits and withdrawals at their day's rate,
+        units arriving or leaving at that day's close), the profit and the money-weighted
+        annual rate (XIRR). Income, fees and taxes are not flows. `complete` is false when a
+        figure could not be had; the figures then leave it out. 400 for dates out of order
+        or in the future.
       parameters:
         - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: from, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD: the period starts after its end" }
@@ -538,15 +537,13 @@ paths:
       tags: [portfolio]
       operationId: getInstrumentReturn
       description: >-
-        What one paper earned the family between two days, across every account it has been
-        on: its worth at either end (all the units held, at that day's closing price), the money
-        put into it (buys with their commissions) and taken out (sales, payouts, redemptions,
-        less taxes withheld), and the money-weighted annual rate. A move between two of the
-        family's accounts is no flow; shares that arrived from outside or by a conversion come in
-        at that day's closing price, and shares converted away leave at it. Figures are in the
-        currency the paper is valued in. `complete` is false when an end has no price, a payout
-        has no rate, or a spin-off moved part of the paper's worth onto another paper. 400 for
-        dates as on the account's return; 404 for an unknown paper.
+        What one paper earned the family between two days across every account: its worth at
+        either end, the money put in (buys with commissions) and taken out (sales, payouts,
+        redemptions, less taxes), and the money-weighted annual rate, in the currency the
+        paper is valued in. A move between the family's accounts is no flow; units arriving
+        from outside or by a conversion count at that day's close. `complete` is false when
+        an end has no price, a payout no rate, or a spin-off moved part of the worth away.
+        400 as on the account's return; 404 for an unknown paper.
       parameters:
         - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: from, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD, the day before the period" }
@@ -661,14 +658,11 @@ paths:
       tags: [accounts]
       operationId: getCapital
       description: >-
-        What the family's active accounts were worth at the end of each of a run of days, in the
-        base currency — the series a chart of the family's capital is drawn from. Each account
-        is counted the way GET /summary counts it today: a brokerage account kept by its
-        operations by its journal as it stood that day (holdings at that day's closing prices,
-        cash, that day's rates), every other account by its latest balance mark on or before the
-        day (nothing before its first mark). The days are every week (`step=week`) or every
-        month's last day (`step=month`) from `from`, and today. At most 120 points; 400 beyond,
-        or for a `from` in the future.
+        What the family's active accounts were worth at the end of each of a run of days, in
+        the base currency: a brokerage account with operations by its journal as of that
+        day, every other account by its latest balance mark on or before it. Days are weekly
+        (`step=week`) or month ends (`step=month`) from `from`, plus today; at most 120
+        points (400 beyond, or for a future `from`).
       parameters:
         - { name: from, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD the series starts on" }
         - { name: step, in: query, required: false, schema: { type: string, enum: [week, month] }, description: "month when omitted" }
@@ -696,25 +690,9 @@ paths:
       tags: [instruments]
       operationId: searchInstruments
       description: >-
-        The instrument catalog, ordered by name, one page at a time. An absent
-        or empty `query` lists the whole catalog; a non-empty one keeps the rows
-        whose name, ticker or ISIN contains it, case-insensitively.
-
-
-        IT IS PAGED BY `offset`, AND UNTIL #104 IT WAS NOT. The endpoint took a
-        `limit` alone, so the catalog past the ceiling could not be reached by
-        any request at all — the interface offered a text search and nothing
-        else, and an instrument nobody remembered the name of was simply not
-        there. The order is total (name, then id), so consecutive offsets
-        partition the catalog with nothing repeated and nothing skipped even
-        when two instruments share a name.
-
-
-        A LIMIT ABOVE THE `maximum` BELOW IS REFUSED WITH 400, NOT QUIETLY
-        REDUCED, the same as the two paged endpoints of the importer and for the
-        same reason (#118): a ceiling the document states and the server does not
-        apply is not a rule, and a client that sent 250 would be answered as
-        though it had asked for 200 with nothing in the answer saying so.
+        The instrument catalog, ordered by name then id, one page at a time. An empty
+        `query` lists everything; otherwise rows whose name, ticker or ISIN contains it,
+        case-insensitively. A `limit` above the maximum is a 400, not reduced.
       parameters:
         - { name: query, in: query, required: false, schema: { type: string } }
         - { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
@@ -770,19 +748,8 @@ paths:
       tags: [corporate-actions]
       operationId: listInstrumentEvents
       description: >-
-        The corporate-actions registry: what happened to the PAPERS, newest
-        effective date first. Splits, conversions and spin-offs, each keyed by
-        the ISIN it happened to rather than by any account — a split happens to
-        the security, and every holder of it at every broker wakes up to the same
-        multiplied quantity on the same day.
-
-
-        THE WHOLE REGISTRY COMES BACK IN ONE ANSWER, with no paging. It is one
-        row per corporate action of every paper anyone in this instance holds,
-        plus whatever the exchange published: the live instance carries 37 of
-        them. If that ever stops being small this endpoint gains an envelope like
-        the catalog's, and until then a `has_more` that is always false would be
-        a promise nothing keeps.
+        The corporate-actions registry, newest effective date first: splits, conversions and
+        spin-offs keyed by the ISIN they happened to. Not paged — the registry is small.
       responses:
         "200":
           description: Every recorded corporate action
@@ -794,20 +761,10 @@ paths:
       tags: [corporate-actions]
       operationId: createInstrumentEvent
       description: >-
-        Record a corporate action by hand. The event is stored, and — for the
-        kinds this program carries into journals — materialized into every
-        account that held the paper BEFORE this responds, so the answer already
-        says what changed.
-
-
-        WHAT IT ANSWERS 400 FOR is every rule in
-        internal/corporateaction.Event.Validate, which both doors run: the
-        exchange job's facts are held to the same rules a person's are. The ones
-        worth knowing before sending: a SPLIT of 1 to 1 changes nothing (the other
-        two kinds are commonly 1 to 1 — see ratio_to); a ratio
-        so deep it rounds to zero at ten decimal places would multiply a holding
-        by nought; `result_isin` naming the same paper as `isin` is not a
-        conversion; and the same paper, kind and date twice is a duplicate.
+        Record a corporate action by hand. It is stored and carried into every account that
+        held the paper before the response, which says what changed. 400 for any rule of the
+        registry (a 1:1 split, a ratio that rounds to zero, a conversion into the same
+        paper, a duplicate paper, kind and date).
       requestBody:
         required: true
         content:
@@ -854,25 +811,8 @@ paths:
       tags: [journal]
       operationId: listAccountOperations
       description: >-
-        One account's journal, newest first, one page at a time.
-
-
-        A `limit` OR AN `offset` OUTSIDE THE BOUNDS BELOW IS REFUSED WITH 400,
-        NOT QUIETLY REPLACED. Until #118 this endpoint clamped an over-large
-        limit to the ceiling and silently ignored everything else it could not
-        read — a zero, a negative, a word — falling back to the default and
-        answering 200 as though the number sent had been the number applied.
-        The ceiling in particular was stated in this document and not applied by
-        the server, which made it a description of nothing: a schema-aware
-        client refused to send `limit=250` while the server would have answered
-        it. That silence is also the ground #86 stood on, and the `has_more`
-        flag treated the symptom rather than this. The bounds are now the same
-        rule at both ends of the wire, and they are the same rule the instrument
-        catalog applies, for the same reason.
-
-
-        A limit AT the ceiling is accepted: these bounds are refused past, not
-        at.
+        One account's journal, newest first, one page at a time. A `limit` or `offset`
+        outside the bounds is a 400, not replaced; the ceiling itself is accepted.
       parameters:
         - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
@@ -898,29 +838,19 @@ paths:
       tags: [journal]
       operationId: createOperation
       description: >-
-        Records one journal entry. The account's WHOLE journal is replayed with the new row
-        through the portfolio engine, and the row is kept only if the result computes.
+        Records one journal entry. The account's whole journal is replayed with the new row
+        and the row is kept only if it computes.
 
+        400 also for an entry that cannot happen to its paper's kind (decision Р-17), on an
+        edit too: a buy or sell of a `currency` paper; a redemption other than of a bond, a
+        fund or a `custom` paper; a dividend other than on a share, a fund or a `custom`
+        paper; a coupon or an amortization other than on a bond or a `custom` paper. A
+        broker's import is not held to it.
 
-        400 also refuses an entry that cannot happen to its paper's kind (decision Р-17), and
-        the same on an edit: a buy or a sell of a `currency` paper (money is exchanged, not
-        held as a paper); a redemption other than of a bond, a fund or a `custom` paper; a
-        dividend other than on a share, a fund or a `custom` paper; a coupon or an amortization
-        other than on a bond or a `custom` paper. A broker's import is not held to it: what
-        the broker reports is recorded as reported.
-
-
-        409 SAYS THAT REPLAY REFUSED, AND NOTHING FINER. Unrelated causes arrive as this one
-        status: a sell or transfer_out releasing more than the account holds; an operation
-        whose currency is not the one that position's cost, quantity and fees are already kept
-        in (only a dividend, a coupon or a tax may arrive in another); a transfer whose stored
-        FIFO breakdown no longer matches the history it is replayed against; a position's
-        income total leaving the int64 range. THE REFUSED ROW NEED NOT BE THE ROW POSTED,
-        since every stored row is folded again on every write — a buy releases nothing and is
-        still answered 409 over an entry recorded months earlier, on a date this request never
-        carried. So a client may not caption this status with a cause, nor with anything about
-        the request it just sent. The body carries the engine's own English explanation, which
-        is written for a log and is not part of this contract.
+        409 says the replay refused, nothing finer: an oversell, a currency the position is
+        not kept in, a transfer breakdown the history no longer matches, an overflow — and
+        the refused row need not be the one posted. A client must not caption it with a
+        cause; the body's English text is for a log.
       requestBody:
         required: true
         content:
@@ -1073,13 +1003,10 @@ paths:
       tags: [journal]
       operationId: deleteOperation
       description: >-
-        Deletes the operation (whole pair for transfers). Rejected with 409 if the remaining
-        journal no longer replays — an oversell is one cause of that and not the only one, see
-        POST /api/v1/operations — and rejected outright unless `source` is `manual` or `csv` (a
-        row loaded from the person's own table): an operation from a broker or the registry
-        belongs to its writer, which would write it back on its next rebuild, so "deleted" would
-        be a lie. A deleted `csv` row comes back if the same table is loaded again. Retire such an operation by deleting its
-        connection instead — that stops the updates and leaves the history in place.
+        Deletes the operation (both halves of a transfer). 409 when the remaining journal no
+        longer replays. Only a `manual` or `csv` row can be deleted: a broker's or the
+        registry's would be written back; a `csv` row returns if the same table is loaded
+        again.
       parameters:
         - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -1094,20 +1021,14 @@ paths:
       tags: [journal]
       operationId: statePurchases
       description: >-
-        States what shares that arrived from another broker cost and when they were bought —
-        the purchases the broker that sent them did not pass on. Allowed only on a transfer_in
-        with no sibling (`transfer_group_id` null); a transfer between two of the owner's
-        accounts carries the purchases of the account it left, and is a 400. The purchases
-        become the arrival's breakdown and its `amount_minor` their sum, replacing whatever was
-        stated before. Until they are stated the shares count as bought for nothing
-        (Position.has_unknown_cost). On an imported arrival the statement is kept and put back
-        by every later sync. Shares of the arrival moved on since to the owner's other
-        accounts, by hand and with a breakdown, are released again from the restated history in
-        the order the moves happened, and both legs of each such move get the new basis and
-        breakdown in the same transaction; a move whose basis was given by hand keeps it. 409,
-        with the engine's reason, when the rest of the journal still cannot take it — a move an
-        importer recorded against the old basis, say, which is the importer's and is not
-        rewritten. 400 when a move took the shares into an archived account.
+        States what units that arrived from another broker cost and when they were bought.
+        Only on a transfer_in with no sibling (`transfer_group_id` null); 400 otherwise. The
+        purchases become the arrival's breakdown and amount_minor their sum, replacing
+        earlier ones; an import keeps them across syncs. Units moved on to the owner's other
+        accounts with a breakdown are released again from the restated history, both legs of
+        each move rewritten in the same transaction; a basis given by hand stays. 409 with
+        the engine's reason when the journal cannot take it; 400 when a move took the units
+        into an archived account.
       parameters:
         - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -1181,25 +1102,10 @@ paths:
       tags: [tinvest]
       operationId: checkTinvestToken
       description: >-
-        Asks the broker which of the caller's T-Invest accounts a read-only
-        token can see, so the owner can pick the ones to import before anything
-        is stored. NOTHING IS WRITTEN BY THIS CALL: the token is used for the
-        one request to the broker and dropped, so a token typed here and never
-        confirmed leaves no trace.
-
-
-        OWNER-ONLY, like every path under /api/v1/tinvest. The check lives in
-        the service rather than in the route, so an editor and a viewer both get
-        403 here exactly as they do on the writes below.
-
-
-        502 means the broker could not be reached, or answered with something
-        this server could not use. 400 covers the two ways a token can be no
-        good: one this server refuses before sending it anywhere (an empty
-        string is the only such case) and one the broker itself refused. Those
-        are different news from a 502 — one is worth retrying, the other needs a
-        different token — and the status code is the only place that difference
-        is stated, since the error text is prose a client must not read.
+        Asks the broker which T-Invest accounts a read-only token sees, so the owner can
+        pick before anything is stored; nothing is written. Owner-only (403 otherwise). 400:
+        the token is empty or the broker refused it — needs another token. 502: the broker
+        could not be reached or answered unusably — worth retrying.
       requestBody:
         required: true
         content:
@@ -1233,45 +1139,13 @@ paths:
       tags: [tinvest]
       operationId: createTinvestConnection
       description: >-
-        Connects a broker token and starts the first import. Owner-only.
-
-
-        ONE REQUEST DOES THREE THINGS. For each broker account picked it creates
-        a NEW babki account to import into — never an existing one, so nothing
-        hand-entered is ever mixed with imported history — then ties the two
-        together, and finally queues the first sync, which is what actually goes
-        and reads the history. The response therefore describes a connection
-        whose accounts are still empty; the run log (GET
-        /api/v1/tinvest/connections/{connectionId}/runs) is where the import
-        itself becomes visible.
-
-
-        THE ACCOUNTS IT CREATES ARE RUBLE BROKERAGE ACCOUNTS AT «Т-Банк», and
-        the currency is load-bearing rather than a default: after every
-        successful sync the reconciliation writes the broker's own ruble balance
-        onto the account as a balance mark, and it refuses to write that mark
-        onto an account kept in any other currency.
-
-
-        The token is checked against the broker before anything is written, so a
-        token the broker refuses creates nothing (400). A broker account already
-        imported by another connection of this space is refused too (409):
-        importing one broker account twice would produce two babki accounts
-        holding the same operations.
-
-
-        422 AND NOT 400 WHEN A PICKED BROKER ACCOUNT IS NOT ONE THIS TOKEN CAN
-        IMPORT — the token works and the request is well formed, but the account
-        list the broker answered with does not hold what was picked, or holds it
-        as a kind this program does not import. THIS CALL ASKS FOR THAT LIST
-        AFRESH, so it can differ from the one POST /api/v1/tinvest/token-check
-        returned a minute earlier: an account closed in between, or a token
-        whose access was narrowed, is enough. Sharing 400 with a refused token
-        would leave a client no way to tell the two apart, and the sentence it
-        would then show — check the token, it may be truncated or expired —
-        sends the owner to re-issue a token that never stopped working. 400 on
-        this path stays what it has always been: the token, or the request's own
-        shape.
+        Connects a broker token and starts the first import. Owner-only. For each picked
+        broker account it creates a new ruble brokerage account at «Т-Банк» (never an
+        existing one), links them and queues the first sync; the run log shows the import.
+        400: the broker refused the token (nothing is created). 409: a picked broker account
+        is already imported by another connection of this space. 422: a picked account is
+        not in the list the broker returns now, or is of a kind this program does not
+        import.
       requestBody:
         required: true
         content:
@@ -1310,21 +1184,11 @@ paths:
       tags: [tinvest]
       operationId: updateTinvestConnection
       description: >-
-        Replaces the connection's token, switches it on or off, or both.
-        Owner-only.
-
-
-        A NEW TOKEN IS CHECKED AGAINST THE BROKER BEFORE IT IS STORED, and a
-        connection parked at `token_revoked` comes back to `active` on a token
-        the broker accepts — that acceptance is the only evidence a token works,
-        and pasting one is not evidence of anything. A `status` sent in the same
-        request wins over that, so a token can be replaced without switching the
-        connection on.
-
-
-        `status` accepts only `active` and `disabled`. `token_revoked` is the
-        server's own verdict, reached by asking the broker; a client that could
-        set it would be able to state a fact nobody checked.
+        Replaces the connection's token, switches it on or off, or both. Owner-only. A new
+        token is checked with the broker before it is stored, and a `token_revoked`
+        connection becomes `active` on a token the broker accepts — unless the same request
+        sends `status`. `status` takes only `active` and `disabled`; `token_revoked` is the
+        server's own verdict.
       parameters:
         - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -1347,23 +1211,9 @@ paths:
       tags: [tinvest]
       operationId: deleteTinvestConnection
       description: >-
-        Withdraws the connection to the broker. Owner-only.
-
-
-        THE ACCOUNTS AND THE OPERATIONS STAY. What goes is everything about the
-        connection itself — the stored token, the links, the mirror of what the
-        broker said, the instrument map and the run log. The babki accounts it
-        created and the journal operations the import wrote into them are the
-        owner's data and are left exactly as they are; they simply stop being
-        updated.
-
-
-        AND NOTHING HERE OFFERS A WAY TO REMOVE THEM AFTERWARDS, which this
-        description used to promise. An account is ARCHIVED and never deleted
-        (archiveAccount is the only endpoint that retires one), and an imported
-        operation cannot be deleted at all: deleteOperation refuses every row
-        the broker wrote. Withdrawing the connection is therefore
-        the end of the matter, not the first half of it.
+        Withdraws the connection. Owner-only. The token, links, mirror, instrument map and
+        run log go; the accounts and the journal operations the import wrote stay, and stop
+        being updated.
       parameters:
         - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -1464,34 +1314,14 @@ paths:
       tags: [tinvest]
       operationId: explainTinvestRows
       description: >-
-        Account for one or more of this linked account's broker rows with one
-        manual journal operation. Owner-only.
-
-
-        The broker sends no corporate actions at all, so an event this program
-        cannot read as itself — a fund's partial redemption, a conversion, a
-        spin-off — arrives as whatever rows carried its money. This is where
-        the owner says what those rows were. The named rows stop being
-        projected and stop counting as unparsed; the operation is what the
-        journal holds instead.
-
-
-        THE OPERATION IS THE JOURNAL'S OWN: it is validated and replayed
-        through the engine exactly as one entered on the journal screen, and
-        its refusals travel back word for word — a malformed or impossible
-        operation is a 400, and a journal that cannot hold the one offered is a
-        409 carrying the engine's own sentence, the same code and the same words
-        the journal screen answers with. A content key that is not one of this
-        link's rows is a 404 naming it; a row already explained is a 409 too.
-
-
-        ROWS ALREADY BOOKED ARE REPLACED, NOT DUPLICATED. Some of what an owner
-        explains this program had read and believed — a fund's partial
-        redemption arrives as a withdrawal "to another depositary" and is booked
-        as a transfer. The journal entries those rows produced are removed in
-        the same transaction the operation is written in, so the operation is
-        judged against the journal it LEAVES rather than against one still
-        holding the old reading of the same event.
+        Accounts for one or more of this linked account's broker rows with one hand-written
+        journal operation — how the owner says what an event the broker sent as plain money
+        rows was (a fund's partial redemption, a conversion). Owner-only. The rows stop
+        being projected and stop counting as unparsed; journal entries they had produced are
+        removed in the same transaction, so the operation is judged against the journal it
+        leaves. The operation is validated and replayed like any hand entry: 400 for a
+        malformed one, 409 with the engine's sentence when the journal cannot hold it; 404
+        for a content key not of this link; 409 for a row already explained.
       parameters:
         - { name: linkId, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -1583,7 +1413,7 @@ components:
           type: string
           minLength: 8
           maxLength: 1024
-          description: "At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it."
+          description: "From 8 to 1024 characters, counted as Unicode code points. Not declared on LoginRequest — see it."
     CreateArrivalRequest:
       type: object
       required: [account_id, instrument_id, occurred_on, quantity, currency]
@@ -1677,24 +1507,10 @@ components:
     LoginRequest:
       type: object
       description: >-
-        NEITHER FIELD CARRIES THE RULE ITS TWIN ON SetupRequest CARRIES, and
-        that is the point of this schema rather than an omission. Login reads
-        the username straight out of the table and compares the password
-        against the hash it finds (internal/family/auth.go, Login); no shape and
-        no length is judged, and every failure — a malformed name, a name
-        nobody has, a wrong password — comes back as the same 401, on purpose,
-        so that a caller cannot enumerate users by the answers it gets.
-
-        A `pattern` or a `minLength` here would therefore describe a refusal
-        that does not exist, and it would do real harm rather than merely be
-        untrue. The password's own count changed with #117 — from bytes to
-        code points — so a password accepted at setup as fourteen bytes of
-        seven Cyrillic letters is a password `minLength: 8` now describes as
-        too short. Declared here, it would lock that user out through his own
-        client while the server stood ready to let him in. This document states
-        what the server checks, and on this path it checks no shape. A password
-        longer than the 1024 characters one can be set to is nobody's, and is
-        answered with the same 401 as any other wrong one.
+        Neither field states the shape SetupRequest requires, on purpose: login checks no
+        shape, and every failure — a malformed name, an unknown one, a wrong password — is
+        the same 401, so users cannot be enumerated. A length rule here would lock out
+        passwords set under an earlier rule.
       required: [username, password]
       properties:
         username: { type: string }
@@ -1721,28 +1537,11 @@ components:
           description: "The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU."
         cost_basis_rules:
           description: >-
-            What tax_residency implies for the cost basis figures this
-            application computes. Carried in the session so the settings screen
-            can state the consequence of the country the owner picked; the same
-            object is repeated on PositionsResponse so the screen showing the
-            figures carries the caveat with them.
-
-            THIS IS THE STATEMENT OF RECORD, AND IT IS A PROPERTY OF THE SPACE
-            RATHER THAN OF ANY ONE PAYLOAD. It qualifies EVERY cost basis this
-            API publishes, wherever the figure appears — not only the ones on
-            PositionsResponse. The journal has one of its own: a transfer's
-            `Operation.amount_minor` (and its `in_base` twin) is the cost basis
-            of the shares moved, picked by the very same queue of earliest
-            purchases that produces Position.cost_minor, so it is a figure this
-            object speaks about. GET /accounts/{accountId}/operations does
-            not repeat it, and now does so as a choice rather than for want of
-            anywhere to put it: OperationsResponse has been an envelope since
-            #86, and this statement is still not in it, because one truth
-            published in three places is two more places to forget when the
-            truth changes. A client therefore reads this once, from the session
-            it loads anyway, and applies it to every cost basis it renders —
-            including the journal's, which otherwise shows a FIFO-derived
-            amount with nothing said about it.
+            What tax_residency implies for the cost basis this application computes (always
+            FIFO within one account). It qualifies every cost basis the API publishes —
+            positions and a transfer's amount in the journal alike — and is published here,
+            once per session, and repeated on PositionsResponse; the journal does not repeat
+            it.
           allOf:
             - $ref: "#/components/schemas/CostBasisRules"
     PriceSource:
@@ -1775,7 +1574,7 @@ components:
       enum: [account, owner, not_applicable, unknown]
     CostBasisNotice:
       type: string
-      description: "One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are."
+      description: "One way the computation fails to answer for the owner's country; a code the interface translates. `method_mismatch`: the country matches disposals by another method. `perimeter_mismatch`: its queue spans more than one account. `not_taxed`: it does not tax an individual's capital gains, so the figures are informational. `unknown_country`: no rules row for the stored country."
       enum: [method_mismatch, perimeter_mismatch, not_taxed, unknown_country]
     CostBasisRules:
       type: object
@@ -1952,44 +1751,21 @@ components:
           format: int64
           minimum: -1000000000000000
           maximum: 1000000000000000
-          description: "Negative for a debt: a credit card or a loan carries what is owed as a negative balance. Bounded at ±10^15 minor units — ten trillion whole roubles or dollars — the SAME cap CreateOperationRequest.amount_minor carries, because it is the same money in the same currency on the same screen. Past it, 400. The bound is far above any real balance and far enough below int64 that the accounts screen can still convert what it accepts: at the largest balance taken here an fx rate of up to ~9223 still fits in an int64 of minor units, which is above any rate this program will meet. A balance that cannot be converted is not a wrong figure on the screen — the server refuses to publish one — it is an accounts list that cannot be drawn at all until the row is overwritten, which is why the refusal is at the write. Rows written before the bound existed are untouched and are still returned as they stand."
+          description: "Negative for a debt (a card, a loan). Within ±10^15 minor units, the cap every amount in this API carries; past it, 400. Rows written before the bound are returned as they stand."
     TradingModeKind:
       type: string
       nullable: true
       enum: [order_book, negotiated, off_exchange, unknown]
       description: >-
-        WHAT THIS PROGRAM IS WILLING TO SAY about the trading mode an operation
-        was executed in, and the set is small on purpose. `order_book`: an
-        exchange's anonymous («безадресная») mode, where the exchange matched
-        the order against whoever was on the other side. `negotiated`: an
-        addressed («адресная») mode OF AN EXCHANGE — a deal with a named
-        counterparty, registered by the exchange; it is NOT off-exchange, and
-        the distinction is load-bearing, since the owner's 52 currency deals in
-        such a mode were organised by the Moscow Exchange. `off_exchange`:
-        dealing away from an exchange altogether. `unknown`: the broker named a
-        mode and this program has no source for what it is — the code itself is
-        still published in `trading_mode`, and a client must show it and say it
-        is unnamed rather than hide the row's mode or invent a label for it.
-
-        THE KINDS ARE READ FROM AUTHORITIES, NOT JUDGED. Every Moscow Exchange
-        board is classified by the exchange's own title for it in its published
-        board index, whose last word is «безадрес.» or «адрес.»; the one
-        off-exchange code is classified by its own name («FINEX_OTC»), which is
-        the broker's word rather than this program's reading. Codes with
-        neither — the Saint Petersburg boards among them — are `unknown`, and
-        that is a statement about this program's sources rather than about the
-        venue (see internal/importer/tinvest/tradingmode.go, which lists each
-        one and why).
-
-        THIS IS EVIDENCE, NOT A TAX VERDICT. Whether a security is
-        «обращающаяся» is a property of the SECURITY — admitted to trading and
-        quoted (НК РФ ст. 214.1 п. 9) — and not of the venue of one deal, so a
-        client must never render `off_exchange` as «необращающаяся бумага». It
-        is a flag saying which lots will need looking at when a tax report is
-        built, and no more than that.
-
-        Null exactly when `trading_mode` is null: nobody said where the
-        operation happened, so there is no kind to name.
+        What kind of trading mode `trading_mode` is. `order_book`: an exchange's anonymous
+        («безадресная») mode. `negotiated`: an exchange's addressed («адресная») mode — a
+        named counterparty, still on the exchange. `off_exchange`: away from an exchange
+        ("FINEX_OTC"). `unknown`: a code with no source here (the Saint Petersburg boards
+        among them); the client shows the code itself. Moscow Exchange boards are classified
+        by the exchange's own board titles (see internal/importer/tinvest/tradingmode.go).
+        Evidence, not a tax verdict: whether a security is «обращающаяся» (НК РФ ст. 214.1
+        п. 9) is a property of the security, not of one deal's venue. Null exactly when
+        `trading_mode` is.
     CurrencyTotal:
       type: object
       required: [currency, assets_minor, liabilities_minor, net_minor]
@@ -2410,12 +2186,12 @@ components:
           format: int64
           nullable: true
           minimum: 1
-          description: "What one bond is worth at redemption, in face_currency's minor units. Null for a bond whose face value has not been recorded, and null for anything that is not a bond — the writes refuse the pair on every other type, since a bond is the one instrument whose quote is a percentage of face and the only one for which this field answers anything (see the same field on CreateInstrumentRequest). Rows written before that rule are returned exactly as they stand: no migration clears them, because a face value on a share makes no published figure wrong — a share is valued at the quote's price per unit and this field is never read for one — and discarding a number somebody entered is not a migration's decision. Clearing the pair through PATCH is the repair, and it stays available on any type. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both are backed by the CHECK constraint migration 0012 added on this column, which is why `minimum: 1` above is a guarantee about every row already stored, not merely about what a future write will accept. There is no `maximum` here on purpose: the write doors also refuse a face value too large, because one large enough overflows the very valuation it prices (portfolio.marketValue) and leaves the position unreadable — but that ceiling is a write-time check with no CHECK constraint behind it, so, unlike the floor, it is not a claim this response can make about a row already stored. The same line is already drawn for money elsewhere in this document: SetBalanceRequest.amount_minor carries a maximum and BalancePoint.amount_minor, the same figure coming back, carries none."
+          description: "What one bond is worth at redemption, in face_currency's minor units. Null for a bond without a recorded face value and for any other type (rows written before that rule are returned as they stand; PATCH clears them). Always positive and never without face_currency — a CHECK constraint backs both for every stored row. No maximum is stated: the write's cap has no constraint behind it."
         face_currency:
           type: string
           nullable: true
           minLength: 1
-          description: "The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. NEVER AN EMPTY STRING, and that is a promise about every row already stored rather than about the next write: a CHECK constraint keeps '' out of this column (migration 0012), which is what makes `minLength: 1` above true of the whole table. It matters because '' does not look like a missing value — it satisfies a presence check and a NOT NULL alike while denominating the face value in nothing, and the valuation then comes back as a bare number with no currency on it. THE ISO-4217 SHAPE IS NOT DECLARED HERE, and the omission is the rule rather than an oversight (#119). Every writer does enforce it — the two HTTP doors (checkFacePair / checkFaceUpdate) and the T-Invest resolver, which creates catalog rows against the store with no handler on its path — but each enforces it separately, no such check predates #93, and migration 0012 states in as many words that it deliberately leaves the SHAPE to the writers and constrains only the emptiness. A row written earlier as \"rub\" would still be published from this field, and one writer losing the check tomorrow would put a fresh one there. A `pattern` on a request field says what the server will refuse today; the same `pattern` on a response field says no row this API can publish has any other shape, and that is a claim about the database, which nothing here backs. The line is the one already drawn on face_value_minor beside this field, which keeps `minimum: 1` because the same constraint backs it and drops the `maximum` its own write door enforces — and the one drawn for money, where SetBalanceRequest.amount_minor carries the cap and BalancePoint.amount_minor, the same figure coming back, carries none. Where a response CAN make such a claim it does: Operation.source is enumerated precisely because a CHECK constraint closes that column's set."
+          description: "The currency face_value_minor is denominated in, which need not be the instrument's own. Null exactly when face_value_minor is null; never empty (a CHECK constraint). Its ISO-4217 shape is enforced by every writer but not by the database, so no pattern is promised for stored rows."
         frozen: { type: boolean }
     InstrumentsResponse:
       type: object
@@ -2433,16 +2209,12 @@ components:
       type: string
       enum: [split, conversion, spin_off]
       description: >-
-        What happened to the paper. `split`: the quantity is rewritten and
-        nothing else — the money spent stands and so do the acquisition dates,
-        which is why it is tax-neutral everywhere this program models. `conversion`:
-        one paper becomes another (a depositary receipt into the share it
-        represented, a fund into its successor); the basis and the dates travel
-        with it and nothing is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the
-        original stands and a second paper is handed out beside it, taking
-        `basis_share` of the basis with it — 0 unless the broker's tax records
-        say otherwise. All three are carried into journals
-        (InstrumentEvent.materialized).
+        What happened to the paper. `split`: the quantity is rewritten, nothing else — money
+        spent and acquisition dates stand. `conversion`: one paper becomes another (a
+        receipt into its share, a fund into its successor); basis and dates travel, nothing
+        is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the original stands and a second
+        paper arrives beside it with `basis_share` of the basis — 0 unless the broker's tax
+        records say otherwise. All three are carried into journals.
     InstrumentEventSource:
       type: string
       enum: [moex_iss, yahoo, manual]
@@ -2468,25 +2240,10 @@ components:
           type: string
           format: date
           description: >-
-            THE FIRST DAY THE PAPER TRADES IN THE NEW QUANTITY at the venue where
-            it is held. Not the record date, not the day the decision was
-            announced, and not the day the registrar did the work.
-
-
-            The event applies at the START of it: what was held at the close of
-            the day before is multiplied, and a trade dated this day is already
-            in the new quantity. That is also why a purchase made on the
-            effective day gets no split row of its own.
-
-
-            Checked against three live events before it was written this way —
-            FXUS (exchange table 2021-10-06, last trade before 10-04, first trade
-            after 10-07), NVDA-RM (table 2021-07-21, trades 07-15 and 07-22) and
-            T (table 2026-04-17, last trade 04-10, registrar 04-15, trading
-            resumed 04-17). The exchange's own date is sometimes the last day of
-            the halt and sometimes the first day after it, but it always falls
-            inside the window where nothing trades, so this rule is right in all
-            three.
+            The first day the paper trades in the new quantity where it is held — not the
+            record date, the announcement or the registrar's day. The event applies at its
+            start: the holding at the previous day's close is restated, and a trade dated
+            this day is already in the new quantity.
         ratio_from:
           type: integer
           format: int64
@@ -2515,10 +2272,10 @@ components:
           description: "Whatever the recorder wanted to say about it. Empty on an exchange row."
         materialized:
           type: boolean
-          description: "Whether this program carries this KIND into journals — true for all three today. It was the field that told a split apart from a conversion and a spin-off, which were recorded but not applied; both are applied now, as a pair of journal rows each. It is still published per row rather than left to the client to derive from `kind`, because a kind will one day be recordable before it is applicable and must be able to say so here rather than in a list every screen has to be taught. It says nothing about whether THIS event produced a row — an account that held nothing on the day gets none, and `not_counted_reason` names the one condition that stops an event of a supported kind from producing anything at all."
+          description: "Whether this program carries this kind into journals — true for all three today; published per row so a future kind can be recorded before it is applied. It says nothing about whether this event produced a row: see `not_counted_reason`."
         not_counted_reason:
           $ref: "#/components/schemas/InstrumentEventNotCountedReason"
-          description: "Why this recorded event puts nothing in any journal. ABSENT — not null — when nothing stands in its way: the field is omitted from the object entirely, so a client checks whether it is there rather than comparing it with null. It is about THIS event, where `materialized` is about its kind. Its absence does not promise that rows exist: an event of a supported kind with nothing in its way still writes nothing into an account that held none of the paper on the day, which is a fact about the account rather than about the event. The one value it can take is `result_not_in_catalog`, and it is a waiting state rather than a failure — the registry deliberately records what happened to papers this instance does not hold, and cataloguing the paper makes the next materialization write the pair."
+          description: "Why this event puts nothing in any journal; omitted — not null — when nothing stands in its way. `result_not_in_catalog`: the paper it produces is not catalogued yet; cataloguing it makes the next run write the pair. An account that held none of the paper on the day gets no rows either way."
         created_at: { type: string, format: date-time }
     InstrumentEventNotCountedReason:
       type: string
@@ -2603,7 +2360,7 @@ components:
           nullable: true
           minimum: 1
           maximum: 1000000000000000
-          description: "A bond's face value in face_currency's minor units. Only `type: bond` may carry one: sending either half with any other type is a 400 naming the type that was sent, because an exchange quotes a bond as a PERCENTAGE of face while every other instrument this program prices is quoted in money already, so the field answers nothing on them. Must be POSITIVE, no larger than ten trillion minor units, and must be given TOGETHER with face_currency — both set, or neither. Past any rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. The upper bound is the same cap every other money field in this API is written against (see amount_minor on SetBalanceRequest): far above any bond ever issued, and far enough below an int64's own range that multiplying it by a price and a quantity (portfolio.marketValue) cannot by itself be the reason a position's valuation overflows. A bond may be created without a face value; it simply cannot be priced until one is recorded."
+          description: "A bond's face value in face_currency's minor units; only `type: bond` may carry one (400 otherwise). Positive, at most 10^15, and given together with face_currency — both or neither (400 otherwise). A bond without a face value is accepted but cannot be priced."
         face_currency:
           type: string
           nullable: true
@@ -2627,7 +2384,7 @@ components:
           nullable: true
           minimum: 1
           maximum: 1000000000000000
-          description: "Same rules as on creation, with one addition and one difference. The addition: the bond-only rule is judged against the STORED instrument, since a PATCH carries no type and nothing in this API can change one — setting either half on a row that is not a bond is a 400 naming that row's type, while CLEARING the pair (two nulls) is allowed on any type and is how a face value recorded before that rule is taken back. This is the one place the endpoint reads the row before writing it, and it is not raced: a type is not a column any writer in this program can change, so what this read sees is what the write will land on. The difference is the mention rule, which applies to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the PAIR itself and race a concurrent write over it — unlike the type above, the pair is judged from the request alone and the row's own two columns are never read for this rule. That refusal carries a sentence of its own — `face_value_minor and face_currency must be sent together, even to change one` — because creation's `set together or not at all` is true of the stored row both before such a PATCH and after it, and so names nothing the client could do about it. Omitting both leaves the pair exactly as it was."
+          description: "Same rules as on creation, judged against the stored instrument's type: setting the pair on a row that is not a bond is a 400; clearing it (two nulls) is allowed on any type. To touch either half, send both — two values or two nulls; one alone is a 400 («face_value_minor and face_currency must be sent together, even to change one»). Omitting both leaves the pair as it was."
         face_currency:
           type: string
           nullable: true
@@ -2635,7 +2392,7 @@ components:
           description: "The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all, and set only on an instrument that is stored as a bond — see it."
     OperationType:
       type: string
-      description: "What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen. `exchange_out` and `exchange_in` are the two legs of a SECURITIES CONVERSION — one paper becoming another, a depositary receipt turning into the share it represented or a fund's units reissued under a new ISIN — recorded on ONE account and one day, with N units of the old paper leaving and M of the new arriving. NOTHING IS BOUGHT OR SOLD: no result is realized and no new acquisition date is created, because the holder paid nothing and received nothing. The parcel travels whole — every lot's cost basis and the day it was acquired arrive on the new paper unchanged, and only the unit count is restated (НК РФ ст. 214.1 п. 13 keeps the receipt's own purchase price as the expense behind the shares received, and ст. 219.1 counts the holding period from the day the receipt was bought). A client must not group these with disposals or acquisitions on any screen that sums results: the amount_minor on both legs is the cost basis that moved, not money, exactly as a transfer's is. THEY ARE WRITTEN ONLY BY THE CORPORATE-ACTIONS REGISTRY (`source: registry`) and never by this API: what happened to a paper is true for everyone who held it, so it is recorded once against the instrument and applied from there to every account. There is accordingly no endpoint that creates one, and — like any non-`manual` row — neither leg can be deleted through the journal. `spinoff_out` and `spinoff_in` are the two legs of a SPIN-OFF, and the difference from a conversion is that NOTHING LEAVES: the original paper stays with the holder, keeping every unit, and a second paper appears beside it carrying only a SHARE of what was paid — Т-Капитал carving the blocked assets out of its funds into closed ones on 2023-12-22 is the case this was built for. The share is the event's `basis_share`, 0 by default as the broker keeps it: the new units arrive bought for nothing and the original keeps its whole cost; whatever the share, the original's cost goes down by exactly what the new units receive, with neither income nor expense arising on the day. SO `spinoff_out` CARRIES NO `quantity` AT ALL — it is null, and a client must not render a count for it or read one into it, because no units moved; what it carries is `amount_minor`, the cost basis that went across. `spinoff_in` is an ordinary arrival of M units whose parcels keep the ORIGINAL purchase days, so a screen showing when a holding was acquired shows the day the money was really spent rather than the day the new paper appeared. Like a conversion's legs, both are written ONLY by the corporate-actions registry (`source: registry`), neither is created or deleted through this API, and neither belongs on a screen that sums disposals or acquisitions."
+      description: "What the entry is. `redemption`: a bond reaching maturity (or a fund's units redeemed, decision Р-13) — computed as a sale, named apart. `exchange_out`/`exchange_in`: the two legs of a securities conversion on one account and day (a receipt into its share, a fund reissued): the parcel travels whole with its purchase days, nothing is realized, and amount_minor is the cost basis that moved, not money. `spinoff_out`/`spinoff_in`: a spin-off — the original keeps every unit (so `spinoff_out` has no quantity) and the new paper arrives with the event's `basis_share` of the cost (0 by default) and the original purchase days. The last four are written only by the corporate-actions registry (`source: registry`) and are never created or deleted through this API."
       enum: [buy, sell, redemption, deposit, withdrawal, dividend, coupon, amortization, fee, tax, transfer_in, transfer_out, exchange_out, exchange_in, spinoff_out, spinoff_in, split, interest, conversion]
     Operation:
       type: object
@@ -2651,11 +2408,11 @@ components:
         price:
           type: string
           nullable: true
-          description: "Decimal as string: money per unit, denominated in THIS OPERATION'S OWN `currency` — the same currency `amount_minor` and `fee_minor` carry, and never the space's base currency. It is an ANNOTATION rather than a term of any computation: nothing values a trade from it (the engine reads `amount_minor`), so it is never converted and no display-currency mode touches it. That is precisely why a client drawing it beside converted amounts has to name `currency` on the number itself rather than let the neighbouring figures speak for it — in the base-currency mode those figures are roubles while this one is still dollars, and a bare number was read off them (#114). WHERE THE CLAIM COMES FROM, since the column stores no currency of its own: a manually written operation is held to it — `price` × `quantity` is bounded as the same money `amount_minor` is, see CreateOperationRequest.quantity — while the T-Invest import ASSUMES it and names the assumption, the broker sending a price with a currency of its own that the mirror keeps no column for (see tradePrice in internal/importer/tinvest/projection.go)."
+          description: "Decimal as string: money per unit in the operation's own `currency`, never converted. An annotation — nothing values a trade from it — so a client names `currency` on it. A hand entry holds `price` × `quantity` to the money cap; an import takes the broker's price as given."
         amount_minor:
           type: integer
           format: int64
-          description: "The operation's own amount in `currency`, sign preserved — an outflow stays negative. For every ordinary row it is money that moved on `occurred_on` and owes nothing to any cost basis rule. A transfer_in/transfer_out is the exception and it matters here: its amount is the COST BASIS of the shares moved, carried over from the source account by the earliest-purchases-first queue this application computes — the same rule and the same queue behind Position.cost_minor. Whether that queue is the one the owner's country requires is published once per space, on SessionInfo.cost_basis_rules, and deliberately NOT repeated on this listing (see that field for why). A client rendering this figure without reading it shows an unqualified cost basis in the journal however carefully it qualified the same shares on the positions screen. WITH ONE EXCEPTION INSIDE THE EXCEPTION: a transfer whose basis was GIVEN BY HAND (TransferRequest.cost_minor) was produced by no queue at all. Both of its legs carry the hand-entered figure, and the source account gives up the basis its own queue holds for those shares, which need not be that number and usually is not — the two legs are deliberately not reconciled, because the person said what the parcel was worth and the journal does not contradict them. So on such a pair this figure is the basis the shares ARRIVE with and not a statement about what left, and the family's total basis can change across such a transfer, by design. `has_undated_lots` is true on both legs, since a hand-entered basis has no purchase dates behind it — but it does not single this case out, being equally true of a transfer recorded before breakdowns were kept and of one whose breakdown carries a dateless piece; what those three share is exactly what the flag says, that the amount's purchase dates are not all known."
+          description: "The operation's own amount in `currency`, sign preserved. On a transfer_in/transfer_out it is the cost basis of the units moved, from the earliest-purchases-first queue (SessionInfo.cost_basis_rules says whether that is the country's rule) — or, when the basis was given by hand (TransferRequest.cost_minor), that figure on both legs, which the source account's own queue need not match."
         currency: { type: string }
         fee_minor: { type: integer, format: int64 }
         note: { type: string }
@@ -2663,21 +2420,10 @@ components:
           type: string
           nullable: true
           description: >-
-            WHERE THIS OPERATION HAPPENED, in the words of whoever reported it:
-            an exchange board's code as the broker sent it ("TQBR", "TQCB"), or
-            the code of dealing away from an order book ("FINEX_OTC" — the
-            over-the-counter dealing the broker opened in the FinEx funds after
-            exchange trading in them stopped). Null for every row nobody said
-            it about: everything entered by hand, and every imported row whose
-            source reported no mode — money moving in and out of an account
-            describes no instrument and carries none.
-
-            IT IS THE RAW CODE AND IS NEVER TRANSLATED AWAY, because this
-            program can name only some of them: `trading_mode_kind` says which
-            kind it is, and for a code with no source behind it that field says
-            `unknown` while this one still carries what the broker said. A
-            client shows the code whenever it shows the kind, so an unnamed
-            mode is visible as itself rather than as a blank.
+            Where the operation happened, as its source reported it: an exchange board code
+            ("TQBR", "TQCB") or an off-book code ("FINEX_OTC"). Never translated away;
+            `trading_mode_kind` classifies it. Null when nobody reported one: hand entries
+            and money movements.
           example: "FINEX_OTC"
         trading_mode_kind:
           $ref: "#/components/schemas/TradingModeKind"
@@ -2693,35 +2439,31 @@ components:
           format: int64
           nullable: true
           description: >-
-            On a journal page: for each half of a move of shares between two of
-            the family's accounts whose basis was given by hand
-            (TransferRequest.cost_minor), how much the family's basis of those
-            shares changed across the move, in `currency` — the figure given
-            less the basis the departing account's own queue held for them at
-            that moment. Positive: the family's basis grew. Both halves carry
-            the same figure. Null for everything else (and when the departing
-            account does not replay up to the move), absent outside the journal.
+            On a journal page, for each half of a move between the family's accounts whose
+            basis was given by hand: how much the family's basis of those units changed, in
+            `currency` — the figure given less what the departing account's queue held for
+            them. Positive: it grew. Null otherwise, absent outside the journal.
         split_ratio: { type: string, nullable: true, description: "Decimal as string" }
         face_before_minor: { type: integer, format: int64, nullable: true, description: "On an amortization: the bond's outstanding face value per unit just before the repayment, in minor units of `currency`, when it is known (see CreateOperationRequest.face_before_minor). Null on every other row." }
         source:
           type: string
           enum: [manual, csv, tinvest, registry]
-          description: "Who wrote this row. `manual` is a person, through this API; `registry` is the corporate-actions registry, which materializes one recorded fact about an INSTRUMENT (a split, a conversion) into a row on every account that held it; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row."
+          description: "Who wrote the row: `manual` — a person through this API; `registry` — the corporate-actions registry; otherwise an importer. Only a `manual` row can be deleted (see deleteOperation): the writer of any other would write it back."
         created_at: { type: string, format: date-time }
         has_undated_lots:
           type: boolean
-          description: "True when this operation's amount_minor is a cost basis whose purchase dates are not all known: an in-kind transfer whose per-lot breakdown was never recorded (a basis given by hand, or one predating breakdowns), or one whose breakdown contains at least one dateless piece — shares that reached it through an earlier undated transfer. Both legs of such a pair answer the same way; they describe one parcel. False for every ordinary operation, whose amount belongs to the day it happened and needs no purchase date at all. This is the journal's twin of Position.has_undated_lots and exists for the identical reason: in_base being null has several causes, and they are not the same news to the person reading the row. A missing fx rate is a gap the backfill job closes on its own and the figure appears later; an unrecorded purchase date never resolves, because nobody wrote it down and nothing can recover it. Here the distinction is sharper still than on a position: a transfer's own date usually DOES have a rate — the demo instance has one for every transfer it records — so a client saying \"no rate for this date\" about such a row does not merely fail to explain it, it states something false, and promises a figure that will never arrive. `in_base_gap` draws the same line finer, separating a missing rate for the operation's own date from one for a purchase date, and is the field to caption a journal row with; this one remains the standing fact about the operation, published on the create and transfer responses too, where nothing was ever converted and no gap is published at all. Always present, never inferred by the reader from in_base being null. It changes nothing about the figures: an unknown purchase date costs no money and no shares, and amount_minor and fee_minor are published in the operation's own currency exactly as usual. Together with assembled_from_lots, published alongside it on this same object, the two fields answer completely for whether amount_minor is a cost basis at all: a full, dated breakdown makes assembled_from_lots true, a missing or partial one makes this field true, and a breakdown with one dateless piece among dated ones makes both true at once. Neither field ever needs the other to make sense of it, and neither depends on in_base — a client that reads only in_base for this answer will miss every case where the breakdown could not be converted, which is the bug both fields exist to prevent."
+          description: "True when amount_minor is a cost basis whose purchase dates are not all known: a transfer with no per-lot breakdown (a basis given by hand, or one predating breakdowns) or with a dateless piece. The same on both legs; false for every ordinary operation. Permanent, unlike a missing rate; it changes no figure. With assembled_from_lots it says whether amount_minor is a cost basis at all: a full dated breakdown makes that one true, a missing or partial one this one, a dateless piece among dated ones both."
         assembled_from_lots:
           type: boolean
-          description: "True when amount_minor is a cost basis assembled piece by piece from the purchases behind it, each acquired on its own day, rather than money that moved on occurred_on itself — a statement about how the FIGURE was arrived at, not about whether it was converted into the base currency. Set from the presence of a stored per-lot breakdown (see TransferLots / Store.attachTransferLots): true for a transfer_in/transfer_out whose parcel carries one, whether or not every piece in it has a purchase date and whether or not in_base exists for this row at all. False for every ordinary operation, which never carries a breakdown, and for a transfer given a hand-typed basis (or one recorded before breakdowns were kept), which has no breakdown to assemble from — has_undated_lots is what answers for that parcel instead. Both legs of a transfer pair answer the same way; they describe one parcel. This is also what OperationInBase.rate_on reads to decide whether it names the single rate behind amount_minor or merely the newest of several — see that field. It used to live on OperationInBase alone, which made it disappear exactly when the conversion block did: a transfer already denominated in the base currency, or one whose newest purchase has no fx rate yet, published nothing about how amount_minor was derived even though the breakdown that answers the question sits in the operation itself, entirely independent of whether it could be converted. Moving the flag here, next to has_undated_lots, closes that gap: a reader no longer has to hope a nullable in_base exists before learning what kind of number amount_minor is."
+          description: "True when amount_minor is a cost basis assembled from the purchases behind it (a transfer with a stored per-lot breakdown), each on its own day, rather than money that moved on occurred_on. The same on both legs; false for ordinary operations and for a transfer with a hand-typed basis. OperationInBase.rate_on reads it."
         in_base:
           nullable: true
-          description: "amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base, which answers \"what is this worth now\"; the journal answers \"what did this cost then\". Position.in_base sits between the two: its cost_minor and income_minor follow the same historical rule as this field (each lot at the rate of its acquisition date, each payment at the rate of its own), while only its market_value_minor is a current valuation. Each amount is converted and rounded independently. One exception, and it is the whole point of the rule rather than a break from it: an in-kind transfer between two accounts of the same family carries a cost basis assembled from purchases made on other days, so its amount_minor is converted piece by piece at the rate of the day each piece was bought, and the whole is rounded once (the operation's own assembled_from_lots says when this happened — see that field; it is unaffected by whether this object exists at all). BOTH legs of the pair are converted that way — the departing transfer_out and the arriving transfer_in describe one parcel with one set of purchases behind it, so they publish the same figure and, for the same reason, both fall back to null together when any one of those purchase dates has no rate. Converting either on the transfer's own date would price old shares at the rate of the day they changed brokers and make that row contradict the position built from the very same purchases. Null when `currency` already equals the base currency (nothing to convert), when no fx rate could be resolved for one of the dates it needs nor any earlier one, or when the transfer's parcel — or a piece of it — does not know when it was bought: a basis entered by hand, one recorded before breakdowns were kept, or a breakdown that mixes dated pieces with pieces carried over from an earlier undated transfer, all leave at least one purchase date unknown, and no rate answers for a date nobody recorded (both legs fall back to null together here too, for the identical reason Position.in_base does — see its description). `in_base_gap` says which of those a null is, and says it in the sharpest form the server can: not merely «a rate» but WHICH rate — the operation's own day's or a purchase day's — since a rate that has not been fetched yet, a purchase date nobody ever wrote down, and a purchase date whose rate is missing must not be explained to a reader with the same sentence. `has_undated_lots` answers the same question more coarsely and keeps doing so on the two responses that carry no `in_base` at all. A partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses omit the field entirely, since those return an operation the client just submitted rather than a journal to read. An absent field and an explicit null mean the same thing to a reader: there is nothing converted to show. `assembled_from_lots` and `has_undated_lots`, by contrast, are properties of the operation itself and are published on every response that returns one, this object's absence notwithstanding."
+          description: "amount_minor and fee_minor in the space's base currency at the rate of occurred_on — what it cost then, not what it is worth now; each rounded on its own. A transfer's amount is converted piece by piece at each purchase day's rate (assembled_from_lots), and both legs publish the same figure. Null when `currency` is the base currency, when a needed rate is missing, or when a piece of a transfer has no purchase date (`in_base_gap` says which). Only on the journal listing; create and transfer responses omit it."
           allOf:
             - $ref: "#/components/schemas/OperationInBase"
         in_base_gap:
           nullable: true
-          description: "Which term stopped `in_base`, or null when nothing did. Null therefore covers two situations and `currency` tells them apart: either `in_base` is present, or `currency` already equals the space's base currency and there was nothing to convert in the first place — the operation's own amounts ARE the base-currency ones and no «not converted» caption belongs over them at all. Non-null exactly when `in_base` is null and `currency` differs from the base currency. Published wherever `in_base` is, and only there: the journal listing (GET /accounts/{accountId}/operations) computes both, while the create and transfer responses omit both, since those hand back an operation the client just submitted rather than a journal to read. It is the sharper twin of `has_undated_lots`: that one is a standing fact about the operation, published on every response that returns one whether or not there was ever anything to convert, while this one names the term the conversion actually stopped on — and this is the one to caption a row with, since an undated parcel is only the FIRST of three things that can stop it. Before this field existed the screen said «Нет курса на дату операции» over all three, which is false about a parcel whose purchase dates nobody ever recorded, and false again about a transfer whose own date has a perfectly good rate and whose PURCHASE date has none (#79)."
+          description: "Which term stopped `in_base`. Set exactly when `in_base` is null and `currency` differs from the base currency; null when `in_base` is present or there was nothing to convert. Published wherever `in_base` is: on the journal listing only."
           allOf:
             - $ref: "#/components/schemas/OperationInBaseGap"
     StateWithheldRequest:
@@ -2763,7 +2505,7 @@ components:
     OperationInBaseGap:
       type: string
       enum: [undated_lot, no_rate_operation_date, no_rate_lot_date]
-      description: "Which TERM the server could not value, and so why Operation.in_base — the whole object — is absent. It is the journal's twin of InBaseGap and names terms for the same reason that one does: there is exactly one operation here, and the terms are the very figures standing side by side in its row. `undated_lot`: amount_minor is the cost basis of a transferred parcel and at least one piece of that parcel does not know when it was bought — a breakdown that was never recorded (a basis given by hand, or a transfer predating breakdowns) or one carrying a dateless piece inherited from an earlier undated transfer. There is no date to ask the fx table about and none will ever be recovered, because nobody wrote it down. This is the same condition Operation.has_undated_lots reports. `no_rate_operation_date`: amount_minor is money that moved on `occurred_on`, and the fx table holds no rate for that day nor for any earlier one. `no_rate_lot_date`: amount_minor is a cost basis assembled from a stored breakdown whose every piece IS dated, and the fx table holds no rate for one of those PURCHASE days nor for any earlier one. The transfer's own date is not the date at issue and usually has a perfectly good rate — it is simply not a rate that may value shares bought on other days — so a caption naming it would blame a day that had nothing to do with the gap, which is the whole of #79. EXACTLY ONE VALUE IS PUBLISHED, AND THERE IS NO COMBINED VALUE. `undated_lot` is settled before any rate is looked up, so a row that has both an undated piece and a missing rate reports the undated piece: it is the one cause no backfill will ever close, and reporting it never promises a figure that is not coming. The two `no_rate_*` values need no order between them because they cannot both arise on one row: an amount is either money that moved on the operation's own date or a basis assembled from a stored breakdown, never both, so all of its terms are dated the one way or all the other — and `assembled_from_lots` is the field that says which, published on the operation whether or not this gap is."
+      description: "Which term stopped Operation.in_base. `undated_lot`: a piece of a transferred parcel has no purchase date — permanent, decided first. `no_rate_operation_date`: no rate for occurred_on or earlier. `no_rate_lot_date`: no rate for a purchase day of a dated breakdown or earlier. The last two cannot both arise: an amount is either money moved on its own day or an assembled basis (assembled_from_lots)."
     OperationInBase:
       type: object
       required: [amount_minor, fee_minor, currency, rate_on, dated_on]
@@ -2771,8 +2513,8 @@ components:
         amount_minor: { type: integer, format: int64, description: "Operation.amount_minor converted into currency. The sign is preserved — a buy stays negative — and rounding is half-away-from-zero, so converting never shrinks the magnitude of an outflow" }
         fee_minor: { type: integer, format: int64, description: "Operation.fee_minor converted into currency, rounded independently of amount_minor: the two are separate figures, not terms of one total" }
         currency: { type: string, description: "The space's base currency (ISO-4217), same as Summary.base_currency" }
-        rate_on: { type: string, description: "Date YYYY-MM-DD of an fx rate ACTUALLY used, which is `dated_on` itself or the nearest earlier date that has a rate (weekend, holiday, provider gap) — never today's date. For a 2019 operation this is a 2019 date; that is what makes this a historical conversion rather than a current valuation. For a transfer converted piece by piece (the operation's own assembled_from_lots is true — see Operation.assembled_from_lots) the figure is struck at several rates and no single date describes it: this then names the newest of them, the rate that values the most recent purchase in the parcel, and never the transfer's own date — that is the one rate deliberately not used. IT IS NOT A DATE ANYTHING HAPPENED ON, and must not be captioned as one: see `dated_on`, which is" }
-        dated_on: { type: string, description: "Date YYYY-MM-DD the headline rate was asked FOR — the date this figure is dated, as against `rate_on`, the date the rate that answered actually came from. For an ordinary operation it is `occurred_on`. For a transfer converted piece by piece (assembled_from_lots true) it is the newest PURCHASE date in the parcel, named as itself instead of being read off the rate that happened to value it. IT EXISTS BECAUSE `rate_on` ALONE CANNOT BE READ AS A DATE ANYTHING HAPPENED ON. The CBR publishes nothing at weekends and holidays, so the nearest EARLIER date's rate is resolved instead: a purchase made on a Saturday is converted at Friday's rate, and a caption naming `rate_on` as the purchase date names a day nothing was bought on — roughly a third of the calendar (#80). With both dates published the two cases separate exactly: `rate_on` equal to this field means the rate is that very day's, `rate_on` earlier means it came from an earlier day, and either way the caption has the real date to name. A client that made that comparison against `occurred_on` got the right answer only for an ordinary row — on a transfer it compares a purchase date's rate against the day the paperwork moved, which answers nothing. IT SPEAKS FOR THE HEADLINE RATE ONLY, the one `fee_minor` is struck at. A transfer's amount_minor is summed over one rate per piece, and any of those may equally have come from an earlier day than the purchase it values; none of them is published, and this pair of dates makes no claim about them" }
+        rate_on: { type: string, description: "Date YYYY-MM-DD of the rate actually used: `dated_on` or the nearest earlier date with a rate (weekends, holidays, gaps) — never today. On a transfer converted piece by piece, the newest of its rates. Not a date anything happened on: see `dated_on`." }
+        dated_on: { type: string, description: "Date YYYY-MM-DD the headline rate was asked for: occurred_on, or on a transfer converted piece by piece the newest purchase date. `rate_on` equal to it means that day's rate; earlier means an earlier day's (a weekend purchase is converted at Friday's). Speaks for the headline rate only, the one fee_minor is struck at." }
     CreateOperationRequest:
       type: object
       required: [account_id, type, occurred_on, currency]
@@ -2780,16 +2522,16 @@ components:
         account_id: { type: string, format: uuid }
         instrument_id: { type: string, format: uuid, nullable: true }
         type: { $ref: "#/components/schemas/OperationType" }
-        occurred_on: { type: string, description: "Date YYYY-MM-DD. Held to both ends of a range, and past either it is a 400. NOT IN THE FUTURE, with one day of slack past the UTC day boundary: a date-only field carries no zone, so someone east of UTC must be able to record what they did this evening while the server is still on yesterday. AND NOT EARLIER THAN 1900-01-01, which is a typo guard and not a rule from anywhere — no law, no broker and no data source here names it, and it is in particular not a claim about the earliest date this server can value: an operation dated 1950 is accepted, and whether it can be shown in the base currency is a separate question about which fx rates exist. What the floor catches is a fumbled leading digit (1026 for 2026, one keystroke), which is the one date mistake that is silent rather than visible: the cost basis queue is ordered by acquisition date, so such a row sorts to the FRONT of it and the next sale releases it first, and nothing on any screen remarks on a date being old." }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD, from 1900-01-01 (a typo guard, not a valuation limit) to today with one day of slack past the UTC boundary for zones east of it; outside the range, 400." }
         settled_on: { type: string, nullable: true, description: "Date YYYY-MM-DD. Not earlier than occurred_on and not more than a year after it; anything else is a 400." }
-        quantity: { type: string, nullable: true, description: "Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^13 (10000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bound is the money cap read as a count of units, one whole major unit apiece, and it is set there so that what the write accepts the positions screen can still value: at 10^13 units a quote of up to ~9223 per unit still fits in an int64 of minor units, which is above an ordinary share, bond or ETF. More than 10^13 units of something worth less than a whole rouble apiece is refused, deliberately — a figure no ordinary price can value is better refused as a field than discovered later by the screen that cannot render it. Rows written before the bound existed are untouched and are still returned as they stand." }
+        quantity: { type: string, nullable: true, description: "Decimal as string, positive where the type takes one. |quantity| at most 10^13, and with a price |price × quantity| at most 10^15 minor units — the cap amount_minor carries; past either, 400. Rows written before the bound are returned as they stand." }
         price: { type: string, nullable: true, description: "Decimal as string: money per unit, in MAJOR currency units. |price| must not exceed 10^13 (10000000000000) — one unit may not cost more than a whole operation is allowed to be for — and see quantity for the bound on the two multiplied together. Past either, 400." }
         amount_minor:
           type: integer
           format: int64
           minimum: -1000000000000000
           maximum: 1000000000000000
-          description: "MAY BE OMITTED ON A BUY OR A SELL THAT GIVES BOTH quantity AND price, and then the server computes it: quantity × price, rounded half away from zero to a minor unit, negative for a buy and positive for a sell. That is what the trade dialog does — the client shows a preview and the server records the figure, so one implementation of the rounding decides a lot's cost. Omitted anywhere else, it is a 400. When it IS given it is taken as given and is not compared with quantity × price: a purchase recorded with accrued interest in its total is that total. The operation's own amount in `currency`, sign preserved: an outflow is negative. Which sign is required depends on the type — a buy and a withdrawal must be negative, a deposit and a dividend positive, a split exactly 0, a conversion either way — and the wrong one is a 400 naming the type. Bounded at ±10^15 minor units, ten trillion whole roubles or dollars: the SAME cap SetBalanceRequest.amount_minor carries, because it is the same money in the same currency on the same screen — the accounts list sums balances, the journal sums amounts, and both are multiplied by an fx rate before anything is published. Past it, 400. The bound is on the MAGNITUDE, so an outflow is refused at the same size an inflow is. Rows written before the bound existed are untouched and are still returned as they stand."
+          description: "The operation's amount in `currency`, sign preserved. May be omitted on a buy or a sell that gives both quantity and price: the server then records quantity × price rounded half away from zero, negative for a buy. Given, it is taken as is (a total with accrued interest stays). The sign the type requires — negative for a buy and a withdrawal, positive for a deposit and a dividend, 0 for a split, either way for a conversion — and |amount| at most 10^15 are enforced with a 400."
         currency:
           type: string
           pattern: "^[A-Z]{3}$"
@@ -2817,19 +2559,19 @@ components:
         to_account_id: { type: string, format: uuid }
         instrument_id: { type: string, format: uuid }
         quantity: { type: string, description: "Decimal as string. |quantity| must not exceed 10^13 (10000000000000), as on an operation — this writes the same column, on two rows. A position CAN hold more than that, having grown one accepted operation at a time; such a holding has to be moved in several transfers." }
-        occurred_on: { type: string, description: "Date YYYY-MM-DD. Held to both ends of a range, and past either it is a 400. NOT IN THE FUTURE, with one day of slack past the UTC day boundary: a date-only field carries no zone, so someone east of UTC must be able to record what they did this evening while the server is still on yesterday. AND NOT EARLIER THAN 1900-01-01, which is a typo guard and not a rule from anywhere — no law, no broker and no data source here names it, and it is in particular not a claim about the earliest date this server can value: an operation dated 1950 is accepted, and whether it can be shown in the base currency is a separate question about which fx rates exist. What the floor catches is a fumbled leading digit (1026 for 2026, one keystroke), which is the one date mistake that is silent rather than visible: the cost basis queue is ordered by acquisition date, so such a row sorts to the FRONT of it and the next sale releases it first, and nothing on any screen remarks on a date being old." }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD, from 1900-01-01 (a typo guard, not a valuation limit) to today with one day of slack past the UTC boundary for zones east of it; outside the range, 400." }
         cost_minor:
           type: integer
           format: int64
           nullable: true
           minimum: 0
           maximum: 1000000000000000
-          description: "Cost basis override; default is FIFO carryover from the source account. A basis is what the shares COST, so it is never negative: the floor is 0 and not the -10^15 an amount gets, and the ceiling is the same 10^15 minor units every other money field here is written against. Past either end, 400. Sending one has a second consequence that is not about its size: a basis given by hand replaces the parcel of purchases the queue would have released, so the shares arrive knowing no acquisition date at all — see Operation.has_undated_lots, which is what such a transfer then reports for good. AND A THIRD, WHICH IS THE ONE TO UNDERSTAND BEFORE SENDING IT: this number is what the shares arrive with, not what departs. The source account still releases its own earliest purchases for the quantity moved and gives up THAT basis, whatever it is; both recorded legs carry the number sent here, so the departing leg's `amount_minor` states the parcel's declared worth rather than the basis the source lost. The two are not reconciled and the family's total basis moves by the difference — which is the point of the field (a parcel arriving from a broker that reported a total and nothing else), and the reason to leave it unset whenever the source's own history is the truth."
+          description: "Cost basis given by hand instead of the FIFO carryover from the source account: from 0 to 10^15 minor units, 400 outside. The units then arrive with no acquisition dates (Operation.has_undated_lots), and the figure is what they arrive with: the source still releases its own earliest purchases, both legs carry this number, and the family's total basis moves by the difference. Leave it unset when the source's history is the truth."
         note: { type: string, maxLength: 1000 }
     OperationsResponse:
       type: object
       required: [operations, has_more]
-      description: "One page of an account's journal. It used to be the bare array `operations` still is, which left a reader no way to tell a complete journal from a truncated one: the server clamped `limit` to its ceiling without saying so, and a client that asked for 250 and counted 200 back concluded there was nothing more. At exactly the ceiling the journal therefore presented itself as whole while hiding everything older, and the interface offered no other route to those rows (#86). The clamp itself is gone as of #118 — an over-large `limit` is now refused with 400 — so that particular short page can no longer be produced at all; this envelope stays, because it answers a question a page of the RIGHT length still cannot."
+      description: "One page of an account's journal, with whether more follows."
       properties:
         operations:
           type: array
@@ -2837,7 +2579,7 @@ components:
           description: "The page itself, newest first, at most `limit` long. Shorter than `limit` only at the end of the journal: an over-large `limit` is refused rather than clamped (#118), so a short page has one meaning — which it did not have when this field was written."
         has_more:
           type: boolean
-          description: "Whether the journal holds at least one more entry beyond this page — i.e. at `offset + len(operations)` and later. THE ONLY HONEST ANSWER TO «is that all», and it is the server's to give. The page's own length cannot answer it: not because a short page is ambiguous — since #118 it is not, a limit past the ceiling being refused rather than clamped — but because a FULL page says nothing either way, and that is the case a «показать ещё» control has to decide. A FLAG RATHER THAN A TOTAL OR A CURSOR. A total would cost a second count of a table the page has already been read from, publish a number no screen shows, and could disagree with the very page it travels with if a row were written in between; the question a reader is actually asking is binary. A cursor would be a second way of saying where to continue beside the `offset` this endpoint already takes and this client already sends, and it would still have to answer this same question separately. It is derived where the decision is made — one row beyond the page is fetched and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page — never by comparing the page's length against anything afterwards. False on an empty page, which is the end of the journal (or past it)."
+          description: "Whether the journal holds at least one more entry beyond this page (at `offset + len(operations)`): the server fetches one row past the page to know. False on an empty page."
     MoneyTransferRequest:
       type: object
       required: [from_account_id, to_account_id, occurred_on, amount_minor, currency]
@@ -2862,7 +2604,7 @@ components:
       description: "One currency's worth of a position's income (see Position.income_by_currency, which is the list of these)."
       properties:
         currency: { type: string, description: "ISO-4217 of the currency these payments ARRIVED in. Not necessarily the position's own `currency`, which is what its cost and quantity are denominated in — a paper bought for yuan may be paid in rubles." }
-        income_minor: { type: integer, format: int64, description: "Income received in `currency`'s minor units: the dividends and coupons paid in it, less the taxes withheld in it and the commissions charged on the paper in it outside a trade (a depositary's, a transfer's). An exact sum — every term is an int64 of minor units of this one currency, so nothing is converted and nothing is rounded here. May be 0 (a coupon and the tax withheld from it cancelling to the minor unit) or negative (a tax withheld in a currency no payment of this position arrived in, or one on a payment older than this journal); neither is a defect, and neither says the same thing as having no entry at all." }
+        income_minor: { type: integer, format: int64, description: "Income in `currency`'s minor units: dividends and coupons paid in it, less the taxes and the commissions charged on the paper in it outside a trade. May be 0, or negative (a tax with no payment in this currency)." }
     Position:
       type: object
       required: [instrument, quantity, cost_minor, realized_pnl_minor, settled_minor, total_minor, income_minor, income_by_currency, fees_minor, currency, has_undated_lots, has_undated_realizations, has_unknown_cost, in_base_gap, market_value_gap]
@@ -2874,67 +2616,67 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: "Realized profit or loss in the position's own `currency`. NULL EXACTLY WHEN A DISPOSAL SETTLED IN ANOTHER CURRENCY THAN THE BASIS IT RETIRED, and then there is no figure to publish in any currency at all: a yuan bond redeemed for rubles has proceeds in rubles and a basis in yuan, and the difference between them is a quantity of neither — striking it needs an fx rate, which the calculating core holds none of by design. That null is therefore NOT the news that something is unknown or that a rate is missing: every term is present and dated, and it is the single-currency ANSWER that does not exist. It has exactly one cause, so no companion field names it. This is the one thing the money kept per currency (`income_by_currency`, and the fee total) does not have an equivalent of: income in a second currency is still income in that currency and can be listed, while a result whose two ends are in different currencies belongs to neither list. THE RESULT IS NOT LOST WITH THE FIGURE: `in_base.realized_pnl_minor` converts each disposal's proceeds, fee and every retired parcel at that term's own date AND out of that term's own currency, so a row carrying that object publishes the whole result as one number — and a position whose own currency already IS the base currency but which sold into a third one carries that object for this reason alone. `RealizedTotal.by_currency` applies the same rule one level up: a currency whose bucket contains such a position publishes a null rather than the sum of the rest of it."
+          description: "Realized profit or loss in the position's `currency`. Null when a disposal settled in another currency than the basis it retired (a yuan bond redeemed for rubles): no single-currency figure exists then, and `in_base.realized_pnl_minor` states it in the base currency."
         settled_minor:
           type: integer
           format: int64
           nullable: true
-          description: "WHAT THE POSITION HAS LOCKED IN, in its own `currency`: `realized_pnl_minor` plus `income_minor`. Both halves are past events with dates of their own, so this figure never moves again — which is why it is published apart from `total_minor`, whose other half changes every day. It is also the figure a tax base is built from, though it is NOT that base: no tax is subtracted here (see AccountPositions.tax_withheld_minor for the tax that was actually taken, and why it cannot be attributed to a position). NULL WHENEVER A TERM IS MISSING RATHER THAN SUMMED WITHOUT IT, and there are two ways that happens: `realized_pnl_minor` may not exist at all (a disposal that settled in another currency), and `income_minor` is only the part of the income denominated in `currency` — a yuan bond paid in rubles has income this sum cannot see, and publishing the visible part under a name that says «everything» is the failure this null exists against. `in_base.settled_minor` is the same figure with every term converted at its own date, and it exists on rows where this one does not."
+          description: "`realized_pnl_minor` plus `income_minor`: what the position has locked in, unmoved by quotes. No tax is subtracted (see AccountPositions.tax_withheld_minor). Null when either term is missing or when income arrived in another currency than `currency`; `in_base.settled_minor` still states it then."
         total_minor:
           type: integer
           format: int64
           nullable: true
-          description: "WHAT THE POSITION HAS COME TO, in its own `currency`: `settled_minor` plus `unrealized_pnl_minor`. It deliberately mixes two kinds of figure — the settled half does not move with the market, the unrealized half is a valuation that does — and that is why `settled_minor` stays published beside it instead of being folded away: a reader who needs the number quotes cannot move has to be able to see it. Null whenever either half is null, for those halves' own reasons (no valuation, a valuation in another currency, or no settled figure)."
+          description: "`settled_minor` plus `unrealized_pnl_minor`. Null when either is."
         income_minor:
           type: integer
           format: int64
-          description: "Income denominated in the position's own `currency`, AND ONLY THAT: the dividends and coupons that arrived in `currency`, less the taxes withheld and the commissions charged on the paper outside a trade in `currency`. IT IS ONE TERM OF `income_by_currency` — that list's entry for `currency`, and 0 when the list holds no entry for it — never a summary of the list, and a reader who takes this field for «the position's income» is shown an incomplete answer on every position paid in more than one currency. It is published beside `currency` and rendered under that sign, which is the whole reason it can carry nothing else: adding another currency's minor units into it would denominate the result in nothing, and converting them needs a rate this object neither has nor publishes. A paper's payments need not arrive in the currency it was bought in — a yuan bond's coupons and a dollar share's dividend, tax included, routinely come in rubles from a Russian broker — so on such a position this field is a plain 0: true to the minor unit, and by itself indistinguishable on screen from a paper that has never paid anything. `income_by_currency` beside it is the complete answer with nothing converted; `in_base.income_minor` is the complete answer as ONE number, every payment converted at the rate of its own date, and it exists only where that object does."
+          description: "The entry of `income_by_currency` for the position's own `currency`, 0 when there is none: dividends and coupons in it, less the taxes and the commissions charged on the paper outside a trade. Not the whole income when payments arrived in other currencies; `in_base.income_minor` converts them all."
         income_by_currency:
           type: array
           items: { $ref: "#/components/schemas/PositionCurrencyIncome" }
-          description: "The position's income KEPT PER CURRENCY, and the complete answer to what this paper has paid: one entry per currency the payments actually arrived in, ordered by currency code. NOTHING IS CONVERTED AND NO TWO ENTRIES ARE EVER ADDED — the calculating core holds no fx rates by design (see portfolio.Position.IncomeByCurrency), and one integer made of kopecks and fen is denominated in nothing; `in_base.income_minor` is where this becomes a single figure, each payment converted at the rate of its own date. The order is the server's own and is a property of the money rather than of the journal: two accounts holding the same payments recorded in a different order publish the same list. `income_minor` above is this list's entry for `currency` alone — one of these terms, not their sum. EMPTY EXACTLY WHEN THE POSITION HAS RECEIVED NO INCOME AT ALL, which is what tells that apart from an entry of 0: a coupon and its tax cancelling exactly is not the statement that nothing was ever paid."
-        fees_minor: { type: integer, format: int64, description: "Commissions charged on this position IN THE POSITION'S OWN `currency`, and only those — the same rule `income_minor` states, applied to the fee total. A commission need not be denominated like the paper: selling a yuan bond settles in rubles and the broker charges its commission in rubles too, and such a charge is NOT in this figure. Unlike the income there is no `fees_by_currency` beside it, so that charge is not published anywhere in this payload; it is stated here rather than left for a reader to discover from a total that does not add up against the operations. Every commission is here, wherever else it is counted: a purchase's is also capitalized into the lot's cost, a sale's comes off its realized result, and one charged outside a trade comes off `income_minor` — so this figure is a tally to read, never a term to subtract again." }
+          description: "The position's income per currency it arrived in, ordered by currency code; nothing is converted and no two entries are added. Empty exactly when the position has received no income at all."
+        fees_minor: { type: integer, format: int64, description: "Every commission charged on this position in its own `currency`: a purchase's (also in the lot's cost), a sale's (also off its realized result) and one charged outside a trade (also off `income_minor`) — a tally to read, never a term to subtract again. Commissions in another currency are not published." }
         currency: { type: string }
-        market_value_minor: { type: integer, format: int64, nullable: true, description: "Market value in market_value_currency; always the same currency as the position's own `currency` when a conversion rate was available, so it's directly comparable to cost_minor. For a bond whose raw valuation is in the face value's currency (not the quote's) and that currency differs from the position's, this is the value converted into the position's currency at today's fx rate; if no rate is available it falls back to the raw (unconverted) value. Null when there is no valuation at all, which is three different pieces of news — no quote stored yet, a type this program has no valuation model for, or a bond with no face value recorded — and `market_value_gap` is what says which, so a reader never has to take a null here as \"no quote\"." }
+        market_value_minor: { type: integer, format: int64, nullable: true, description: "Market value in `market_value_currency`: the position's `currency` when the valuation was converted or needed no conversion, so it compares with cost_minor. A bond is valued in its face currency and converted at today's rate; without a rate the raw figure is published. Null when there is no valuation; `market_value_gap` says why." }
         market_value_currency: { type: string, nullable: true, description: "Currency of market_value_minor. Equal to `currency` (the position's own currency) whenever a conversion happened; otherwise the raw valuation currency (the quote's currency for share/etf, the instrument's face_currency for bond). Null exactly when market_value_minor is null." }
         market_value_source_currency: { type: string, nullable: true, description: "Set only when market_value_minor was converted from a different currency (see market_value_minor): the original, unconverted valuation currency (e.g. a bond's face_currency). Null when no conversion happened, including when one was needed but no fx rate was available." }
-        market_value_source_minor: { type: integer, format: int64, nullable: true, description: "Set only when market_value_minor was converted from a different currency: the original, unconverted valuation amount in market_value_source_currency. It is what a client should name when it discloses where the converted figure came from (\"converted from 1 000,00 €\"), and — since it is also what in_base.market_value_minor is struck from, at the rate of THIS currency rather than the position's — that disclosure is true of the base-currency figure as well as of market_value_minor. Null when no conversion happened." }
-        price: { type: string, nullable: true, description: "Decimal as string; latest quote price used for the valuation. What it MEANS depends on instrument.type: for share/etf it is money per unit, in the currency the QUOTE is denominated in — normally the position's own `currency`, but nothing in the model requires the two to agree: a quote carries a currency of its own, and where it differs the server converts the VALUATION into the position's currency (see market_value_minor) while this field stays exactly as quoted. That currency is therefore `market_value_source_currency` when that field is set, and `market_value_currency` otherwise. For a BOND it is instead a PERCENTAGE OF FACE VALUE (e.g. \"95.20\" meaning 95.20% of face, the MOEX convention) — not money, and not in any currency itself — so market_value_minor for a bond is instrument.face_value_minor × price/100 × quantity, denominated in instrument.face_currency rather than in this field's own unit." }
-        price_money_minor: { type: integer, format: int64, nullable: true, description: "What ONE unit of this instrument costs in money, at the quoted price. Published ONLY FOR A BOND, whose `price` is a percentage of face value rather than money, and whose reader was otherwise left multiplying by the face value in their head to compare the quote against a cost or a valuation that are both money. It is the face value x price/100 — the face the exchange states for the valuation day, or instrument.face_value_minor when it states none — in that face's currency (the same currency market_value_minor is struck in before any conversion), struck and rounded ONCE on its own rather than divided out of the valuation, which would round a second time. Accrued interest is not in it: see accrued_interest_minor. Null for every other instrument type, where `price` is already money and this field would restate it; null too whenever there is no valuation at all, exactly like `price`." }
-        accrued_interest_minor: { type: integer, format: int64, nullable: true, description: "The coupon interest accrued on ONE unit of a bond, as the exchange states it for the valuation day, in the same currency as price_money_minor. market_value_minor includes it, unit by unit, on top of the price — a bond is sold at its price plus this interest, and its cost includes the interest paid at purchase. Null for every other instrument type, and on a bond when the exchange stated none in the face's currency for the last ten days: its valuation is then the price alone." }
+        market_value_source_minor: { type: integer, format: int64, nullable: true, description: "Set only when market_value_minor was converted from another currency: the unconverted valuation, in market_value_source_currency. It is also what in_base.market_value_minor is struck from. Null otherwise." }
+        price: { type: string, nullable: true, description: "Decimal as string: the price the valuation used. For a share or a fund, money per unit in the quote's currency (`market_value_source_currency` when set, else `market_value_currency`). For a bond, a percentage of the face value (\"95.20\" is 95.20 %), not money." }
+        price_money_minor: { type: integer, format: int64, nullable: true, description: "A bond only: one unit's price in money — face value × price/100, the face the exchange states for the valuation day or else instrument.face_value_minor — in that face's currency, rounded once. Accrued interest is not in it (see accrued_interest_minor). Null for other types and when there is no valuation." }
+        accrued_interest_minor: { type: integer, format: int64, nullable: true, description: "A bond only: the coupon interest accrued on one unit, as the exchange states it for the valuation day, in the currency of price_money_minor; market_value_minor includes it. Null for other types, and when the exchange stated none in the face's currency within ten days." }
         price_source:
           nullable: true
-          description: "Where `price` comes from (decision Р-11): `market` — an exchange's or a broker's quote; `manual` — stated by a person; `nav` — the fund's net asset value per unit, its manager's figure rather than a price it sells at; `foreign` — the share's close on its home exchange, while here it may not trade. Which of them a paper is valued at is the space's FullValuation: a published NAV or home-exchange close first, then the latest price of any source. Null exactly when `price` is."
+          description: "Where `price` comes from (decision Р-11): `market` — an exchange's or a broker's quote; `manual` — stated by a person; `nav` — a fund's net asset value per unit; `foreign` — a share's close on its home exchange. The space's full_valuation decides which is taken first. Null exactly when `price` is."
           allOf:
             - $ref: "#/components/schemas/PriceSource"
-        liquid_value_minor: { type: integer, format: int64, nullable: true, description: "What the holding can be sold for now, in the position's own `currency` (decision Р-11): its latest MARKET price — a price stated by hand is not one — if that price is no older than a month, valued as market_value_minor is and converted at today's rate. Null when the paper does not trade (see last_traded_on), when it has no market price at all, or when there is no valuation or rate: the liquid valuation then counts the holding as nothing. Equal to market_value_minor when the full valuation is struck from that same market price." }
+        liquid_value_minor: { type: integer, format: int64, nullable: true, description: "What the holding can be sold for now (decision Р-11), in the position's `currency`: valued at its latest market price — a price stated by hand is not one — if it is no older than a month. Null when the paper does not trade (see last_traded_on), has no market price, or there is no valuation or rate." }
         liquid_value_in_base_minor: { type: integer, format: int64, nullable: true, description: "liquid_value_minor in the space's base currency, struck once from the valuation's own currency at today's rate. Null when liquid_value_minor is, or no rate." }
         last_traded_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the paper's latest market price, set only when that price is older than a month and the liquid valuation therefore counts the holding as nothing: the paper has not traded since." }
         price_by_hand: { type: boolean, description: "True when the price was stated by a person (POST /api/v1/instruments/{instrumentId}/prices) rather than taken from an exchange or a broker — an over-the-counter or net-asset-value estimate for a paper nobody quotes, say. Absent or false otherwise." }
-        price_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe." }
-        unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available)." }
+        price_on: { type: string, nullable: true, description: "Date YYYY-MM-DD the price's source attaches it to, never the day it was fetched. Not a promise that the paper traded that day, nor that it is the latest session." }
+        unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "market_value_minor minus cost_minor, in the position's `currency`. Null when there is no market_value_minor or it is still in another currency." }
         market_value_gap:
           nullable: true
-          description: "Why this row's market valuation cell is not the figure a reader expects: either there is no valuation at all and this says what is missing, or there is one that could not be brought into the position's own currency and so carries no base-currency figure either. Null when the valuation exists and reached the position's currency (or was born in it and needed no conversion) — nothing about THIS cell went wrong then. IT WAS ONCE NULL ON A ROW WITH NO VALUATION TOO, on the ground that there was no cell to caption, and that was wrong twice over: there IS a cell, it renders a dash, and the screen captioned every one of them «Нет котировки» — including the rows where a perfectly good quote exists and this program simply computes no value for the instrument's type, which sent the reader off to wait for data that was not missing (#78). The three no-valuation causes are now named here, so the client reads a cause instead of inferring one from an absent figure. It is still null in one case where the base-currency figure IS missing and nothing about this cell failed: the valuation converted into the position's own currency normally (or needed no conversion), yet `in_base` is absent because `in_base_gap` withholds the WHOLE object, this figure included — which ANY of that field's four values does, not just the ones about the position's own terms. Three of them are about those (an undated lot, or a missing historical rate for a lot's or an income payment's own date); the fourth, `no_rate_today`, is about the valuation itself — it stops on today's rate for the currency the VALUATION is denominated in, the very rate the base-currency valuation would have been struck at — and it is STILL not this field's to report, because this field answers only for the conversion into the POSITION's currency, and on such a row that conversion succeeded or was never needed. A null `market_value_gap` therefore never by itself means this cell carries a base-currency figure — check `in_base`/`in_base_gap` for that. Every value is set at the point that DECIDES it — the one function that values a position (marketValue in internal/portfolio/market_value.go) answers with the cause instead of a bare \"could not\", and the conversion branch names its own — never by reading the payload back afterwards and comparing `market_value_currency` with `currency`, or `market_value_minor` with null. THAT IS ALSO WHY THESE THREE ARE VALUES OF THIS FIELD AND NOT A FOURTH FIELD BESIDE IT: a field would be a second answer to the question this one already answers about this one cell, the two would have to agree forever, and the day they did not the row would carry two causes for one dash. All four values are mutually exclusive by construction — a valuation either exists or does not — so one field can hold them, unlike `in_base_gap` and this field, which describe different cells and are routinely both set at once. `market_value_minor` says which half of the enum a row is in without a client having to know the values: null for the first three, present for the fourth. When THIS field is the reason the base-currency figure is missing, the server's own decision to withhold `in_base.market_value_minor` reads this same answer, so on that path the flag and the missing figure cannot come apart; they CAN come apart in the row-level case just described, where `in_base_gap` withholds the figure without this field ever having a cause of its own to report. It is published even when `in_base` is absent altogether, and even when `currency` already equals the base currency: the valuation cell is unconverted for a reason of its own whatever else the row is or is not missing. A SECOND FIELD rather than one more value of `in_base_gap`, because the two answer for different cells of the same row and can be true at once — a position whose basis holds a dateless lot AND whose valuation is stuck in a third currency publishes `in_base_gap: undated_lot`, which is true of the cost, the income and the profit — and, since it withholds the whole object, of the missing valuation too — together with `market_value_gap: no_rate_valuation_currency`, which is the NEARER, cell-specific cause of that same missing valuation, not the only one that is true of it. A single field would have to pick one, and either pick would caption half the row with something false. See PositionInBase.market_value_minor for why the absent base-currency valuation is an absence rather than something kept back."
+          description: "Why the market value cell is not the expected figure: no valuation at all (`type_not_priced`, `no_face_value`, `no_quote`), or a valuation that could not be converted into the position's `currency` (`no_rate_valuation_currency`). Null when the valuation exists in the position's currency. A null here does not mean `in_base` has a base-currency value — `in_base_gap` answers that; the two describe different cells and can both be set."
           allOf:
             - $ref: "#/components/schemas/MarketValueGap"
         in_base_gap:
           nullable: true
-          description: "Which term stopped `in_base`, or null when nothing did. Null therefore covers two situations and `currency` tells them apart: either `in_base` is present, or `currency` already equals the space's base currency and there was nothing to convert in the first place — the position's own figures ARE the base-currency ones and no «not converted» caption belongs over them at all. Non-null exactly when `in_base` is null and `currency` differs from the base currency. It speaks for the OBJECT, not for the figures inside it: `in_base.market_value_minor` and `in_base.unrealized_pnl_minor` can be null while the object stands (`market_value_gap` says why), and `in_base.realized_pnl_minor` can be null on its own (`has_undated_realizations` says whether an unrecorded purchase date or a missing rate stopped that one). Published so that a client never re-derives it: only the server knows which term it stopped on, and the four causes are four different sentences to the person reading the row — one of them about a figure that is never coming. Before this field existed the screen said «Нет курса» over all four, which is false about a dateless lot, and false again over a market valuation on a row whose today-rate is present and whose basis failed on a purchase date (#66)."
+          description: "Which term stopped `in_base`. Set exactly when `in_base` is null and `currency` differs from the base currency; null when `in_base` is present or there was nothing to convert. It concerns the object: figures inside a present `in_base` can be null on their own (see `market_value_gap`, `has_undated_realizations`)."
           allOf:
             - $ref: "#/components/schemas/InBaseGap"
         has_undated_lots:
           type: boolean
-          description: "True when at least one of the lots still held does not know when it was acquired — it arrived by a transfer whose per-lot breakdown was never recorded (a basis given by hand, or a transfer predating breakdowns), so no purchase date exists for it anywhere. Always present, never inferred by the reader from `in_base` being null: both an undated lot and a missing fx rate null the whole in_base object, but they are not the same condition and must not be explained to a person the same way. A missing rate is a gap the fx backfill closes on its own and the figure appears later; an unrecorded purchase date never resolves, because nobody wrote it down and nothing can recover it. A client that says \"no rate\" over the second case states something false about a permanent condition. False changes nothing about the figures: an unknown date costs no money and no shares, and every amount in the position's own currency is published exactly as usual either way. It speaks only about lots still HELD; `has_undated_realizations` is the identical question asked about disposals already made — a piece already sold is not among these lots and this flag says nothing about it. `in_base_gap` is the sharper twin for the conversion itself: this field is a standing fact about the position, published whether or not there was ever anything to convert, while that one names the term the base-currency object actually stopped on — and it is the one to caption a row with, since a dateless lot is only the FIRST thing that can stop the object. A lot that knows neither its date nor its price is NOT one: it is counted as bought for nothing, nought needs no date to be converted, and has_unknown_cost reports it instead."
+          description: "True when a lot still held has no acquisition date (a transfer whose per-lot breakdown was never recorded) — a permanent condition, unlike a missing rate. It changes no figure in the position's `currency` and can stop `in_base` (`in_base_gap: undated_lot`). A lot with neither date nor price counts as bought for nothing and is reported by has_unknown_cost instead."
         has_undated_realizations:
           type: boolean
-          description: "True when at least one disposal already made (a sale, or a covered amortization — see Position.Realizations) retired a piece of basis that does not know when it was acquired: it reached this account by a transfer whose per-lot breakdown was never recorded, so no purchase date exists for it anywhere and none ever will. This is the symmetric twin of `has_undated_lots`, asked about the realized side instead of the held one, and it exists for the identical reason: `in_base.realized_pnl_minor` being null has two causes, and they are not the same news to the person reading the row. A missing fx rate is a gap the backfill job closes on its own and the figure appears later; an unrecorded purchase date never resolves. `has_undated_lots` cannot answer this by itself — it speaks only about lots still HELD, and the piece that stopped `realized_pnl_minor` has by definition already been sold, so it is never among them; a client reading `has_undated_lots` as false and reporting \"no rate\" over a null realized figure would name a cause that will never be the true one. Always present, never inferred by the reader from `in_base.realized_pnl_minor` being null. False changes nothing about the figures: an unknown purchase date costs no money and no shares, and `realized_pnl_minor` in the position's own currency (this object's own field, not `in_base`'s) is published exactly as usual either way. A parcel sold with neither a date nor a price is NOT one: it was sold as bought for nothing, which needs no date, and has_unknown_cost reports it instead."
+          description: "True when a disposal already made retired basis with no acquisition date: it explains a null `in_base.realized_pnl_minor` that will not resolve, unlike a missing rate (has_undated_lots speaks only of lots still held). A parcel sold with neither date nor price counts as bought for nothing and is reported by has_unknown_cost instead."
         has_unknown_cost:
           type: boolean
-          description: "True when some of this paper — still held or already sold — arrived with no purchase price, typically by a transfer from another broker that did not pass the cost on. Such basis is counted as bought for nothing, as the broker counts it, so the whole value and the whole of what it sold for count as profit, in every currency: the profit shown is HIGHER than the truth by whatever was really paid. The figures stand; this says what they rest on, so the owner can find the real price in the previous broker's report."
+          description: "True when some of this paper, held or sold, arrived with no purchase price (typically from another broker). Such basis counts as bought for nothing, as the broker counts it, so the profit shown is higher than the truth by what was really paid."
         in_base:
           nullable: true
-          description: "The position's amounts in the space's base currency, each valued at the fx rate that answers its own question: cost_minor sums the FIFO lots still held, every lot converted at the rate of the day IT was acquired; income_minor sums the income operations, each at the rate of the day it occurred; realized_pnl_minor sums the disposals already made, each one's proceeds and fee at the rate of its own day and each parcel of basis it retired at the rate of the day that parcel was bought; market_value_minor uses TODAY's rate, because that is what the holding is worth now, and takes it for the currency the valuation is actually denominated in rather than the position's — one conversion, not two (see its own description); unrealized_pnl_minor is the difference of those last two. Base-currency profit therefore INCLUDES the currency's own move against the base currency, and may differ from the position-currency profit in magnitude and even in sign — that is the intended answer, not a rounding artefact. Null when `currency` already equals the base currency (nothing to convert), any single rate the OBJECT AS A WHOLE needs is missing (one lot's, one income operation's, and today's ONLY when there is a valuation for today's rate to convert — a position with no usable quote publishes cost and income without ever asking for it, and carries a null `rate_on` to say so), or one of the FIFO lots still held does not know when it was acquired — a transfer's basis given by hand, or one recorded before breakdowns were kept, produces a lot with no purchase date, and no rate answers for a date nobody recorded. That null is a rule about a VALUE, not about the position: a value in this payload never publishes half-struck, and goes null exactly when at least one term it sums could not be resolved, rather than a total quietly missing that term. Applied to `in_base` itself, its terms are a lot's acquisition date, a lot's rate, an income operation's rate and today's rate for the valuation — in that order, which is the order the server checks them in — and `in_base_gap` names the one it stopped on, so a reader never has to guess which; the position that owns this `in_base` is published regardless, with every other figure it has. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency, and realized_pnl_minor on its own when a disposal's rate or a retired parcel's purchase date is missing (`has_undated_realizations` says which, for that figure) — the identical rule applied to a smaller value, whose own terms are its disposals' rather than cost_minor's, and whose failure is confined to itself and leaves the rest of the object standing (see their descriptions). fees_minor is intentionally not carried into this object (owner feedback)."
+          description: "The position's figures in the space's base currency, each at the rate that answers its own question: cost — each lot at the rate of its purchase's settlement day (else the purchase day); income — each payment at its day's rate; realized — each disposal's proceeds and fee at its day's rate and each retired parcel at its purchase's; market value — today's rate, out of the currency the valuation is denominated in. Base-currency profit therefore includes the currency's own move. Null when `currency` is the base currency, or when a term the object needs cannot be valued (`in_base_gap` names it). fees_minor is not carried."
           allOf:
             - $ref: "#/components/schemas/PositionInBase"
     PositionInBase:
@@ -2945,40 +2687,40 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: "`realized_pnl_minor` plus `income_minor`, both already converted here — each term at the rate of its own date and out of the currency it actually arrived in. It is Position.settled_minor's answer for a row that has none: a position whose disposal settled in a third currency, or whose income arrived in one, cannot state this figure in its own currency and can state it here. Null exactly when `realized_pnl_minor` is null, which is the only term of the two that can be missing."
+          description: "`realized_pnl_minor` plus `income_minor`, each term converted at its own date and out of its own currency; it exists where Position.settled_minor cannot. Null exactly when `realized_pnl_minor` is."
         total_minor:
           type: integer
           format: int64
           nullable: true
-          description: "`settled_minor` plus `unrealized_pnl_minor`, in currency. Null when either is. Note what this mixes and Position.total_minor mixes too: a settled half struck at the rates of the days it happened on, and an unrealized half struck at today's — which is correct for both questions and is why the two halves stay separately published."
-        cost_minor: { type: integer, format: int64, description: "Remaining cost basis in currency: every FIFO lot still held, converted at the fx rate of ITS OWN acquisition date, summed as decimals and rounded once at the end. Deliberately NOT Position.cost_minor times today's rate — that would price the basis as if everything had been bought today and would strip the currency's move out of unrealized_pnl_minor below" }
-        market_value_minor: { type: integer, format: int64, nullable: true, description: "The position's market valuation in currency at TODAY's fx rate — the one figure in this object that is current rather than historical, since it answers what the holding is worth now. IT IS CONVERTED ONCE, OUT OF THE CURRENCY THE VALUATION IS REALLY DENOMINATED IN: Position.market_value_source_minor at the rate of Position.market_value_source_currency when the row had one to convert (a bond priced off a foreign face value), and Position.market_value_minor at the rate of the position's own currency otherwise. IT IS THEREFORE NOT Position.market_value_minor TIMES THIS OBJECT'S RATE whenever those source fields are set: that figure had already been rounded to a whole minor unit of a currency this answer does not mention, and multiplying it again carried the rounding error along — 1 000,00 € reaching the dollar as 111 111 ¢ and the ruble as 9 999 990 kopecks, where the euro rate of 100 alone gives 10 000 000. THAT IDENTITY IS GONE AND CANNOT BE REBUILT FROM THIS PAYLOAD, so a reader should take this figure as it stands rather than check it against a product. The rate behind it is the valuation currency's against the base one, and no field publishes that rate — `rate_on` names only its date. NEITHER RATE REBUILDS THIS FIGURE FROM Position.market_value_minor, and the two miss it differently. The position currency's own rate — the rate of the currency that figure IS denominated in — only comes close: it is applied to an amount that was rounded to a whole minor unit first, and that lost fraction arrives multiplied, so 111 111 (the position-currency figure above) at USD->RUB 90 gives 9 999 990 kopecks where this field holds 10 000 000, ten kopecks short; elsewhere the miss is at most about half a minor unit carried through that rate plus the final rounding, some 45 kopecks at that same USD->RUB 90. And the rate this figure WAS struck at is not the one to apply to that figure either, since it belongs to the valuation's currency rather than the position's: 111 111 at the euro rate of 100 is 11 111 100 kopecks, a dollar amount multiplied by a euro rate. The money is this figure, struck from one multiplication and one rounding. Never fabricated: null when Position.market_value_minor itself is null — no valuation was struck at all, and Position.market_value_gap says which of the three reasons it was (no quote stored yet, a type this program does not price, a bond with no face value recorded) — AND null whenever market_value_currency differs from the position's own currency — a valuation that could not be brought into the position's currency is not carried into the base one either. Position.market_value_gap is that second case published as a cause, set where the conversion failed rather than inferred afterwards from the two currency codes, and this field is withheld from every row that carries it; it is null on rows with no valuation at all too, whose gap is one of the three that say no valuation was struck rather than that one was kept back. THAT LAST RULE WITHHOLDS NOTHING A READER COULD OTHERWISE HAVE BEEN GIVEN: every fx rate this program stores is quoted in RUB, so a valuation that could not reach the position's currency has no route to the base one either. Reaching the position's currency fails only for want of the valuation currency's RUB rate or of the position currency's, and the second has already nulled this whole object, cost_minor with it — except on a position that holds no lot and has received no income, which has no sum to strike and no rate to miss, and whose withheld valuation is the zero of a closed row. The rule is stated in its own right rather than left to that argument, because the argument is about the rate table rather than about this field: the day a rate quoted in something other than RUB is stored — a direct GBP/USD, which nothing in this program can currently produce — such a valuation does become expressible in the base currency, and this field will then have to say whether it publishes it. Asymmetry between this object and the position's own figures is ordinary and this rule neither creates nor prevents it: realized_pnl_minor here goes null while Position.realized_pnl_minor is published either way, and one undated lot nulls this whole object while every figure in the position's own currency stays. It is the only figure here that today's rate values, so `rate_on` — the date of that rate — is null whenever this is" }
-        unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "market_value_minor minus cost_minor. Both are already in currency, so this is exact integer subtraction and nothing is rounded a second time. Since the basis is historical and the valuation is current, this INCLUDES the fx revaluation of the position: it is NOT Position.unrealized_pnl_minor times a rate, and a holding can be in profit in its own currency while at a loss in the base currency (or the reverse). Null exactly when market_value_minor above is null — the P&L is derived from the valuation and cannot outlive it" }
-        income_minor: { type: integer, format: int64, description: "Income in currency: every income operation of the position (dividend, coupon, tax) converted at the fx rate of the date it occurred, summed as decimals and rounded once at the end — not Position.income_minor times today's rate. EVERY operation means every one, whatever currency it arrived in: a payment is converted out of the currency it was actually paid in, so this figure covers the whole of Position.income_by_currency in one number, while Position.income_minor beside it carries only the entry already denominated in the position's own currency. This is the only single figure that answers for all of them, and it exists only where this object does" }
-        realized_pnl_minor: { type: integer, format: int64, nullable: true, description: "Realized profit or loss in currency: both of its ends are past events with dates of their own, so unlike unrealized_pnl_minor it does not move with quotes or with today's rate. It is not promised to be final: a change to the history behind it restates it, and so does a settlement day learned after the trade was recorded. Every disposal the position has made contributes its proceeds and its fee at the fx rate of the day THAT disposal settled — its own day when the settlement day is not known — and every parcel of basis it retired at the rate of the day THAT parcel's purchase settled, or the day it was bought when that is not known (НК РФ ст. 210 п. 5: the day the income was received, the day the expense was actually incurred); all of those terms are summed as decimals and the position's figure is rounded once, at the end. It is therefore NOT Position.realized_pnl_minor times any single rate — neither today's nor the sale day's — and it carries the currency's own move between purchase and sale, so a deal can be a profit in the position's currency and a loss here, or the reverse; that is the intended answer, not a rounding artefact. An amortization is one of these disposals: a covered return of principal is exactly neutral in the position's own currency, yet the principal comes back at the rate of its own day while the basis it retires was struck at the rates of the purchase days, and that difference is as real a result as any sale's. A transfer between the family's own accounts is NOT one — it is a disposal in none of the jurisdictions this was researched against, and the leaving leg has no proceeds. Null when any single date this sum needs has no fx rate, or when a retired parcel does not know when it was bought (a transfer's basis given by hand, or one recorded before per-lot breakdowns were kept) — a realized total missing one of its terms is an invented number, smaller or larger than the truth and indistinguishable from a real one on screen. Null here nulls nothing else: cost_minor, income_minor and the valuation answer their own questions from their own dates and are published exactly as usual. `has_undated_lots` does NOT explain this null — it speaks about the lots still HELD, while the parcel that stopped this sum has already been sold and is no longer among them; `Position.has_undated_realizations` is the flag that does, for the identical reason `has_undated_lots` exists for cost_minor and the object above" }
+          description: "`settled_minor` plus `unrealized_pnl_minor`. Null when either is."
+        cost_minor: { type: integer, format: int64, description: "Remaining cost basis: each lot still held converted at the rate of its own acquisition (settlement) day, summed and rounded once — not Position.cost_minor at today's rate." }
+        market_value_minor: { type: integer, format: int64, nullable: true, description: "Market value at today's rate, converted once out of the currency the valuation is denominated in (Position.market_value_source_* when set) — so not Position.market_value_minor times any published rate. Null when Position.market_value_minor is null, or when the valuation could not reach the position's currency (`market_value_gap: no_rate_valuation_currency`)." }
+        unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "market_value_minor minus cost_minor. It includes the currency's move, so it can differ in sign from Position.unrealized_pnl_minor. Null exactly when market_value_minor is." }
+        income_minor: { type: integer, format: int64, description: "Every income operation of the position — dividend, coupon, tax, commission charged outside a trade — at its own day's rate and out of the currency it arrived in, summed and rounded once: the whole of Position.income_by_currency as one figure." }
+        realized_pnl_minor: { type: integer, format: int64, nullable: true, description: "Realized profit or loss in the base currency: each disposal's proceeds and fee at the rate of its settlement day (else its own day), each retired parcel at the rate of its purchase's settlement day (else the purchase day) — НК РФ ст. 210 п. 5 — summed and rounded once. It includes the currency's move, so it can differ in sign from Position.realized_pnl_minor. An amortization is a disposal; a transfer between the family's own accounts is not. Null when a rate is missing or a retired parcel has no acquisition date (Position.has_undated_realizations tells which); nothing else is nulled with it." }
         currency: { type: string, description: "The space's base currency (ISO-4217), same as Summary.base_currency" }
         rate_on:
           type: string
           nullable: true
-          description: "Date YYYY-MM-DD of the fx rate ACTUALLY APPLIED to market_value_minor: today's rate for the pair that figure was struck from — the valuation's own currency against the base one — or the nearest earlier date the rate table holds for it. On a row whose valuation came out in a bond's face currency that is the face currency's rate, not the position currency's, and the two can carry different dates in one and the same response. It does NOT describe cost_minor, income_minor or realized_pnl_minor — those use one rate per lot, per payment and per disposal date, so no single date could name them. NULL WHENEVER NO SINGLE RATE STANDS BEHIND market_value_minor, which is two cases and not one. First: there is no market_value_minor at all (no valuation was struck — see Position.market_value_gap for which of the three reasons — or one the object may not convert) — this is the date OF that figure, and a filled-in date would name the day of a value the object does not contain. Second: the valuation was already denominated in the base currency (a ruble-face bond in a dollar account of a ruble space), so it IS the base-currency answer to the kopeck and no rate was resolved for it — the figure is present and the date is null, because inventing one would disclose a staleness that does not exist. Nothing else in the object goes with it — cost_minor, income_minor and realized_pnl_minor are struck from their own dates and are published exactly as usual. Always present as a key: an explicit null says \"nothing here was struck at a single named rate\", which is a statement, not an omission. Because it is null in the first case, today's rate is asked for only when there is a valuation to convert: a position with no usable quote publishes this object without ever needing a rate for today (see Position.in_base)"
+          description: "Date YYYY-MM-DD of today's rate applied to market_value_minor — the valuation currency against the base one — or of the nearest earlier rate held. It dates no other figure. Null when there is no market_value_minor, or when the valuation is already in the base currency and no rate was applied."
     InBaseGap:
       type: string
       enum: [undated_lot, no_rate_lot_date, no_rate_income_date, no_rate_today]
-      description: "Which TERM the server could not value, and so why Position.in_base — the whole object — is absent. It names the term rather than the kind of gap, unlike RealizedGap: that one sums many positions, where no single term exists to point at, while here there is exactly one position and its terms are the very figures that stand side by side in one row. `undated_lot`: one of the lots still HELD does not know when it was acquired (the same condition Position.has_undated_lots reports), so there is no date to ask the fx table about. `no_rate_lot_date`: every lot has an acquisition date, but the fx table holds no rate for at least one of those dates nor for any earlier day. `no_rate_income_date`: the same, for the day one of the position's income operations (dividend, coupon, tax) occurred. `no_rate_today`: no rate for today, nor any earlier day, for the pair the market valuation needs — the currency THAT VALUATION is denominated in against the base currency. That currency is the quote's for a share or an ETF and the face value's for a bond: on most rows it is the position's own, on a bond priced off a foreign face value it is not, and one screen can therefore ask EUR->RUB for one row and USD->RUB for the next. It CAN also be the base currency itself — a ruble-face bond in a dollar account of a ruble space — and then no rate is resolved for it at all and this value cannot arise on that row (PositionInBase.rate_on describes it and is null there). Only a position that has a valuation to convert ever needs that rate, so this value never appears on a row that has no valuation — whatever `market_value_gap` says stopped it: such a row publishes its cost and its income without asking for it. EXACTLY ONE VALUE IS PUBLISHED, AND THERE IS NO COMBINED VALUE. The server stops at the first term it cannot value, in the order listed above, so each value also says that everything before it succeeded. That order puts the one permanent cause first: `undated_lot` never resolves — nobody wrote the date down and nothing can recover it — while all three `no_rate_*` gaps are ones the fx backfill closes on its own, after which the figure appears. A row that has both therefore says `undated_lot` and never promises a figure that is not coming. Among the three temporary ones the named one is true, and closing it names the next, so the caption converges instead of ever claiming more than the server knows. RealizedTotal.in_base_gap needs its `both` value for the opposite reason: it sums MANY positions, so a permanent gap in one and a temporary gap in another are both true of that single total at once."
+      description: "Which term stopped Position.in_base; the terms are checked in this order and the first failure is published. `undated_lot`: a lot still held has no acquisition date — permanent. `no_rate_lot_date`: no rate for a lot's date or earlier. `no_rate_income_date`: the same for an income payment's date. `no_rate_today`: no rate today or earlier for the currency the valuation is denominated in, asked only when there is a valuation. The `no_rate_*` gaps close by themselves once the rates are loaded."
     MarketValueGap:
       type: string
       enum: [type_not_priced, no_face_value, no_quote, no_rate_valuation_currency]
-      description: "Why a row's market valuation cell is not the figure a reader expects — see Position.market_value_gap, the one field that publishes it. The values split in two, and `market_value_minor` tells the halves apart without ambiguity. THE FIRST THREE SAY THERE IS NO VALUATION AT ALL, and on a row carrying one of them market_value_minor, market_value_currency, price, price_on and unrealized_pnl_minor are all null. `type_not_priced`: this program computes no value for the instrument's type. It prices share, etf and bond, and nothing else — currency, crypto, metal and custom have no valuation model, and neither has any type added to InstrumentType without one. A QUOTE MAY WELL EXIST FOR SUCH A ROW and changes nothing, which is the whole reason this value exists: a client captioning it «no quote» would send the reader off to wait for data that is not missing (#78). Nothing is coming here — no decision to write such a model has been taken — so this value must never be captioned as a gap that will close. `no_face_value`: the instrument is a bond and the catalog records no face value for it. A bond's quote is a PERCENTAGE of face value rather than money (see Position.price), so with no face value there is nothing to take the percentage of, and an arriving quote closes nothing. face_value_minor and face_currency are stored both-or-neither (a CHECK constraint since migration 0012), so one value answers for both halves. `no_quote`: this program does price the instrument, its catalog row holds everything the valuation needs, and no price has been stored for it yet. THIS IS THE ONLY ONE OF THE THREE A QUOTE CLOSES, and that is exactly what it means. THE FOURTH SAYS THERE IS A VALUATION AND IT COULD NOT TRAVEL. `no_rate_valuation_currency`: the fx table could not convert the valuation out of the currency it is denominated in, so it stayed in market_value_currency instead of reaching the position's own `currency` (which is where market_value_minor is normally brought, so that the row can compare it with cost_minor), and on any row that publishes a PositionInBase at all, its market_value_minor is null with its unrealized_pnl_minor behind it. Here market_value_minor is NOT null — the raw, unconverted figure is published rather than hidden. EXACTLY ONE VALUE IS PUBLISHED, and the order above is the order the server decides in — the same rule InBaseGap follows, for the same reason: a cause an arriving quote would not close is reported ahead of one it would, so a crypto row with no quote says `type_not_priced` and a face-value-less bond with no quote says `no_face_value`, neither of them promising that a quote is what is missing. `no_quote` is therefore a positive statement and not a leftover: reaching it means the type is priced and the catalog row is complete."
+      description: "Why a row's market value is not the expected figure (Position.market_value_gap); one value, decided in this order. No valuation at all: `type_not_priced` — the type has no valuation model (only share, etf and bond are priced; a quote changes nothing); `no_face_value` — a bond with no face value; `no_quote` — a priced type with a complete catalog row and no price stored yet, the only one a quote closes. A valuation that could not travel: `no_rate_valuation_currency` — no rate to convert it into the position's `currency`; the raw figure is published."
     RealizedGap:
       type: string
       enum: [no_rate]
-      description: "Why an account's base-currency total (RealizedTotal.in_base, AccountTotal.in_base) could not be struck. `no_rate`: every date the sum needs is known, but the fx table has no rate for at least one of them yet — the backfill closes that gap on its own and the figure shows up later, which is why the figure is WITHHELD rather than published short of a term that is on its way. The other reason a term can be unvalued — a parcel whose purchase day nobody recorded — is permanent and does not withhold the figure: such positions are left out of it and counted in `undated_positions`."
+      description: "Why an account's base-currency total could not be struck. `no_rate`: a rate the sum needs is not loaded yet; the figure appears once it is. A parcel with no purchase date does not withhold the total: such positions are left out and counted in `undated_positions`."
     RealizedCurrencyTotal:
       type: object
       required: [currency, realized_pnl_minor]
       properties:
         currency: { type: string, description: "ISO-4217 of the positions this figure adds up — their own currency, not the base one" }
-        realized_pnl_minor: { type: integer, format: int64, nullable: true, description: "Sum of Position.realized_pnl_minor over every position denominated in `currency`. Exact: the terms are int64 minor units of one and the same currency, so nothing is converted and nothing is rounded here. NULL WHEN ANY POSITION IN THE BUCKET HAS NO SUCH FIGURE — one that sold into another currency, see Position.realized_pnl_minor — because a sum quietly missing one of its terms is an invented number, smaller or larger than the truth and indistinguishable from a real one on the same screen. The bucket is still listed: the currency has positions and the reader should see it, with a null where a total would be a lie. `in_base` is unaffected and normally still present, since a disposal in another currency converts perfectly well term by term." }
+        realized_pnl_minor: { type: integer, format: int64, nullable: true, description: "Sum of Position.realized_pnl_minor over the positions in `currency`, exact. Null when any of them has no such figure (one sold into another currency); `in_base` is unaffected." }
     CurrencyAmount:
       type: object
       required: [currency, amount_minor]
@@ -2989,12 +2731,12 @@ components:
     RealizedTotal:
       type: object
       required: [by_currency, base_currency, in_base, in_base_gap, undated_positions, unknown_cost_positions, tax_withheld_by_currency]
-      description: "What an account's closed deals have locked in, added up over all its positions — the account-level twin of Position.realized_pnl_minor and Position.in_base.realized_pnl_minor. The server adds it rather than the client for the same reason it adds the balances on the accounts screen: a figure the interface shows is computed in one place, so the policy behind it (what rounds, what a gap suppresses, which positions count) can change in one place and every reader agrees on the answer. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money."
+      description: "What an account's closed deals have locked in, summed over its positions on the server, per position currency and in the base currency."
       properties:
         tax_withheld_by_currency:
           type: array
           items: { $ref: "#/components/schemas/CurrencyAmount" }
-          description: "Tax the broker took FROM THE ACCOUNT rather than from a payment, per currency, sign preserved (negative — money left). THIS IS THE TAX NO POSITION CAN SEE, and that is the whole reason it is published here. A withholding attributed to a security is already inside that position's income_minor, subtracted where it belongs; what is left is the tax charged against the account itself — in Russia, withheld when money is taken out, against the year's accumulated base rather than against any one disposal. On the owner's own account 20 of 21 such withholdings fall on the same day as a withdrawal, and three of them have no disposal in the preceding month at all. IT IS NOT SPLIT ACROSS POSITIONS AND MUST NOT BE: no tax authority computes a per-position share, and any division of it would be an invented number wearing a real one's name. A reader may subtract it from the account's realized total; a reader may not attribute it to a row. Empty when the account has no such withholding. Not converted to the base currency: it is money charged in the currency it was charged in, and no term of it is dated per payment the way in_base's are."
+          description: "Tax the broker took from the account rather than from a payment, per currency, negative. A tax charged on a paper is already in its position's income; this one (in Russia, withheld on a withdrawal against the year's base) belongs to no position and is not split among them. Empty when there is none; not converted."
         by_currency:
           type: array
           items: { $ref: "#/components/schemas/RealizedCurrencyTotal" }
@@ -3004,7 +2746,7 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: "The same result in the space's base currency: the sum of every position's realized figure in that currency — the converted one (Position.in_base.realized_pnl_minor, each rounded once for its own position) for positions denominated in some other currency, and the position's own realized_pnl_minor for those already in the base currency, which have nothing to convert and would otherwise be silently dropped. THE ROUNDED PER-POSITION FIGURES ARE WHAT IS ADDED, not the raw terms behind them re-summed and rounded once for the account. Rounding once per account would be the more accurate single number and is deliberately not what this is: each position's figure is itself published in this same response, this total is defined as their sum, and a header that disagreed by a minor unit with the rows one field away would be a number nobody could check. The residual is at most half a minor unit per position, and it errs the way НК РФ ст. 210 п. 5 does — a base is struck per disposal and the disposals are summed, not the reverse. Null when a rate the sum needs has not arrived yet (`in_base_gap` is then `no_rate`): that term is on its way, and a total published without it would quietly change later. A POSITION WHOSE DISPOSAL RELEASED A PARCEL WITH NO RECORDED PURCHASE DAY IS LEFT OUT AND COUNTED in `undated_positions` — that gap never closes, so withholding the figure over it would withhold it for good, which is what used to happen after a single such sale. The figure therefore says what it covers: every closed deal that can be valued, with the count of positions that cannot beside it. A position contributes here whenever its own realized result could be valued, INCLUDING when its `in_base` object as a whole is absent for reasons that have nothing to do with disposals already made — no rate for today behind a quote the position does have, no rate for the day a lot still held was bought, a lot still HELD that does not know when it was bought at all. Those null the object this figure would have travelled in; they do not make a settled result unknowable, and suppressing the account's total over them would be silence about something the server knows."
+          description: "The same result in the base currency: the sum of the positions' figures — Position.in_base.realized_pnl_minor for positions in another currency, their own realized_pnl_minor for those in the base one — each already rounded per position, so the total agrees with the rows. Null when a rate the sum needs has not arrived (`in_base_gap: no_rate`). A position whose disposal released a parcel with no purchase day is left out and counted in `undated_positions`; a position whose `in_base` is absent for other reasons still contributes its realized result."
         in_base_gap:
           nullable: true
           description: "Why `in_base` is null, or null when there is a figure."
@@ -3037,7 +2779,7 @@ components:
         value_minor: { type: integer, format: int64, nullable: true, description: "What the balance is worth TODAY, at today's rate. Null when there is no rate for today, which `gap` then names." }
         cost_minor: { type: integer, format: int64, nullable: true, description: "What this money was worth when it ARRIVED: each parcel still held, struck at the rate of the day it came, and summed. The parcels are consumed oldest-first, so what remains is the newest money — the same queue every other holding here uses. Null when any parcel's day has no rate. On a NEGATIVE balance this is 0: nothing is held, so nothing was paid for it." }
         unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is, AND null on a NEGATIVE balance whatever the rates: nothing is held there, so cost_minor is 0 and this subtraction would come to the whole of the debt wearing the name of a profit. What such a balance is worth is still published above (money owed in dollars is worth something in rubles), and what the money that HAS left earned is still in realized_pnl_minor; what does not exist is a gain on money the account does not have." }
-        realized_pnl_minor: { type: integer, format: int64, nullable: true, description: "WHAT THE CURRENCY ALREADY EARNED OR COST, banked: for every departure of this money, its proceeds at the rate of the day it left, less what its parcels were worth on the days they arrived. Without this figure a currency result vanishes the moment it is taken: a hundred thousand rubles turned into dollars at 100 and back at 120 is twenty thousand rubles made, and the balances afterwards — rubles bought today, no dollars — value to a gain of exactly nought. Like a disposal's, it does not move with today's rate: both of its ends are past days. Money leaves and arrives on the settlement day of the trade that moved it when that day is known, so a settlement day learned later restates this figure, as any change to the history behind it does. Only departures the queue could actually cover are in it; money spent that was never seen arriving accounts for nothing here and is reported as the negative balance instead. Null when a rate behind one of those days is missing, which `gap` then names." }
+        realized_pnl_minor: { type: integer, format: int64, nullable: true, description: "What the currency already earned or cost: for every departure of this money, its proceeds at the rate of the day it left less what its parcels were worth on the days they arrived (settlement days when known). Unmoved by today's rate. Money spent that was never seen arriving counts nothing here and shows as a negative balance. Null when a rate is missing (`gap` names it)." }
         gap:
           nullable: true
           description: "Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own. `negative_balance` is not a missing rate at all: the account owes this money rather than holding it, so there is no basis to measure a gain against and none is published — the balance and what already left are still there."
@@ -3059,7 +2801,7 @@ components:
     AccountTotal:
       type: object
       required: [by_currency, base_currency, in_base, in_base_gap, cash_fx_in_base, no_rate_currencies, zero_valued_positions, zero_valued_cost_by_currency, undated_positions, unknown_cost_positions]
-      description: "WHAT THE ACCOUNT HAS MADE, ALL IN — the account-level twin of Position.total_minor, plus the money no position can see. It is the sum of every position's total (realized result + income + unrealized revaluation) and, beside it, the account's own charges: interest credited on the cash, and every commission and tax booked as an operation of its own and charged to no paper (one charged on a paper is in that position's income), and — in the base currency only — the currency result on the account's money in other currencies, held and spent (cash_fx_in_base says how much of in_base that is). Deposits and withdrawals are NOT in it — putting money in is not earning it. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money."
+      description: "What the account has made, all in: the sum of every position's total (realized, income, unrealized) plus the account's own charges — interest on the cash, and commissions and tax booked on their own and charged to no paper — and, in the base currency only, the currency result on its money in other currencies (cash_fx_in_base). Deposits and withdrawals are not in it. Published per currency and in the base currency."
       properties:
         by_currency:
           type: array
@@ -3070,7 +2812,7 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: "The same result as ONE figure in the space's base currency, and the only form in which an account holding several currencies has a single answer. Each position contributes the total its own in_base object carries — every term struck at the rate of its own date, the valuation at today's — and each of the account's own charges is converted at the rate of the day it was charged. THE ROUNDED PER-POSITION FIGURES ARE WHAT IS ADDED, for the reason RealizedTotal.in_base states at length: this total is defined as the sum of figures published in the same response, and a header disagreeing by a minor unit with the rows one field away would be a number nobody could check. Null when at least one term could not be valued; `in_base_gap` then says which kind of gap stopped it, and nothing partial is published in its place. THE ONE TERM THAT DOES NOT STOP IT is a holding whose purchase dates nobody recorded: it is left out and counted in `undated_positions` instead, because a date cannot arrive later the way a rate can, and suppressing the figure for ever over it would answer nothing."
+          description: "The same as one figure in the base currency: each position's in_base total (rounded per position, so it agrees with the rows) plus each account charge at its day's rate. Null when a term could not be valued; `in_base_gap` says which kind. A holding with no recorded purchase dates does not stop it: it is left out and counted in `undated_positions`."
         cash_fx_in_base:
           type: integer
           format: int64
@@ -3093,10 +2835,10 @@ components:
         no_rate_currencies:
           type: array
           items: { type: string }
-          description: "WHICH MONEY THE SERVER COULD NOT VALUE, by currency code, ordered and without repeats. `in_base_gap` says a rate was missing; this says what it was a rate FOR, which is the difference between a gap that closes on its own and one that never will — a rate source may not quote a currency AT ALL (the Bank of Russia publishes none for XAU, the code the broker uses for gold), and a reader told only «нет курса» waits for a backfill that has nothing to fetch. Empty when nothing was stopped by a rate, and empty too when the only gaps were of the other kind. It names the CASH the account holds and nothing else: there the missing rate is exactly this currency against the base one, while a position's gap can be about the currency its VALUATION is struck in rather than its own, and naming that one would be a guess."
+          description: "The cash currencies the server could not value, ordered, without repeats — a rate source may not quote a currency at all (the Bank of Russia has none for XAU, the broker's code for gold). Empty when no cash was stopped by a rate."
         zero_valued_positions:
           type: integer
-          description: "HOW MANY HOLDINGS WENT INTO THIS TOTAL AT A VALUE OF NOUGHT because nothing prices them — no quote stored, a bond with no face value recorded, a type this program has no valuation model for (Position.market_value_gap names which, row by row). Their money is counted as spent and nothing is counted as held, so the total is lower than the truth by whatever those papers are actually worth. This is a deliberate answer to a real question — a frozen fund nobody can sell is worth nothing to its holder today — and it is NOT a claim that those papers are worthless: it is the most conservative reading, and it is published as a count precisely so a reader can see the figure rests on it. 0 when every holding was priced, which is when the total needs no such caveat. Their basis is in zero_valued_cost_by_currency, so the size of the assumption is a number rather than an adjective."
+          description: "How many holdings went into this total at nought because nothing prices them (no quote, a bond without a face value, a type with no valuation model — Position.market_value_gap says which). The total is then lower than the truth by what they are worth; their basis is in zero_valued_cost_by_currency. 0 when every holding was priced."
         zero_valued_cost_by_currency:
           type: array
           items: { $ref: "#/components/schemas/CurrencyAmount" }
@@ -3115,7 +2857,7 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Position" }
         cost_basis_rules:
-          description: "Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. This is the ONLY repetition of it, and the line is drawn here on purpose: the journal publishes a cost basis too (a transfer's Operation.amount_minor) and carries no copy — not for want of an envelope, which OperationsResponse has had since #86, but because one statement living in three payloads is two extra places to forget. The statement belongs to the space, not to a payload — SessionInfo.cost_basis_rules is where a reader of any other figure takes it from."
+          description: "Whether the cost basis behind these figures is the one the owner's country requires (see CostBasisRules); the same statement as SessionInfo.cost_basis_rules, carried with the figures it qualifies."
           allOf:
             - $ref: "#/components/schemas/CostBasisRules"
         cash:
@@ -3148,74 +2890,33 @@ components:
       enum: [not_checked, matched, mismatched]
     TinvestReconcileMismatchKind:
       type: string
-      description: "What kind of difference the check found, and each value asks a different question of the reader. `instrument`: a security's quantity differs, or the JOURNAL names one the broker does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unknown_security`: the broker holds a security this program could perfectly well hold, and no operation on it has ever reached the journal — so there is nothing of ours to pair it with, and the label shown is the BROKER's own naming rather than a ticker from this catalog. It asks what happened to that paper (a fund converted into another under a new ISIN, say — a corporate action that arrives as no operation at all) rather than which operations are missing. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change. The last two are separate values precisely so neither is read as the first one and sends a reader hunting for operations that are not missing."
+      description: "What kind of difference the check found. `instrument`: a security's quantity differs, or the journal holds one the broker does not — usually operations that did not become journal entries (see the unparsed list). `currency`: a cash balance differs. `unknown_security`: the broker holds a security no journal entry ever named, labelled with the broker's own naming — usually a corporate action that arrived as no operation. `unsupported`: an asset of a kind this program does not account for (a future, an option)."
       enum: [instrument, currency, unsupported, unknown_security]
     TinvestUnparsedReason:
       type: string
       description: >-
-        Why one broker operation did not become journal entries — a code, never
-        prose: the wording the owner reads is the interface's to translate, and
-        naming the wrong cause beside a right figure is the failure this whole
-        list exists to prevent. `unsupported_type`: the broker's operation type
-        is not one this program accounts for. `unrepresentable_amount`: the sum
-        carries a fraction finer than a minor unit. `amount_out_of_bounds`: the
-        sum is beyond what the journal can hold — a different accident from the
-        previous one, and not to be captioned as it. `unrepresentable_quantity`:
-        the number of units is finer than the journal's quantity scale.
-        `trade_without_filled_quantity`: a purchase or sale that does not say
-        how much of its order was executed — the broker reports the order's
-        size and the executed part separately, and only the second one is the
-        trade. `transfer_direction_unknown`: a move between the owner's own accounts
-        whose direction this program could not tell. `instrument_unresolved`:
-        the operation names a security and no catalog row was matched to it —
-        distinct from `unsupported_type`, which is about the OPERATION rather
-        than about the security. `engine_refused`: the journal itself would not
-        take the operation. `redemption_without_quantity`: a full bond
-        redemption that said nothing about how many bonds were redeemed — NO
-        LONGER PRODUCED, since such a redemption now takes its count from the
-        journal (the position it closes); it is declared because rows ruled
-        before that change carry it until their connection is next rebuilt.
-        `redemption_nothing_held`: a full bond redemption on an account whose
-        journal holds none of that bond by the day it happened, so there is
-        nothing to close — a different fault from the previous one, and a
-        different thing to go looking for: there the broker said nothing, here
-        the purchase is missing from this program's own journal.
-        `currency_trade`: a purchase or sale of currency.
-        `transfer_without_quantity`: a securities transfer the broker reports
-        with no units at all. Every quantity field it sends is an integer, so a
-        transfer of PART of a share arrives as a nought in all three of them and
-        the real number survives only in the prose of the description — which
-        this program reads ONLY when it carries a fraction whose whole part is
-        the field's own number (the field is the proof); this code is what is
-        left when the prose has no such figure either.
-        `transfer_quantity_contradicted`: the broker's quantity field and its
-        description disagree — the description names a fraction whose whole
-        part is not the field's number — and neither is taken over the other.
-        `fund_payout_units_unknown`: a bond-repayment operation on a security
-        whose catalog row is not a bond, i.e. a fund's payout sent under the
-        bond types. A bond's full redemption may take its count from the
-        position because a matured bond retires the whole holding; a fund's
-        payout retires units the broker does not name while the holder keeps
-        the rest, so the money is shown here and the units are the owner's to
-        name — unless the withdrawal of those units pairs with it, and then the
-        two are one redemption. `foreign_currency_no_rate`: an operation on a
-        paper in a currency other than its position's (bought in roubles, kept
-        in dollars), on a day whose official rate is not known yet; it is
-        restated at that rate as soon as the rates arrive. `commission_refund`: a
-        negative commission on the operation, i.e. money coming back.
-        `projection_incomplete`: this program has a rule for the broker's
-        operation type and the rule produced nothing — a gap in this program,
-        stated as one. `broker_fee_parent_missing`: a commission charged as an
-        operation of its own, naming a trade that is not among the operations
-        this connection imported — so whether the trade already carries that
-        same commission cannot be told, and neither dropping nor keeping the
-        charge would be an answer. `broker_fee_parent_explained`: the same
-        commission, naming a trade the owner has accounted for BY HAND (see
-        TinvestExplainRequest). That trade produced no journal entries on
-        purpose and — unlike an unparsed one — says nothing about this money,
-        since an explained row carries no reason at all; so the charge is
-        neither booked (the manual entry may already include it) nor dropped
-        (it may not), and the owner is asked.
+        Why one broker operation did not become journal entries; a code the interface
+        translates. `unsupported_type`: an operation type this program does not account for.
+        `unrepresentable_amount`: the sum is finer than a minor unit.
+        `amount_out_of_bounds`: the sum is beyond what the journal holds.
+        `unrepresentable_quantity`: the units are finer than the journal's scale.
+        `trade_without_filled_quantity`: a trade that does not say how much of its order was
+        executed. `transfer_direction_unknown`: a move between own accounts with no
+        direction. `instrument_unresolved`: no catalog row matched the security.
+        `engine_refused`: the journal would not take it. `redemption_without_quantity`: a
+        bond redemption with no count — no longer produced, kept on older rows.
+        `redemption_nothing_held`: a bond redemption where the journal holds none of the
+        bond. `currency_trade`: a purchase or sale of currency. `transfer_without_quantity`:
+        a transfer with no units anywhere, even in its description.
+        `transfer_quantity_contradicted`: the quantity field and the description disagree.
+        `fund_payout_units_unknown`: a payout on a fund sent as a bond repayment with no
+        units named (unless the withdrawal of those units pairs with it).
+        `foreign_currency_no_rate`: an operation in another currency than its position's, on
+        a day with no official rate yet; restated once the rate arrives.
+        `commission_refund`: a negative commission. `projection_incomplete`: a rule produced
+        nothing — a gap in this program. `broker_fee_parent_missing`: a commission naming a
+        trade not among the imported ones. `broker_fee_parent_explained`: a commission
+        naming a trade the owner accounted for by hand; neither booked nor dropped.
       enum:
         - unsupported_type
         - unrepresentable_amount
@@ -3317,7 +3018,7 @@ components:
         broker_isin:
           type: string
           nullable: true
-          description: "The ISIN the BROKER'S OWN PASSPORT gives a position nothing of ours matched — set on `unknown_security` rows alone, and there only when the check obtained the passport (it asks the broker what each unmatched position is, to pair one paper listed on two venues; see the server's matchByISIN) and the passport carried an ISIN. Null on every row of another kind; null on an unknown-security row when the broker would not say what its own position is (404), when the position lay past the number of passports one check looks up, or when the passport named no ISIN; and null on every row of a run recorded before this field existed, whose stored differences carry no such key. A value here is the one thing a catalog row can be made from that the check will then pair the position with: the pairing is by ISIN and nothing else."
+          description: "The ISIN the broker's own passport gives an `unknown_security` position, when the check obtained one. Null on other kinds, when the broker would not say (404), past the number of passports one check looks up, or on runs recorded before the field existed. A catalog row with this ISIN is what the check will pair the position with."
         broker_name:
           type: string
           nullable: true
@@ -3330,38 +3031,22 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/InstrumentType"
-          description: "What kind of instrument the position is, ALREADY TRANSLATED INTO THIS CATALOG'S OWN InstrumentType by the importer's one table of broker types (share, bond, etf) — the same table that books every imported operation and that decides a row is `unknown_security` rather than `unsupported` in the first place. Set on `unknown_security` rows, from the position's own type rather than the passport's, so it is present even when the passport was not obtained; null on every other kind. Published translated so that a client creating the catalog row does not keep a second copy of that table, which is exactly the pair of independent computations of one thing this codebase has watched drift."
+          description: "The `unknown_security` position's kind, already translated into this catalog's InstrumentType (share, bond, etf) by the importer's table, from the position's own type. Null on other kinds."
         split_hint_factor:
           type: integer
           format: int64
           nullable: true
           description: >-
-            SET WHEN THE TWO QUANTITIES DIFFER BY A WHOLE FACTOR OF TWO OR MORE
-            AND THE CORPORATE-ACTIONS REGISTRY HOLDS NO SPLIT THAT WOULD ACCOUNT
-            FOR IT, and carries that factor — the larger quantity over the
-            smaller, whichever side is larger, since a reverse split leaves the
-            journal holding the multiple.
-
-
-            IT IS A QUESTION, NOT A FINDING, and a client must render it as one.
-            The owner's own AMZN stands at 1 against the broker's 20 and NVDA at
-            3 against 30, and both are real splits nobody recorded — but a whole
-            factor is equally what a purchase this import never saw would leave
-            behind, and nothing on the server can tell those apart. Nothing acts
-            on it: no event is written and no journal is touched.
-
-
-            Null on every row of another kind, on any difference that is not a
-            whole multiple, on a paper the registry already knows a split of (the
-            journal then already has it, so the difference has another cause), on
-            a paper with no ISIN (the registry is keyed by it, so nothing could
-            be recorded against that paper at all), and on every row of a run
-            recorded before this field existed. Null too when the registry could
-            not be reached — a hint not offered rather than a check not finished.
+            Set when the two quantities differ by a whole factor of two or more and the
+            registry holds no split that would explain it: that factor, the larger quantity
+            over the smaller. A question, not a finding — an unrecorded split and a missing
+            purchase look the same; nothing acts on it. Null on other kinds, other
+            differences, papers with a known split or no ISIN, older runs, and when the
+            registry could not be read.
     TinvestAccountReconcile:
       type: object
       required: [link_id, account_id, broker_account_name, at, status, mismatches, currency_trades_unparsed]
-      description: "The most recent check against the broker FOR ONE LINKED BROKER ACCOUNT. A sync run is made for the pair (connection, link) and the reconciliation is made inside it, so a verdict is a statement about ONE broker account and about no other. A connection importing two of them therefore has two verdicts which can differ and can be reached at different moments; publishing whichever of them is newest as the connection's own would draw one account's tick over the other account's difference, and the older account's verdict would never be seen at all. Nothing here is a connection-wide claim: a client that wants one derives it from all of these."
+      description: "The latest check against the broker for one linked broker account; each account of a connection has its own."
       properties:
         link_id: { type: string, format: uuid, description: "Which link this verdict belongs to — the same id as the matching TinvestLinkedAccount.link_id, and the same one a run carries." }
         account_id: { type: string, format: uuid, description: "The babki account behind that link, so a reader can be sent to it without joining anything." }
@@ -3381,7 +3066,7 @@ components:
           description: "What differed for THIS account. Empty when `status` is `matched` — the verdict is derived from this list and never kept beside it — and empty again when `status` is `not_checked`, where it means nobody looked. `status` is what tells those two apart."
         currency_trades_unparsed:
           type: integer
-          description: "How many of this broker account's currency purchases and sales this program does not import (unparsed reason `currency_trade`). IT IS PUBLISHED TO EXPLAIN A CASH DIFFERENCE THAT CANNOT CLOSE: each such operation is money that left one currency and arrived in another with the journal recording neither half, so the account's money comparison against the broker is off by their whole sum — rubles too high, the bought currencies negative — and stays off however many times the sync is re-run. Without this figure that difference stands beside the securities ones as if it were the same kind of news, and a difference that never resolves teaches a reader to stop reading the whole verdict. IT SPEAKS FOR THE MONEY ROWS ONLY, and a client must not caption a securities row with it: a currency trade moves no shares, so a difference in units of a paper has nothing to do with this number. Present on every verdict including `not_checked` and `matched` — it is a fact about the account rather than about the comparison, and 0 is the answer that says a cash difference has to be looked for elsewhere. Counted from the mirror as it stands rather than frozen into the run, so a rebuild that reads more of them is reflected at once."
+          description: "How many of this broker account's currency purchases and sales are not imported (reason `currency_trade`). Each leaves the cash comparison off by its sum, however often the sync runs; it speaks for the money rows only. Present on every verdict; counted from the mirror as it stands."
     TinvestConnection:
       type: object
       required: [id, status, token_last4, accounts, reconciles]
@@ -3401,7 +3086,7 @@ components:
         reconciles:
           type: array
           items: { $ref: "#/components/schemas/TinvestAccountReconcile" }
-          description: "The last check against the broker FOR EACH of the accounts above — one entry per entry in `accounts`, in the same order, and never fewer: an account no run ever reconciled is present here saying `not_checked` rather than being left out, because a missing entry and a checked-and-agreed one look the same to a reader counting ticks. Each entry survives a later failed run of its own account: a sync that died before reconciling does not erase what the previous check of that account found. THERE IS NO CONNECTION-WIDE VERDICT IN THIS RESPONSE, and that absence is deliberate — «this connection agrees with the broker» is true only when every one of these says `matched`, so it is derived from all of them by whoever needs it and never guessed from the newest one."
+          description: "The latest check for each of the accounts above, in the same order and never fewer — an account never reconciled says `not_checked`. A later failed run does not erase an earlier verdict. There is no connection-wide verdict: it is `matched` only when every entry is."
     TinvestConnectionsResponse:
       type: object
       required: [connections]
@@ -3460,19 +3145,9 @@ components:
       type: object
       required: [id, link_id, content_key, occurred_at, op_type, class_code, trading_mode_kind, payment, currency, description, reason, detail, raw, disappeared_at]
       description: >-
-        One broker operation the projection could not turn into journal entries
-        — OR one the owner has accounted for by hand, which it could have and
-        deliberately did not. Rows the broker has since stopped returning stay
-        on this list: they are still operations this program could not read, and
-        dropping them would be the silence the list exists to replace.
-
-
-        THE TWO KINDS ARE TOLD APART BY `explained_by` AND NEVER BY `reason`.
-        An explained row carries no reason — it is not unparsed, and no count
-        of unparsed operations includes it — so a client reading an empty
-        reason as "nothing wrong here" would caption the owner's own answer as
-        a blank. It is listed at all because this is the only screen it appears
-        on and the only place the explanation can be taken back.
+        One broker operation the projection could not turn into journal entries — or one the
+        owner accounted for by hand (`explained_by`, and then no `reason`). Rows the broker
+        stopped returning stay listed.
       properties:
         id: { type: string, format: uuid, description: "The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key." }
         link_id:
@@ -3515,38 +3190,9 @@ components:
         detail:
           type: string
           description: >-
-            What refused this operation said about THIS row, in its own words —
-            free text written for a person and NOT FOR A PARSER. `reason` above
-            is what a client decides anything by: the sentence the owner reads
-            is chosen from that code and from nothing else, and matching on a
-            phrase in here would be exactly the dependency on unpromised wording
-            that this contract refuses to make elsewhere. Show it, do not read
-            it.
-
-
-            IT IS NOT TRANSLATED and is not promised to be in any one language.
-            The server writes these in English and may quote the broker inside
-            them, so a client that displays it displays it verbatim, the way it
-            already does with `op_type` and `raw`. Neither is a message a client
-            may compose a Russian sentence out of.
-
-
-            MAY BE EMPTY, AND EMPTY IS NOT AN ERROR — it means "nothing more
-            was written down", never "the operation was fine": a row is on this
-            list because it was refused, and `reason` says so on its own. What
-            is empty today are the rows refused before the server kept details
-            at all; those are not re-explained after the fact, because the words
-            that would go here are gone. Every refusal the server makes now does
-            write one, and that is deliberately NOT promised here: a client that
-            treated an empty detail as a fault would break on the first refusal
-            that has nothing to add.
-
-
-            The words come from this program's own journal, its instrument
-            resolver or its projection rules, so they may name internal things
-            — an operation type, an account's own balance, a catalog row. They
-            never carry a credential: the broker token travels as a request
-            header and appears in no message this program builds.
+            What refused this operation said about this row, in English, for a person and
+            not for a parser — `reason` is what a client decides by. May be empty on rows
+            refused before details were kept. Never carries a credential.
         raw: { description: "The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it." }
         disappeared_at:
           type: string
@@ -3590,23 +3236,11 @@ components:
       type: object
       required: [content_keys, operation]
       description: >-
-        Account for one or more of a linked account's broker rows with one
-        manual journal operation.
-
-
-        WHAT IT IS FOR: the broker's operation enum has no split, no
-        conversion, no spin-off — no corporate action of any kind — so a real
-        event reaches this program as whatever rows happened to carry its
-        money. On the owner's own account a fund's partial redemption arrived
-        as a withdrawal of 44 380,35 units "to another depositary" and, a
-        fortnight later, a payment of 2 559,80 ₽ typed as a bond redemption. No
-        rule over those two rows can find the one operation they are; the owner
-        can, and this is where that answer goes.
-
-
-        The rows named stop being projected — no journal entries, and not
-        unparsed either — and the operation below is what the journal holds
-        instead. Both halves happen together or neither does.
+        Accounts for one or more of a linked account's broker rows with one hand-written
+        journal operation: the broker sends no corporate actions, so an event (a fund's
+        partial redemption, a conversion) arrives as whatever rows carried its money. The
+        rows stop being projected and are not unparsed; the operation is what the journal
+        holds instead. Both happen together or neither does.
       properties:
         content_keys:
           type: array
