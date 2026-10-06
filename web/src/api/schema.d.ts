@@ -1112,6 +1112,8 @@ export interface components {
             balance_in_base?: components["schemas"]["MoneyInBase"] | null;
             /** @description The family's choice for a brokerage account kept by its operations: count it in the total by its balance rather than by its journal, while the journal's history is incomplete. False until somebody sets it (UpdateAccountRequest.valued_by_balance). On any other kind of account it is stored and means nothing — those are always counted by their balance. */
             valued_by_balance: boolean;
+            /** @description Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it. */
+            trades_abroad: boolean;
             /**
              * @description Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active brokerage account with at least one operation, not valued_by_balance — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere.
              * @enum {string}
@@ -1191,6 +1193,8 @@ export interface components {
             institution?: string;
             /** Format: uuid */
             owner_user_id?: string | null;
+            /** @description See AccountWithBalance.trades_abroad. Omitted, false. */
+            trades_abroad?: boolean;
         };
         UpdateAccountRequest: {
             /** @description Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states. */
@@ -1201,6 +1205,8 @@ export interface components {
             status?: components["schemas"]["AccountStatus"];
             /** @description See AccountWithBalance.valued_by_balance. Omitted, it stays as it is. */
             valued_by_balance?: boolean;
+            /** @description See AccountWithBalance.trades_abroad. Omitted, it stays as it is. */
+            trades_abroad?: boolean;
         };
         SetBalanceRequest: {
             /** @description Date YYYY-MM-DD */
@@ -1411,6 +1417,7 @@ export interface components {
             /** @description The member the account is personal to; null for a shared one */
             owner_username: string | null;
             valued_by_balance: boolean;
+            trades_abroad: boolean;
             /** Format: date-time */
             created_at: string;
             /** @description Balance marks, oldest first */

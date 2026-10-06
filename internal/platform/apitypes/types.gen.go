@@ -1068,7 +1068,10 @@ type AccountWithBalance struct {
 	Name        string                                `json:"name"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status      AccountStatus                         `json:"status"`
-	Type        AccountType                           `json:"type"`
+
+	// TradesAbroad Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it.
+	TradesAbroad bool        `json:"trades_abroad"`
+	Type         AccountType `json:"type"`
 
 	// ValuedByBalance The family's choice for a brokerage account kept by its operations: count it in the total by its balance rather than by its journal, while the journal's history is incomplete. False until somebody sets it (UpdateAccountRequest.valued_by_balance). On any other kind of account it is stored and means nothing — those are always counted by their balance.
 	ValuedByBalance bool `json:"valued_by_balance"`
@@ -1242,7 +1245,10 @@ type CreateAccountRequest struct {
 	// Name What to call the account. Refused EMPTY or longer than 100 characters (account.MaxNameRunes, counted as Unicode code points) and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no shape is stated because the server checks none.
 	Name        string                                `json:"name"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
-	Type        AccountType                           `json:"type"`
+
+	// TradesAbroad See AccountWithBalance.trades_abroad. Omitted, false.
+	TradesAbroad *bool       `json:"trades_abroad,omitempty"`
+	Type         AccountType `json:"type"`
 }
 
 // CreateArrivalRequest defines model for CreateArrivalRequest.
@@ -1437,6 +1443,7 @@ type ExportAccount struct {
 	// OwnerUsername The member the account is personal to; null for a shared one
 	OwnerUsername   nullable.Nullable[string] `json:"owner_username"`
 	Status          string                    `json:"status"`
+	TradesAbroad    bool                      `json:"trades_abroad"`
 	Type            string                    `json:"type"`
 	ValuedByBalance bool                      `json:"valued_by_balance"`
 
@@ -2693,6 +2700,9 @@ type UpdateAccountRequest struct {
 	Name        *string                               `json:"name,omitempty"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status      *AccountStatus                        `json:"status,omitempty"`
+
+	// TradesAbroad See AccountWithBalance.trades_abroad. Omitted, it stays as it is.
+	TradesAbroad *bool `json:"trades_abroad,omitempty"`
 
 	// ValuedByBalance See AccountWithBalance.valued_by_balance. Omitted, it stays as it is.
 	ValuedByBalance *bool `json:"valued_by_balance,omitempty"`

@@ -206,7 +206,7 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 ) apitypes.ExportAccount {
 	out := apitypes.ExportAccount{
 		Id: a.ID, Name: a.Name, Type: string(a.Type), Currency: a.Currency, Institution: a.Institution,
-		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance,
+		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance, TradesAbroad: a.TradesAbroad,
 		CreatedAt: a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
 		WithheldStated: []apitypes.ExportWithheldStated{},
 	}

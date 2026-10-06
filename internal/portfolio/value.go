@@ -199,9 +199,13 @@ func (s *Service) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, da
 	if err != nil {
 		return nil, err
 	}
+	abroad, err := s.tradesAbroad(ctx, spaceID, accountID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]JournalValue, 0, len(days))
 	for _, day := range days {
-		v, err := s.valueOn(ctx, sp.BaseCurrency, sp.FullValuation, accountID, all, day)
+		v, err := s.valueOn(ctx, sp.BaseCurrency, sp.FullValuation, accountID, abroad, all, day)
 		if err != nil {
 			return nil, err
 		}
@@ -211,7 +215,9 @@ func (s *Service) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, da
 }
 
 // valueOn values the journal all as it stood at the end of day.
-func (s *Service) valueOn(ctx context.Context, base string, setting family.FullValuation, accountID uuid.UUID, all []Operation, day time.Time) (JournalValue, error) {
+func (s *Service) valueOn(ctx context.Context, base string, setting family.FullValuation, accountID uuid.UUID, abroad bool,
+	all []Operation, day time.Time,
+) (JournalValue, error) {
 	var ops []Operation
 	for _, o := range all {
 		if !o.OccurredOn.After(day) {
@@ -242,7 +248,7 @@ func (s *Service) valueOn(ctx context.Context, base string, setting family.FullV
 	if err != nil {
 		return JournalValue{}, err
 	}
-	book, err := s.pricesOn(ctx, ids, day, setting, pastWindows)
+	book, err := s.pricesOn(ctx, ids, day, setting, pastWindows, abroad)
 	if err != nil {
 		return JournalValue{}, err
 	}

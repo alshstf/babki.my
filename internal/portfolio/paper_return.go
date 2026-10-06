@@ -76,7 +76,7 @@ func (s *Service) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 	for i, day := range []time.Time{from, to} {
 		v := JournalValue{Currency: paper.Currency}
 		if held[i].IsPositive() {
-			book, err := s.pricesOn(ctx, []uuid.UUID{instrumentID}, day, sp.FullValuation, pastWindows)
+			book, err := s.pricesOn(ctx, []uuid.UUID{instrumentID}, day, sp.FullValuation, pastWindows, false)
 			if err != nil {
 				return ReturnBasis{}, err
 			}

@@ -84,7 +84,8 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv mark
 	for _, w := range wrap {
 		stores = w(stores)
 	}
-	portfolio.NewHandler(portfolio.NewService(stores.ops, stores.instruments, quotes, conv, stores.spaces), auth, sm).Mount(srv)
+	portfolio.NewHandler(portfolio.NewService(stores.ops, stores.instruments, quotes, conv, stores.spaces).
+		WithAccounts(account.NewStore(pool)), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

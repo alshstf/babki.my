@@ -352,3 +352,36 @@ func TestAnUnknownOwnerIsA400OnBothDoors(t *testing.T) {
 		t.Errorf("patch refused with %s, want a message naming owner_user_id", body)
 	}
 }
+
+// Whether the broker trades on foreign exchanges is the family's to say, on
+// creation or later (decision Р-20); a new account says no.
+func TestAnAccountSaysWhetherItsBrokerTradesAbroad(t *testing.T) {
+	url, c := newAPI(t)
+	read := func(resp *http.Response) (string, bool) {
+		t.Helper()
+		defer func() { _ = resp.Body.Close() }()
+		var a struct {
+			ID           string `json:"id"`
+			TradesAbroad bool   `json:"trades_abroad"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
+			t.Fatal(err)
+		}
+		return a.ID, a.TradesAbroad
+	}
+
+	if _, abroad := read(do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Т-Банк","type":"brokerage","currency":"RUB"}`)); abroad {
+		t.Error("a new account trades abroad unasked")
+	}
+	id, abroad := read(do(t, c, "POST", url+"/api/v1/accounts",
+		`{"name":"Freedom KZ","type":"brokerage","currency":"USD","trades_abroad":true}`))
+	if !abroad {
+		t.Error("an account created as trading abroad does not say so")
+	}
+	if _, abroad := read(do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"trades_abroad":false}`)); abroad {
+		t.Error("the switch did not turn off")
+	}
+	if _, abroad := read(do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"name":"Freedom"}`)); abroad {
+		t.Error("an edit that does not name the switch changed it")
+	}
+}
