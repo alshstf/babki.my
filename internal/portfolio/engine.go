@@ -246,8 +246,8 @@ func badOp(o Operation, msg string) error {
 // its cost, and the lot's acquisition day (nil copied as nil). A release
 // across several lots yields pieces in consumption order.
 type ReleasedLot struct {
-	// From is the lot the piece was taken from; zero on a piece recorded before
-	// lots had numbers, which is then matched by its acquisition day.
+	// From is the lot the piece was taken from. A recorded breakdown's departing
+	// leg is replayed by it; an arriving leg's own pieces need none.
 	From       LotID
 	Quantity   decimal.Decimal
 	CostMinor  int64
@@ -357,33 +357,24 @@ func lotShare(l Lot, qty decimal.Decimal) int64 {
 	return decimal.NewFromInt(l.CostMinor).Mul(qty).Div(l.Quantity).Floor().IntPart()
 }
 
-// recordAndReplayDisagree ends releaseRecorded's refusals. It names both
-// causes: this build's writes cannot reach the refusal (every write replays
-// first), so the usual cause is a transfer written by an earlier build, not an
-// edit.
-const recordAndReplayDisagree = "either this account's history was edited after the transfer was recorded, " +
-	"or the transfer was recorded by a build whose release queue picked lots by a different rule; " +
-	"delete the transfer and record it again either way"
+// recordAndReplayDisagree ends the refusals of a recorded breakdown: the
+// account's history changed under it.
+const recordAndReplayDisagree = "this account's history was edited after the operation was recorded; " +
+	"delete it and record it again"
 
-// releaseRecorded gives up the lots a transfer's breakdown says left, rather
-// than a fresh FIFO release, so both legs of a pair agree by construction.
+// releaseRecorded gives up the lots a transfer's or a conversion's breakdown
+// says left, rather than a fresh FIFO release, so both legs of a pair agree by
+// construction: each piece takes exactly its units and its money from the lot
+// it names. The history changed under the record — refused, never taken from a
+// neighbour — when the lot is gone, was acquired on another day than the piece
+// says, holds less than the piece took, or holds more money for those units
+// than the piece moves (that money would stay behind, as a restated purchase
+// price does under a move recorded before it).
 //
-// A breakdown whose pieces name their lots is released by number
-// (releaseNumbered). One recorded before lots had numbers, and not yet given
-// them (operation.NumberLegacyMoves), is matched by acquisition day: each
-// piece takes units front-to-back among lots of its day, and each
-// lot gives up the money that goes with its units (lotShare). Basis a piece
-// carries beyond that — a shareless lot's money folded into the next piece by
-// operation.quantizeLots — is drained from the head of the queue afterwards.
-// Proportioning matters: clamping by a lot's whole cost would take a shareless
-// lot's money from an innocent parcel of the same day.
-//
-// A piece whose day has no shares left is refused loudly (see
-// recordAndReplayDisagree): taking units from another day would re-date them.
-//
-// A split entered after a transfer but dated before it still replays, and the
-// recorded basis then comes off twice the shares it was struck against. The
-// family's totals are right; re-entering the transfer evens the pair.
+// A piece moving more money than its units' share is taken as recorded, from
+// the same lot: a split entered after the move but dated before it leaves the
+// piece's units a fraction of the lot's. The family's totals stay right;
+// re-entering the move evens the pair.
 //
 // Quantity and cost are conserved exactly (#60).
 func (p *Position) releaseRecorded(o Operation) error {
@@ -392,119 +383,17 @@ func (p *Position) releaseRecorded(o Operation) error {
 			o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"),
 			ErrOversell, p.Quantity, *o.Quantity)
 	}
-	if numbered(o.TransferLots) {
-		return p.releaseNumbered(o)
-	}
-	var carried int64 // recorded cost its own lots could not cover
 	for i, pc := range o.TransferLots {
-		qty, cost := pc.Quantity, pc.CostMinor
-		if qty.IsZero() {
-			// A piece of no units is a shareless parcel; its money comes only from
-			// shareless lots of its own day.
-			for j := range p.Lots {
-				l := &p.Lots[j]
-				if !l.Quantity.IsZero() || !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
-					continue
-				}
-				take := min(l.CostMinor, cost)
-				l.CostMinor, p.CostMinor, cost = l.CostMinor-take, p.CostMinor-take, cost-take
-			}
-			if cost > 0 {
-				return badOp(o, fmt.Sprintf(
-					"transfer lot %d moved %d minor of basis held by a parcel with no units acquired %s, and replaying this account leaves %d of it with no such parcel to come from: %s",
-					i, pc.CostMinor, acquisitionText(pc.AcquiredOn), cost, recordAndReplayDisagree))
-			}
-			continue
+		at, err := p.namedLot(o, i, pc)
+		if err != nil {
+			return err
 		}
-		for j := range p.Lots {
-			l := &p.Lots[j]
-			if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
-				continue
-			}
-			takeQty := decimal.Min(l.Quantity, qty)
-			share := lotShare(*l, takeQty)
-			// The record gives these units less money than their parcel holds: it was
-			// struck against a cheaper parcel of the same day, now gone. Taking them
-			// anyway would move them at the wrong price.
-			if takeQty.IsPositive() && cost < share {
-				return badOp(o, fmt.Sprintf(
-					"transfer lot %d gives %s units acquired %s a basis of %d, but the parcel replaying this account finds for them holds %d for those units: %s",
-					i, takeQty, acquisitionText(pc.AcquiredOn), cost, share, recordAndReplayDisagree))
-			}
-			takeCost := min(share, cost)
-			l.Quantity, l.CostMinor = l.Quantity.Sub(takeQty), l.CostMinor-takeCost
-			p.Quantity, p.CostMinor = p.Quantity.Sub(takeQty), p.CostMinor-takeCost
-			qty, cost = qty.Sub(takeQty), cost-takeCost
-			if qty.IsZero() {
-				break
-			}
-		}
-		if qty.IsPositive() {
-			return badOp(o, fmt.Sprintf(
-				"transfer lot %d moved %s units acquired %s, but replaying this account leaves %s of them with no such lot to come from: %s",
-				i, pc.Quantity, acquisitionText(pc.AcquiredOn), qty, recordAndReplayDisagree))
-		}
-		carried += cost
-	}
-	if carried > 0 {
-		if carried > p.CostMinor {
-			return badOp(o, fmt.Sprintf(
-				"the breakdown moves %d minor more basis than this account still holds (%d): %s",
-				carried, p.CostMinor, recordAndReplayDisagree))
-		}
-		drainLotsCost(p, carried)
-		p.CostMinor -= carried
-	}
-	// A lot with neither shares nor money is spent; one with money but no shares
-	// stays (see applySplit).
-	p.Lots = slices.DeleteFunc(p.Lots, func(l Lot) bool { return l.Quantity.IsZero() && l.CostMinor == 0 })
-	return nil
-}
-
-// numbered reports a breakdown whose every piece names its lot; one recorded
-// before lots had numbers is matched by day instead (releaseRecorded).
-func numbered(pieces []ReleasedLot) bool {
-	if len(pieces) == 0 {
-		return false
-	}
-	for _, pc := range pieces {
-		if pc.From.IsZero() {
-			return false
-		}
-	}
-	return true
-}
-
-// lotIndex is where the lot numbered id sits in the queue, -1 when it is gone.
-func (p *Position) lotIndex(id LotID) int {
-	return slices.IndexFunc(p.Lots, func(l Lot) bool { return l.ID == id })
-}
-
-// releaseNumbered gives up exactly the units and the money each piece says it
-// took from the lot it names. The history changed under the record — refused,
-// never taken from a neighbour — when the lot is gone, was acquired on another
-// day than the piece says, holds less than the piece took, or holds more money
-// for those units than the piece moves (that money would stay behind, as a
-// restated purchase price does under a move recorded before it).
-//
-// A piece moving more money than its units' share is taken as recorded, from
-// the same lot: a split entered after the move but dated before it leaves the
-// piece's units a fraction of the lot's. The family's totals stay right;
-// re-entering the move evens the pair.
-func (p *Position) releaseNumbered(o Operation) error {
-	for i, pc := range o.TransferLots {
-		at := p.lotIndex(pc.From)
 		if at < 0 {
 			return badOp(o, fmt.Sprintf(
 				"transfer lot %d moved %s units of parcel %s, which replaying this account no longer holds: %s",
 				i, pc.Quantity, pc.From, recordAndReplayDisagree))
 		}
 		l := &p.Lots[at]
-		if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
-			return badOp(o, fmt.Sprintf(
-				"transfer lot %d names parcel %s as acquired %s, and replaying this account finds it acquired %s: %s",
-				i, pc.From, acquisitionText(pc.AcquiredOn), acquisitionText(l.AcquiredOn), recordAndReplayDisagree))
-		}
 		if pc.Quantity.GreaterThan(l.Quantity) || pc.CostMinor > l.CostMinor {
 			return badOp(o, fmt.Sprintf(
 				"transfer lot %d moved %s units and %d of basis from parcel %s, which replaying this account leaves holding %s units and %d: %s",
@@ -518,8 +407,26 @@ func (p *Position) releaseNumbered(o Operation) error {
 		l.Quantity, l.CostMinor = l.Quantity.Sub(pc.Quantity), l.CostMinor-pc.CostMinor
 		p.Quantity, p.CostMinor = p.Quantity.Sub(pc.Quantity), p.CostMinor-pc.CostMinor
 	}
+	// A lot with neither shares nor money is spent; one with money but no shares
+	// stays (see applySplit).
 	p.Lots = slices.DeleteFunc(p.Lots, func(l Lot) bool { return l.Quantity.IsZero() && l.CostMinor == 0 })
 	return nil
+}
+
+// namedLot is where the lot a recorded piece names sits in the queue, -1 when
+// the account no longer holds it. A piece that names no lot, or a lot acquired
+// on another day than the piece says, is refused.
+func (p *Position) namedLot(o Operation, i int, pc ReleasedLot) (int, error) {
+	if pc.From.IsZero() {
+		return 0, badOp(o, fmt.Sprintf("lot %d of the breakdown names no parcel: %s", i, recordAndReplayDisagree))
+	}
+	at := slices.IndexFunc(p.Lots, func(l Lot) bool { return l.ID == pc.From })
+	if at >= 0 && !sameAcquisition(p.Lots[at].AcquiredOn, pc.AcquiredOn) {
+		return 0, badOp(o, fmt.Sprintf(
+			"lot %d of the breakdown names parcel %s as acquired %s, and replaying this account finds it acquired %s: %s",
+			i, pc.From, acquisitionText(pc.AcquiredOn), acquisitionText(p.Lots[at].AcquiredOn), recordAndReplayDisagree))
+	}
+	return at, nil
 }
 
 // acquisitionText renders an acquisition day, or its absence, for an error.
@@ -608,45 +515,16 @@ func CheckSpinoffLots(o Operation) error {
 	return nil
 }
 
-// applySpinoffOut takes the recorded basis out of exactly the lots the record
-// names, position by position, leaving quantities alone. A spin-off names the
-// whole lot list, so a journal that has since gained, lost or changed a lot is
-// refused (see recordAndReplayDisagree) rather than silently reallocated.
-// Shareless lots are matched and drained like any other.
+// applySpinoffOut takes each piece's basis out of the lot it names, leaving
+// quantities alone. A lot that is gone is refused when the piece moves money
+// from it and passed over when it moves none; a lot the record does not name
+// keeps its basis until the registry recomputes the spin-off.
 func (p *Position) applySpinoffOut(o Operation) error {
-	if numbered(o.TransferLots) {
-		return p.spinoffNumbered(o)
-	}
-	if len(o.TransferLots) != len(p.Lots) {
-		return badOp(o, fmt.Sprintf(
-			"the spin-off was struck against %d parcels and replaying this account leaves %d: %s",
-			len(o.TransferLots), len(p.Lots), recordAndReplayDisagree))
-	}
 	for i, pc := range o.TransferLots {
-		l := &p.Lots[i]
-		if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) || !l.Quantity.Equal(pc.Quantity) {
-			return badOp(o, fmt.Sprintf(
-				"spin-off lot %d names %s units acquired %s and replaying this account leaves %s units acquired %s in its place: %s",
-				i, pc.Quantity, acquisitionText(pc.AcquiredOn), l.Quantity, acquisitionText(l.AcquiredOn),
-				recordAndReplayDisagree))
+		at, err := p.namedLot(o, i, pc)
+		if err != nil {
+			return err
 		}
-		if pc.CostMinor > l.CostMinor {
-			return badOp(o, fmt.Sprintf(
-				"spin-off lot %d moves %d minor of basis out of a parcel that replaying this account leaves holding %d: %s",
-				i, pc.CostMinor, l.CostMinor, recordAndReplayDisagree))
-		}
-		l.CostMinor -= pc.CostMinor
-		p.CostMinor -= pc.CostMinor
-	}
-	return nil
-}
-
-// spinoffNumbered takes each piece's basis out of the lot it names. A lot that
-// is gone is refused when the piece moves money from it, and passed over when
-// it moves none.
-func (p *Position) spinoffNumbered(o Operation) error {
-	for i, pc := range o.TransferLots {
-		at := p.lotIndex(pc.From)
 		if at < 0 {
 			if pc.CostMinor == 0 {
 				continue
@@ -656,11 +534,6 @@ func (p *Position) spinoffNumbered(o Operation) error {
 				i, pc.CostMinor, pc.From, recordAndReplayDisagree))
 		}
 		l := &p.Lots[at]
-		if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
-			return badOp(o, fmt.Sprintf(
-				"spin-off lot %d names parcel %s as acquired %s, and replaying this account finds it acquired %s: %s",
-				i, pc.From, acquisitionText(pc.AcquiredOn), acquisitionText(l.AcquiredOn), recordAndReplayDisagree))
-		}
 		if pc.CostMinor > l.CostMinor {
 			return badOp(o, fmt.Sprintf(
 				"spin-off lot %d moves %d minor of basis out of parcel %s, which replaying this account leaves holding %d: %s",
@@ -919,7 +792,7 @@ func takeLotsShare(p *Position, share decimal.Decimal) []ReleasedLot {
 // drainLotsCost subtracts amount from lot costs front-to-back, leaving
 // quantities alone, and reports the pieces taken in queue order — dated, so a
 // return of principal can be valued in another currency, and without units. A
-// lot giving nothing yields no piece. releaseRecorded ignores the report.
+// lot giving nothing yields no piece.
 func drainLotsCost(p *Position, amount int64) []ReleasedLot {
 	var pieces []ReleasedLot
 	for i := range p.Lots {

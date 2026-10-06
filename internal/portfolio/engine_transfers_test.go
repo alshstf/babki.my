@@ -2,9 +2,10 @@ package portfolio_test
 
 import (
 	"errors"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/portfolio/portfoliotest"
@@ -79,6 +80,31 @@ func piece(qty string, cost int64, dayN int) portfolio.ReleasedLot {
 	return portfolio.ReleasedLot{Quantity: d(qty), CostMinor: cost, AcquiredOn: dayp(dayN)}
 }
 
+// recordedOut is a transfer of qty out of the position before leaves, with the
+// breakdown CreateTransfer writes for it.
+func recordedOut(t *testing.T, before []portfolio.Operation, dayN int, qty string) portfolio.Operation {
+	t.Helper()
+	pieces, err := portfolio.ReleasedLots(before, sber, d(qty))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transferOut(dayN, qty, portfolio.LotsCost(pieces), pieces...)
+}
+
+// named gives o an id, so the lots it brings have numbers a breakdown can name.
+func named(o portfolio.Operation) portfolio.Operation {
+	o.ID = uuid.New()
+	return o
+}
+
+// pieceFrom is a piece of a departing leg's breakdown taken from the seq-th lot
+// that o brought.
+func pieceFrom(o portfolio.Operation, seq int, qty string, cost int64, dayN int) portfolio.ReleasedLot {
+	pc := piece(qty, cost, dayN)
+	pc.From = portfolio.LotID{Origin: "op/" + o.ID.String(), Seq: seq}
+	return pc
+}
+
 // transferIn builds a transfer_in on day dayN carrying the given breakdown.
 func transferIn(dayN int, qty string, amount int64, lots ...portfolio.ReleasedLot) portfolio.Operation {
 	o := op(portfolio.TypeTransferIn, dayN, &sber, qty, "", amount, 0)
@@ -99,10 +125,11 @@ func transferOut(dayN int, qty string, amount int64, lots ...portfolio.ReleasedL
 // one. Releasing by the queue put one lot on both accounts and lost the other
 // (200 000 of invented basis). The family's total is asserted.
 func TestTransferOutReleasesTheLotsItRecorded(t *testing.T) {
-	moved := piece("10", 300_000, 20)
+	buy := named(op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0))
+	moved := pieceFrom(buy, 0, "10", 300_000, 20)
 	source := []portfolio.Operation{
-		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
-		transferIn(21, "10", 100_000, piece("10", 100_000, 2)),
+		buy,
+		named(transferIn(21, "10", 100_000, piece("10", 100_000, 2))),
 		transferOut(22, "10", 300_000, moved),
 	}
 	destination := []portfolio.Operation{transferIn(22, "10", 300_000, moved)}
@@ -144,11 +171,11 @@ func TestTransferOutReleasesTheLotsItRecorded(t *testing.T) {
 // A breakdown naming half a lot leaves the other half, and a parcel ahead in
 // the queue untouched.
 func TestTransferOutTakesOnlyPartOfTheLotItRecorded(t *testing.T) {
-	moved := piece("5", 150_000, 20)
+	buy := named(op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0))
 	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
-		transferIn(21, "20", 200_000, piece("20", 200_000, 2)),
-		transferOut(22, "5", 150_000, moved),
+		buy,
+		named(transferIn(21, "20", 200_000, piece("20", 200_000, 2))),
+		transferOut(22, "5", 150_000, pieceFrom(buy, 0, "5", 150_000, 20)),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -194,67 +221,49 @@ func TestTransferOutWithoutBreakdownReleasesByTheQueue(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// A piece whose day has no shares left is refused: taking another day's lot
-// would re-date held shares, taking nothing would double the basis.
+// A piece is refused when the lot it names is gone, holds less than it took,
+// or was acquired on another day than it says: a record the journal
+// contradicts is not quietly replaced by a fresh guess.
 func TestTransferOutRefusesAParcelTheAccountDoesNotHold(t *testing.T) {
+	buy := named(op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0))
+	later := named(op(portfolio.TypeBuy, 21, &sber, "10", "", -100_000, 0))
 	for name, ops := range map[string][]portfolio.Operation{
-		"no lot was ever acquired on that day": {
-			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
-			transferOut(22, "10", 300_000, piece("10", 300_000, 5)),
+		"the named lot was never here": {
+			buy,
+			transferOut(22, "10", 300_000, pieceFrom(named(op(portfolio.TypeBuy, 20, &sber, "10", "", 0, 0)), 0, "10", 300_000, 20)),
 		},
 		// Enough shares overall, but a sale has eaten into the recorded parcel.
-		"the day is right but too little of it is left": {
-			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
-			op(portfolio.TypeBuy, 21, &sber, "10", "", -100_000, 0),
+		"a sale has eaten into the named lot": {
+			buy, later,
 			op(portfolio.TypeSell, 22, &sber, "4", "", 150_000, 0),
-			transferOut(23, "10", 300_000, piece("10", 300_000, 20)),
+			transferOut(23, "10", 300_000, pieceFrom(buy, 0, "10", 300_000, 20)),
 		},
-		"the piece knows no day and every lot does": {
-			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
-			transferOut(22, "10", 300_000, portfolio.ReleasedLot{Quantity: d("10"), CostMinor: 300_000}),
+		"the piece says another day": {
+			buy,
+			transferOut(22, "10", 300_000, pieceFrom(buy, 0, "10", 300_000, 5)),
+		},
+		"the piece names no lot": {
+			buy,
+			transferOut(22, "10", 300_000, piece("10", 300_000, 20)),
 		},
 	} {
 		_, err := portfolio.Compute(ops)
 		if !errors.Is(err, portfolio.ErrBadOperation) {
-			t.Errorf("%s: err = %v, want ErrBadOperation — a record the journal contradicts must not be quietly replaced by a fresh guess", name, err)
+			t.Errorf("%s: err = %v, want ErrBadOperation", name, err)
 			continue
 		}
-		checkNamesBothCausesAndTheWayOut(t, name, err)
+		checkNamesTheWayOut(t, name, err)
 	}
 }
 
-// checkNamesBothCausesAndTheWayOut pins the message: both causes (an edit, or
-// an earlier build's queue rule — the usual one) and the way out.
-func checkNamesBothCausesAndTheWayOut(t *testing.T, name string, err error) {
+// checkNamesTheWayOut pins the message: the cause and what to do about it.
+func checkNamesTheWayOut(t *testing.T, name string, err error) {
 	t.Helper()
-	for _, want := range []string{
-		"edited after the transfer was recorded", // the cause that may be true
-		"a different rule",                       // the cause that usually is
-		"record it again",                        // the way out, the same either way
-	} {
+	for _, want := range []string{"edited after", "record it again"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: error %q does not mention %q — it must name both possible causes, neither as a fact, and say what to do",
-				name, err, want)
+			t.Errorf("%s: error %q does not mention %q", name, err, want)
 		}
 	}
-}
-
-// The refusal on untouched data: an older build's arrival-ordered queue let a
-// day-22 sale take the day-20 parcel and the transfer record the day-2 one;
-// today's queue takes the day-2 parcel instead (#60 from the other side).
-func TestTransferOutRefusesAParcelAnEarlierQueueRuleRecorded(t *testing.T) {
-	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
-		transferIn(21, "10", 100_000, piece("10", 100_000, 2)),
-		op(portfolio.TypeSell, 22, &sber, "10", "", 150_000, 0),
-		transferOut(23, "10", 100_000, piece("10", 100_000, 2)),
-	}
-	_, err := portfolio.Compute(ops)
-	if !errors.Is(err, portfolio.ErrBadOperation) {
-		t.Fatalf("err = %v, want ErrBadOperation: the day-%s parcel this transfer recorded was consumed by the sale under today's queue rule",
-			err, day(2).Format("02"))
-	}
-	checkNamesBothCausesAndTheWayOut(t, "recorded under the arrival-order rule", err)
 }
 
 // Moving more than is held is an oversell, refused before matching with the
@@ -269,22 +278,19 @@ func TestTransferOutRefusesToMoveMoreThanTheAccountHolds(t *testing.T) {
 	}
 }
 
-// Basis a breakdown carries beyond its lots is drained from the queue's head,
-// and there must be that much: otherwise the basis would go negative
-// silently.
+// A piece moving more basis than its lot holds is refused: the basis would go
+// negative silently.
 func TestTransferOutRefusesABreakdownCarryingBasisTheAccountDoesNotHold(t *testing.T) {
-	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
-		transferOut(5, "10", 300_000, piece("10", 300_000, 2)),
-	}
+	buy := named(op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0))
+	ops := []portfolio.Operation{buy, transferOut(5, "10", 300_000, pieceFrom(buy, 0, "10", 300_000, 2))}
 	_, err := portfolio.Compute(ops)
 	if !errors.Is(err, portfolio.ErrBadOperation) {
-		t.Fatalf("err = %v, want ErrBadOperation: the breakdown moves 300000 out of an account that only ever held 100000", err)
+		t.Fatalf("err = %v, want ErrBadOperation: the breakdown moves 300000 out of a lot holding 100000", err)
 	}
-	if !strings.Contains(err.Error(), "200000") {
-		t.Errorf("error %q does not name the 200000 minor units that are nowhere on the account", err)
+	if !strings.Contains(err.Error(), "300000") || !strings.Contains(err.Error(), "100000") {
+		t.Errorf("error %q does not name what the piece took and what the lot holds", err)
 	}
-	checkNamesBothCausesAndTheWayOut(t, "more basis than the account holds", err)
+	checkNamesTheWayOut(t, "more basis than the lot holds", err)
 }
 
 // The departing leg checks the breakdown sums too: both legs read one set of
@@ -303,26 +309,23 @@ func TestTransferOutRefusesABreakdownThatDoesNotAddUp(t *testing.T) {
 	}
 }
 
-// A piece may carry more basis than its own lot holds — a shareless lot's
-// money folded in by operation.quantizeLots — and the excess must come from
-// that shareless lot, not from an untouched lot of the same day.
+// A lot a reverse split rounded to no shares still holds its money, and a
+// transfer releasing it takes that money as a piece of its own, naming the
+// lot: none comes from an untouched lot of the next day.
 //
 //	day 1: 3 units, 30 000 (rounded to no shares by the split)
-//	day 2: two lots; the piece takes one of them and carries the 30 000
+//	day 2: two lots; the transfer takes the shareless one and one of these
 func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
 	// 3e-11 rounds the day-1 lot away and leaves each day-2 lot with 3e-10.
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.00000000003")
-	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0),
-		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
-		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
+	before := []portfolio.Operation{
+		named(op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0)),
+		named(op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0)),
+		named(op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0)),
 		split,
-		// What CreateTransfer records for the first two lots: one piece dated by the
-		// first lot with shares, carrying the shareless lot's 30 000.
-		transferOut(4, "0.0000000003", 130_000, piece("0.0000000003", 130_000, 2)),
 	}
-	pos, err := portfolio.Compute(ops)
+	pos, err := portfolio.Compute(append(before, recordedOut(t, before, 4, "0.0000000003")))
 	if err != nil {
 		t.Fatalf("Compute: %v — this breakdown is one CreateTransfer itself writes; refusing it refuses healthy data", err)
 	}
@@ -341,24 +344,21 @@ func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// The same with the piece taking its lot only in part: clamping by the lot's
-// whole cost would take the 30 000 from the fraction's own parcel and leave the
-// shareless lot holding money the destination holds too. Totals would still
-// balance; only the parcels would be wrong.
+// The same with the transfer taking its lot only in part: the shareless lot's
+// 30 000 leaves with it, and two thirds of the next lot stay with two thirds of
+// its money.
 //
 //	day 1: 3 for 30 000; day 2: 10 for 900 000; reverse split; a third departs
 func TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot(t *testing.T) {
 	// 3e-11 leaves the day-1 lot with no shares and the day-2 lot with 3e-10.
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.00000000003")
-	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0),
-		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
+	before := []portfolio.Operation{
+		named(op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0)),
+		named(op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0)),
 		split,
-		// The record: the shareless 30 000 plus a third of 900 000, in one piece.
-		transferOut(4, "0.0000000001", 330_000, piece("0.0000000001", 330_000, 2)),
 	}
-	pos, err := portfolio.Compute(ops)
+	pos, err := portfolio.Compute(append(before, recordedOut(t, before, 4, "0.0000000001")))
 	if err != nil {
 		t.Fatalf("Compute: %v — this breakdown is one CreateTransfer itself writes", err)
 	}
@@ -377,13 +377,14 @@ func TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot(t *t
 	checkLotInvariants(t, p)
 }
 
-// Two same-day lots: each of two same-dated pieces finds its own lot; 15 of 20
-// move and 5 stay with their basis.
+// Two same-day lots: each piece takes from the lot it names; 15 of 20 move and
+// 5 stay with their basis.
 func TestTransferOutMatchesPiecesToLotsOfTheSameDay(t *testing.T) {
+	cheap := named(op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0))
+	dear := named(op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0))
 	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
-		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
-		transferOut(5, "15", 550_000, piece("10", 100_000, 2), piece("5", 450_000, 2)),
+		cheap, dear,
+		transferOut(5, "15", 550_000, pieceFrom(cheap, 0, "10", 100_000, 2), pieceFrom(dear, 0, "5", 450_000, 2)),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -405,10 +406,11 @@ func TestTransferOutMatchesPiecesToLotsOfTheSameDay(t *testing.T) {
 func TestBackdatedSplitLeavesTheSourceWithSharesAndNoBasis(t *testing.T) {
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("2")
+	buy := named(op(portfolio.TypeBuy, 1, &sber, "10", "", -300_000, 0))
 	ops := []portfolio.Operation{
-		op(portfolio.TypeBuy, 1, &sber, "10", "", -300_000, 0),
+		buy,
 		split, // entered later, dated before the transfer below
-		transferOut(5, "10", 300_000, piece("10", 300_000, 1)),
+		transferOut(5, "10", 300_000, pieceFrom(buy, 0, "10", 300_000, 1)),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -606,32 +608,5 @@ func TestReleasedCostHelper(t *testing.T) {
 	}
 	if _, err := portfolio.ReleasedCost(ops, sber, d("25")); !errors.Is(err, portfolio.ErrOversell) {
 		t.Errorf("oversell err = %v", err)
-	}
-}
-
-// Two same-day parcels at different prices are not interchangeable: when a
-// backdated sale took the cheap one, the record's five units are refused
-// rather than taken from the dear one at the cheap price (#197).
-func TestARecordedPieceIsNotTakenFromADearerParcelOfTheSameDay(t *testing.T) {
-	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_000, 0)
-	out.TransferLots = []portfolio.ReleasedLot{piece("5", 50_000, 2)}
-	buys := []portfolio.Operation{
-		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 0),
-		op(portfolio.TypeBuy, 2, &sber, "10", "900", -900_000, 0),
-	}
-
-	// As recorded, the journal replays: the piece is half of the cheap parcel.
-	if _, err := portfolio.Compute(append(slices.Clone(buys), out)); err != nil {
-		t.Fatalf("the journal the transfer was recorded against: %v", err)
-	}
-
-	// With the backdated sale underneath it, it must not.
-	sale := op(portfolio.TypeSell, 3, &sber, "10", "150", 150_000, 0)
-	_, err := portfolio.Compute(append(slices.Clone(buys), sale, out))
-	if !errors.Is(err, portfolio.ErrBadOperation) {
-		t.Fatalf("err = %v, want ErrBadOperation — the parcel the record names is gone", err)
-	}
-	if !strings.Contains(err.Error(), "50000") || !strings.Contains(err.Error(), "450000") {
-		t.Errorf("error %q does not name both figures, so it cannot be acted on", err)
 	}
 }

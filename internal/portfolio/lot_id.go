@@ -1,11 +1,6 @@
 package portfolio
 
-import (
-	"fmt"
-	"slices"
-
-	"github.com/shopspring/decimal"
-)
+import "fmt"
 
 // LotID is a lot's permanent number: the operation that brought it into the
 // account and the piece of that operation it is (0 for a purchase, i for the
@@ -44,42 +39,4 @@ func (o Operation) lotID(seq int) LotID {
 		return LotID{}
 	}
 	return LotID{Origin: origin, Seq: seq}
-}
-
-// NumberLegacyPieces names, for a breakdown recorded before lots had numbers,
-// the lot each piece came from, the way the day matching replays it: among the
-// lots of the piece's day, front to back. ok is false when a piece would take
-// from more than one lot or from none, or a lot has no number — the record is
-// then left to the day matching.
-func NumberLegacyPieces(lots []Lot, pieces []ReleasedLot) ([]ReleasedLot, bool) {
-	left := make([]decimal.Decimal, len(lots))
-	for i, l := range lots {
-		left[i] = l.Quantity
-	}
-	out := slices.Clone(pieces)
-	for k, pc := range pieces {
-		at := -1
-		for i, l := range lots {
-			if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
-				continue
-			}
-			if pc.Quantity.IsZero() {
-				if l.Quantity.IsZero() && l.CostMinor > 0 {
-					at = i
-					break
-				}
-				continue
-			}
-			if left[i].IsPositive() {
-				at = i
-				break
-			}
-		}
-		if at < 0 || lots[at].ID.IsZero() || pc.Quantity.GreaterThan(left[at]) {
-			return nil, false
-		}
-		left[at] = left[at].Sub(pc.Quantity)
-		out[k].From = lots[at].ID
-	}
-	return out, true
 }

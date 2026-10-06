@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,12 +30,15 @@ func spinoffLegs(dayN int, a, b *uuid.UUID, to string,
 // by the original purchases.
 func TestSpinoffLeavesTheUnitsAndMovesAShareOfTheMoney(t *testing.T) {
 	// 5 400 units at 0.0957 and 9 668 at 0.1028, in kopecks: 51 678 and 99 387.
-	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "5400", "0.0957", -51_678, 0)
-	buy2 := op(portfolio.TypeBuy, 3, &lkoh, "9668", "0.1028", -99_387, 0)
+	buy1 := named(op(portfolio.TypeBuy, 2, &lkoh, "5400", "0.0957", -51_678, 0))
+	buy2 := named(op(portfolio.TypeBuy, 3, &lkoh, "9668", "0.1028", -99_387, 0))
 
 	// A third moves: floor((51678+99387) × 0.3333333333) = 50 354, split 17 225 /
 	// 33 129 by largest remainders.
-	outLots := []portfolio.ReleasedLot{lot("5400", 17_225, 2), lot("9668", 33_129, 3)}
+	outLots := []portfolio.ReleasedLot{
+		takenFrom(buy1, lot("5400", 17_225, 2)),
+		takenFrom(buy2, lot("9668", 33_129, 3)),
+	}
 	inLots := []portfolio.ReleasedLot{lot("5400", 17_225, 2), lot("9668", 33_129, 3)}
 	out, in := spinoffLegs(5, &lkoh, &sber, "15068", outLots, inLots)
 
@@ -133,54 +137,57 @@ func TestSpinoffPiecesNameEveryParcelIncludingTheEmptyOnes(t *testing.T) {
 	}
 }
 
-// A purchase inserted before the spin-off's date is refused: the record no
-// longer describes the position.
-func TestSpinoffRefusesWhenTheJournalGrewAParcelUnderneathIt(t *testing.T) {
-	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
-	backdated := op(portfolio.TypeBuy, 3, &lkoh, "50", "10", -50_000, 0)
-	outLots := []portfolio.ReleasedLot{lot("100", 40_000, 2)}
-	out, in := spinoffLegs(5, &lkoh, &sber, "100", outLots, outLots)
+// A spin-off whose parcel replaying no longer holds, or holds dated
+// otherwise, is refused rather than taking the money from another parcel. A
+// parcel the record does not name keeps its basis
+// (TestASpinoffTakesBasisFromTheParcelsItNames).
+func TestSpinoffRefusesWhenItsParcelChangedUnderneathIt(t *testing.T) {
+	buy := named(op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0))
+	soldBefore := op(portfolio.TypeSell, 3, &lkoh, "100", "10", 100_000, 0)
 
-	_, err := portfolio.Compute([]portfolio.Operation{buy1, backdated, out, in})
-	if err == nil {
-		t.Fatal("a spin-off struck against one parcel was folded over a position that now holds two")
-	}
-	if !strings.Contains(err.Error(), "struck against 1 parcels") {
-		t.Errorf("error = %v, want it to name how many parcels the record and the replay disagree about", err)
-	}
-	if !strings.Contains(err.Error(), "delete the transfer and record it again") {
-		t.Errorf("error = %v, want it to name the way out", err)
-	}
-}
+	for name, c := range map[string]struct {
+		journal []portfolio.Operation
+		piece   portfolio.ReleasedLot
+		want    string
+	}{
+		"sold before it": {
+			journal: []portfolio.Operation{buy, soldBefore},
+			piece:   takenFrom(buy, lot("100", 40_000, 2)),
+			want:    "no longer holds",
+		},
+		"dated otherwise": {
+			journal: []portfolio.Operation{buy},
+			piece:   takenFrom(buy, lot("100", 40_000, 3)),
+			want:    "finds it acquired on 2026-07-02",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pieces := []portfolio.ReleasedLot{c.piece}
+			out, in := spinoffLegs(5, &lkoh, &sber, "100", pieces, pieces)
 
-// A parcel of a different size than recorded is refused.
-func TestSpinoffRefusesWhenAParcelChangedUnderneathIt(t *testing.T) {
-	buy := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
-	split := op(portfolio.TypeSplit, 3, &lkoh, "", "", 0, 0)
-	split.SplitRatio = dp("10")
-	outLots := []portfolio.ReleasedLot{lot("100", 40_000, 2)}
-	out, in := spinoffLegs(5, &lkoh, &sber, "100", outLots, outLots)
-
-	_, err := portfolio.Compute([]portfolio.Operation{buy, split, out, in})
-	if err == nil {
-		t.Fatal("a spin-off struck against 100 units was folded over a parcel of 1000")
-	}
-	if !strings.Contains(err.Error(), "names 100 units acquired") {
-		t.Errorf("error = %v, want it to name the units the record claims and the units replaying leaves", err)
+			_, err := portfolio.Compute(append(slices.Clone(c.journal), out, in))
+			if err == nil {
+				t.Fatal("a spin-off was folded over a parcel its record does not describe")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error = %v, want it to say %q", err, c.want)
+			}
+			checkNamesTheWayOut(t, name, err)
+		})
 	}
 }
 
 // A piece bigger than its parcel is refused.
 func TestSpinoffRefusesMovingMoreThanAParcelHolds(t *testing.T) {
-	buy := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
-	outLots := []portfolio.ReleasedLot{lot("100", 150_000, 2)}
+	buy := named(op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0))
+	outLots := []portfolio.ReleasedLot{takenFrom(buy, lot("100", 150_000, 2))}
 	out, in := spinoffLegs(5, &lkoh, &sber, "100", outLots, outLots)
 
 	_, err := portfolio.Compute([]portfolio.Operation{buy, out, in})
 	if err == nil {
 		t.Fatal("a spin-off moved more basis than the parcel it names holds")
 	}
-	if !strings.Contains(err.Error(), "moves 150000 minor of basis out of a parcel") {
+	if !strings.Contains(err.Error(), "moves 150000 minor of basis out of parcel") {
 		t.Errorf("error = %v, want it to name both figures", err)
 	}
 }
@@ -263,7 +270,7 @@ func TestSpinoffConservesBasisOverRandomJournals(t *testing.T) {
 		for i := 0; i < lots; i++ {
 			qty := decimal.NewFromInt(int64(rng.Intn(1000) + 1))
 			cost := int64(rng.Intn(1_000_000))
-			buy := op(portfolio.TypeBuy, i+1, &a, qty.String(), "1", -cost, 0)
+			buy := named(op(portfolio.TypeBuy, i+1, &a, qty.String(), "1", -cost, 0))
 			journal = append(journal, buy)
 		}
 		positions, err := portfolio.Compute(journal)

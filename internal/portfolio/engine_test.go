@@ -1245,8 +1245,7 @@ func TestEachDisposalGetsItsOwnRealization(t *testing.T) {
 func TestTransferOutRecordsNoRealization(t *testing.T) {
 	for name, ops := range map[string][]portfolio.Operation{
 		"with a recorded breakdown": {
-			op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
-			transferOut(5, "4", 40_000, piece("4", 40_000, 1)),
+			named(op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0)),
 		},
 		"without one": {
 			op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
@@ -1254,6 +1253,9 @@ func TestTransferOutRecordsNoRealization(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if len(ops) == 1 {
+				ops = append(ops, recordedOut(t, ops, 5, "4"))
+			}
 			pos, err := portfolio.Compute(ops)
 			if err != nil {
 				t.Fatalf("Compute: %v", err)
@@ -1357,7 +1359,7 @@ func TestRealizationMayNotKnowWhenItsBasisWasAcquired(t *testing.T) {
 // Seven realizations, none for the transfers.
 func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	var ops []portfolio.Operation
-	add := func(o portfolio.Operation) { ops = append(ops, o) }
+	add := func(o portfolio.Operation) { ops = append(ops, named(o)) }
 	split := func(dayN int, ratio string) portfolio.Operation {
 		o := op(portfolio.TypeSplit, dayN, &sber, "", "", 0, 0)
 		o.SplitRatio = dp(ratio)
@@ -1620,22 +1622,19 @@ func TestAPartialSaleLeavesAShareLessLotWaiting(t *testing.T) {
 }
 
 // A shareless piece in a transfer record is legitimate; both legs fold it
-// under its own day.
+// under its own lot and day.
 func TestATransferRecordNamesAShareLessParcelByItsOwnDay(t *testing.T) {
 	split := op(portfolio.TypeSplit, 2, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.0000000001")
+	early := named(op(portfolio.TypeBuy, 1, &sber, "0.4", "10", -400, 0))
+	late := named(op(portfolio.TypeBuy, 3, &sber, "5", "100", -50_000, 0))
 	pieces := []portfolio.ReleasedLot{
-		{Quantity: d("0"), CostMinor: 400, AcquiredOn: dayp(1)},
-		{Quantity: d("5"), CostMinor: 50_000, AcquiredOn: dayp(3)},
+		pieceFrom(early, 0, "0", 400, 1),
+		pieceFrom(late, 0, "5", 50_000, 3),
 	}
 	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_400, 0)
 	out.TransferLots = pieces
-	source, err := portfolio.Compute([]portfolio.Operation{
-		op(portfolio.TypeBuy, 1, &sber, "0.4", "10", -400, 0),
-		split,
-		op(portfolio.TypeBuy, 3, &sber, "5", "100", -50_000, 0),
-		out,
-	})
+	source, err := portfolio.Compute([]portfolio.Operation{early, split, late, out})
 	if err != nil {
 		t.Fatalf("source: %v", err)
 	}
