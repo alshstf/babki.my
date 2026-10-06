@@ -86,6 +86,7 @@ func (RefreshQuotesArgs) Kind() string { return "tinvest.refresh_quotes" }
 // quoteStore is the narrow view of marketdata.Store this worker needs.
 type quoteStore interface {
 	UpsertQuotes(ctx context.Context, quotes []marketdata.Quote) error
+	UpsertBondDays(ctx context.Context, days []marketdata.BondDay) error
 }
 
 type quotesWorker struct {
@@ -196,6 +197,7 @@ func (w *quotesWorker) priceConnection(ctx context.Context, conn Connection) (in
 
 	today := mskDay(w.now())
 	quotes := make([]marketdata.Quote, 0, len(prices))
+	var bonds []QuotableInstrument
 	for _, p := range prices {
 		listing, ok := byUID[p.InstrumentUID]
 		if !ok {
@@ -224,6 +226,9 @@ func (w *quotesWorker) priceConnection(ctx context.Context, conn Connection) (in
 			Currency:     listing.Currency,
 			Source:       quoteSource(p.Dealer),
 		})
+		if listing.Bond {
+			bonds = append(bonds, listing)
+		}
 	}
 	// Holdings nobody imported, priced by search; their failure does not
 	// cost the mapped prices already in hand.
@@ -236,7 +241,39 @@ func (w *quotesWorker) priceConnection(ctx context.Context, conn Connection) (in
 	if err := w.quotes.UpsertQuotes(ctx, quotes); err != nil {
 		return 0, err
 	}
+	if err := w.quotes.UpsertBondDays(ctx, w.bondDays(ctx, client, bonds, today)); err != nil {
+		return 0, err
+	}
 	return len(quotes), unmappedErr
+}
+
+// bondDays asks the broker for each priced bond's current nominal and accrued
+// interest, which its percentage price applies to. A bond the broker does not
+// answer for keeps whatever the exchange stated; its price stands either way.
+// The interest is kept only in the nominal's currency.
+func (w *quotesWorker) bondDays(ctx context.Context, client *Client, bonds []QuotableInstrument, today time.Time) []marketdata.BondDay {
+	var out []marketdata.BondDay
+	for _, b := range bonds {
+		nominal, accrued, err := client.BondTermsByUID(ctx, b.InstrumentUID)
+		if err != nil {
+			w.log.Warn("tinvest: the broker did not state a bond's nominal and accrued interest; its price stands without them",
+				"instrument_uid", b.InstrumentUID, "err", err)
+			continue
+		}
+		if !nominal.Decimal().IsPositive() {
+			// Redeemed: nothing left to value.
+			continue
+		}
+		day := marketdata.BondDay{
+			InstrumentID: b.InstrumentID, On: today, Face: nominal.Decimal(),
+			Currency: strings.ToUpper(nominal.Currency), Source: SourceExchange,
+		}
+		if a := accrued.Decimal(); strings.EqualFold(accrued.Currency, nominal.Currency) && !a.IsNegative() {
+			day.Accrued = &a
+		}
+		out = append(out, day)
+	}
+	return out
 }
 
 // unmappedSearchesPerRun bounds broker searches for hand-entered holdings,

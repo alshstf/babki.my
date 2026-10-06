@@ -436,13 +436,34 @@ func (c *Client) CurrencyNominalByUID(ctx context.Context, uid string) (MoneyVal
 	return nominal, nil
 }
 
+func (c *Client) bondBy(ctx context.Context, uid string) (wireBondResponse, error) {
+	var resp wireBondResponse
+	err := c.do(ctx, "InstrumentsService/BondBy", instrumentByRequest{IDType: instrumentIDTypeUID, ID: uid}, &resp)
+	return resp, err
+}
+
+// BondTermsByUID is a bond's current nominal and the coupon interest accrued
+// on it, as BondBy states them; a redeemed bond's nominal is 0.
+func (c *Client) BondTermsByUID(ctx context.Context, uid string) (nominal, accrued MoneyValue, err error) {
+	resp, err := c.bondBy(ctx, uid)
+	if err != nil {
+		return MoneyValue{}, MoneyValue{}, err
+	}
+	if nominal, err = resp.Instrument.Nominal.parse(); err != nil {
+		return MoneyValue{}, MoneyValue{}, fmt.Errorf("tinvest: InstrumentsService/BondBy: nominal: %w", err)
+	}
+	if accrued, err = resp.Instrument.AciValue.parse(); err != nil {
+		return MoneyValue{}, MoneyValue{}, fmt.Errorf("tinvest: InstrumentsService/BondBy: accrued interest: %w", err)
+	}
+	return nominal, accrued, nil
+}
+
 // BondNominalByUID calls BondBy and returns the bond's nominal, which
 // GetInstrumentBy lacks (live shape: "nominal" under "instrument", in the
 // sandbox).
 func (c *Client) BondNominalByUID(ctx context.Context, uid string) (MoneyValue, error) {
-	req := instrumentByRequest{IDType: instrumentIDTypeUID, ID: uid}
-	var resp wireBondResponse
-	if err := c.do(ctx, "InstrumentsService/BondBy", req, &resp); err != nil {
+	resp, err := c.bondBy(ctx, uid)
+	if err != nil {
 		return MoneyValue{}, err
 	}
 

@@ -43,7 +43,13 @@ type quotesFixture struct {
 // (their currency above all) are the assertion.
 type recordingQuotes struct {
 	stored []marketdata.Quote
+	bonds  []marketdata.BondDay
 	err    error
+}
+
+func (r *recordingQuotes) UpsertBondDays(_ context.Context, days []marketdata.BondDay) error {
+	r.bonds = append(r.bonds, days...)
+	return nil
 }
 
 func (r *recordingQuotes) UpsertQuotes(_ context.Context, quotes []marketdata.Quote) error {
@@ -559,5 +565,41 @@ func TestResolveListingPassesOverAListingInAnotherCurrency(t *testing.T) {
 	if _, _, _, ok, err := resolveListing(context.Background(), client, log,
 		UnmappedHeldInstrument{ISIN: "US1912161007", Ticker: "KO", Type: "share", Currency: "USD"}); ok || err != nil {
 		t.Errorf("no listing in dollars: ok=%v err=%v, want it left unpriced", ok, err)
+	}
+}
+
+// A bond's price is a percentage of its face, so the broker is also asked for
+// the current nominal and the interest accrued on it; a share is not.
+func TestQuotesWorkerStatesABondsNominalAndAccruedInterest(t *testing.T) {
+	f := newQuotesFixture(t)
+	bond, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeBond, Name: "Юаневая", Ticker: "CNYBOND", Currency: "CNY",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := f.instrument(t, "SBER", "RUB")
+	f.mapTo(t, "uid-bond", bond.ID, "CNY")
+	f.mapTo(t, "uid-sber", share.ID, "RUB")
+	f.broker.answer(rpcLastPrices, 200, lastPricesBody(
+		lastPrice("uid-bond", "98", 500000000, "2026-08-07T15:00:00Z", "LAST_PRICE_EXCHANGE"),
+		lastPrice("uid-sber", "300", 0, "2026-08-07T15:00:00Z", "LAST_PRICE_EXCHANGE")))
+	f.broker.answer("InstrumentsService/BondBy", 200,
+		`{"instrument":{"nominal":{"currency":"cny","units":"100","nano":0},"aciValue":{"currency":"cny","units":"1","nano":250000000}}}`)
+
+	if err := f.work(t); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if got := f.broker.callCount("InstrumentsService/BondBy"); got != 1 {
+		t.Errorf("BondBy asked %d times, want once — for the bond, not the share", got)
+	}
+	if len(f.quotes.bonds) != 1 {
+		t.Fatalf("bond days = %+v, want one", f.quotes.bonds)
+	}
+	d := f.quotes.bonds[0]
+	if d.InstrumentID != bond.ID || d.Currency != "CNY" || !d.Face.Equal(decimal.NewFromInt(100)) ||
+		d.Accrued == nil || d.Accrued.String() != "1.25" || !d.On.Equal(time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("bond day = %+v (accrued %v), want face 100 CNY, 1.25 accrued, on 2026-08-08", d, d.Accrued)
 	}
 }
