@@ -30,7 +30,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Only the last stage runs as arm64 (see the Dockerfile), so emulation
       # costs one `apk add`.
       - uses: docker/setup-qemu-action@v4
