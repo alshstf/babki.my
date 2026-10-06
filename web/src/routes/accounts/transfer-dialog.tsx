@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -27,6 +27,7 @@ import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 export function TransferDialog({
   open,
@@ -47,17 +48,14 @@ export function TransferDialog({
   const [occurredOn, setOccurredOn] = useState(localToday());
   const [note, setNote] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setInstrument(null);
-      setToAccountId("");
-      setQuantity("");
-      setOccurredOn(localToday());
-      setNote("");
-      createTransfer.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setInstrument(null);
+    setToAccountId("");
+    setQuantity("");
+    setOccurredOn(localToday());
+    setNote("");
+    createTransfer.reset();
+  });
 
   // A transfer only makes sense between two active brokerage accounts
   // (positions live there); the current account is excluded so the picker

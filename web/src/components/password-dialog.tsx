@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/api/operations";
 import { useChangePassword, useSignOutElsewhere } from "@/api/session";
+import { useOnOpen } from "@/lib/use-on-open";
 
 // The signed-in member's own password and sessions: a new password, which ends
 // every other session, and signing out everywhere else without changing it.
@@ -18,16 +19,13 @@ export function PasswordDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setCurrent("");
-      setPassword("");
-      setRepeat("");
-      change.reset();
-      elsewhere.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setCurrent("");
+    setPassword("");
+    setRepeat("");
+    change.reset();
+    elsewhere.reset();
+  });
 
   // The server's rule (family.MinPasswordRunes); the contract test holds the
   // two together.

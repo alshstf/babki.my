@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 import { isCurrencyCode } from "@/lib/currencies";
+import { useOnOpen } from "@/lib/use-on-open";
 
 // Money moved from this account to another of the family's: one transfer, a
 // withdrawal here and a deposit there. What arrives is what left unless the
@@ -39,20 +40,17 @@ export function MoneyTransferDialog({
   const [occurredOn, setOccurredOn] = useState(localToday());
   const [note, setNote] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setToAccountId("");
-      setAmount("");
-      setCurrency(account.currency);
-      setConverted(false);
-      setReceived("");
-      setReceivedCurrency("");
-      setOccurredOn(localToday());
-      setNote("");
-      transfer.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setToAccountId("");
+    setAmount("");
+    setCurrency(account.currency);
+    setConverted(false);
+    setReceived("");
+    setReceivedCurrency("");
+    setOccurredOn(localToday());
+    setNote("");
+    transfer.reset();
+  });
 
   const targets = (accounts.data ?? []).filter((a) => a.id !== account.id && a.status === "active");
   const target = targets.find((a) => a.id === toAccountId);

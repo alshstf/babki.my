@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -33,6 +33,7 @@ import {
 import type { AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
+import { useOnOpen } from "@/lib/use-on-open";
 
 // Cash-level journal entries: no instrument attribution, only a signed cash
 // effect on the account. The backend enforces the sign strictly per type
@@ -62,16 +63,13 @@ export function CashDialog({
   const [occurredOn, setOccurredOn] = useState(localToday());
   const [note, setNote] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setType(editing?.type ?? "deposit");
-      setAmount(editing ? minorToInput(editing.amount_minor) : "");
-      setOccurredOn(editing?.occurred_on ?? localToday());
-      setNote(editing?.note ?? "");
-      createOperation.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setType(editing?.type ?? "deposit");
+    setAmount(editing ? minorToInput(editing.amount_minor) : "");
+    setOccurredOn(editing?.occurred_on ?? localToday());
+    setNote(editing?.note ?? "");
+    createOperation.reset();
+  });
 
   const isCredit = CREDIT_TYPES.has(type);
   const parsed = parseToMinor(amount);

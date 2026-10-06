@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStateWithheld, type Operation } from "@/api/operations";
 import { formatMinor, formatPriceIn, minorToInput, parseToMinor } from "@/lib/money";
@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useOnOpen } from "@/lib/use-on-open";
 
 type Withheld = NonNullable<Operation["withheld_abroad"]>;
 
@@ -111,13 +112,10 @@ function WithheldDialog({
   const save = useStateWithheld(operation);
   const [tax, setTax] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setTax(withheld.tax_minor != null ? minorToInput(withheld.tax_minor) : "");
-      save.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => {
+    setTax(withheld.tax_minor != null ? minorToInput(withheld.tax_minor) : "");
+    save.reset();
+  });
 
   const parsed = parseToMinor(tax);
   const valid = parsed !== null && parsed >= 0;
