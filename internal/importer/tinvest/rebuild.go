@@ -418,9 +418,10 @@ func (r *Rebuilder) resolve(ctx context.Context, connID uuid.UUID, src passportS
 	ref := InstrumentRef{
 		InstrumentUID: row.InstrumentUID, FIGI: row.FIGI,
 		PositionUID: row.PositionUID, AssetUID: row.AssetUID,
-		// What the operation called the paper; used only when the broker has
-		// forgotten the instrument (Resolver.resolveOne).
-		Ticker: row.Ticker,
+		// What the operation called the paper and paid in; used only when the
+		// broker has forgotten the instrument (Resolver.resolveOne).
+		Ticker:   row.Ticker,
+		Currency: row.Currency,
 	}
 	if known, ok := resolutions[ref]; ok {
 		return &known, nil, nil

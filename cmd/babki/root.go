@@ -179,7 +179,10 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 		NewRebuilder: func() *tinvest.Rebuilder {
 			// Rates prove what a forgotten currency pair traded (see
 			// Resolver.currencyFromHint).
-			resolver := tinvest.NewResolver(store, instStore, r.log).WithRates(converter)
+			resolver := tinvest.NewResolver(store, instStore, r.log).WithRates(converter).
+				// A paper the broker forgot is created from the exchange's reference
+				// (Р-19).
+				WithExchange(faces)
 			// Repayment schedules measure partial repayments against outstanding
 			// face (Р-4).
 			return tinvest.NewRebuilder(store, resolver, operation.NewService(opStore), opStore, r.log).

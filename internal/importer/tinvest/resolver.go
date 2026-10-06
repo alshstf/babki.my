@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata/moex"
 	"babki.my/babki/internal/platform/currency"
 	"babki.my/babki/internal/platform/money"
 )
@@ -25,6 +26,9 @@ type InstrumentRef struct {
 	// Ticker is what the operation called the paper, used only when the broker
 	// has forgotten the instrument (see resolveOne).
 	Ticker string
+	// Currency is what the operation was paid in: the currency a paper the
+	// broker forgot is created in from the exchange's reference (fromExchange).
+	Currency string
 }
 
 // Resolved is what Resolve found: the catalog id, type and currency. Currency
@@ -117,6 +121,16 @@ type Resolver struct {
 	// rates proves what a forgotten currency pair trades (see
 	// ResolveCurrency); nil disables that fallback.
 	rates rateOracle
+	// exchange describes a paper the broker forgot (fromExchange); nil
+	// disables that fallback. unknownToExchange remembers its misses for the run.
+	exchange          exchangeReference
+	unknownToExchange map[string]bool
+}
+
+// exchangeReference is what the exchange still says about a paper by its
+// ISIN, traded or not.
+type exchangeReference interface {
+	RememberedByISIN(ctx context.Context, isin string) (moex.Security, bool, error)
 }
 
 // rateOracle is the official rate of one currency against another on a
@@ -134,8 +148,15 @@ func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Res
 	return &Resolver{
 		store: store, catalog: catalog, log: log,
 		passports: map[string]InstrumentBrief{}, currencies: map[string]TradedCurrency{},
-		forgotten: map[forgottenKey]error{},
+		forgotten: map[forgottenKey]error{}, unknownToExchange: map[string]bool{},
 	}
+}
+
+// WithExchange enables creating a paper the broker forgot from the
+// exchange's reference (decision Р-19, see fromExchange).
+func (r *Resolver) WithExchange(exchange exchangeReference) *Resolver {
+	r.exchange = exchange
+	return r
 }
 
 // WithRates enables working out a forgotten currency pair (see
@@ -196,11 +217,19 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 		// ISIN in the operation's ticker field ("IE00BD3QJN10", "RU000A101X68",
 		// the FinEx funds), and an exact catalog match by ISIN is proof. Not by
 		// figi: it is reissued per listing (TCS20A101X68 vs TCS33A101X68).
-		// Nothing is created: a paper the catalog does not know stays unresolved.
+		// A paper the catalog does not know is created from the exchange's
+		// reference, or stays unresolved.
 		if errors.Is(err, ErrInstrumentNotFound) && ref.Ticker != "" {
-			if inst, found, ferr := r.catalogByISIN(ctx, ref.Ticker); ferr != nil {
+			inst, found, ferr := r.catalogByISIN(ctx, ref.Ticker)
+			if ferr != nil {
 				return Resolved{}, "", "", "", ferr
-			} else if found {
+			}
+			if !found {
+				if inst, found, ferr = r.fromExchange(ctx, ref); ferr != nil {
+					return Resolved{}, "", "", "", ferr
+				}
+			}
+			if found {
 				return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency},
 					inst.ISIN, inst.Ticker, "", nil
 			}
@@ -224,6 +253,71 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 	// brief.Currency: the listing's currency, which a row found by ISIN may
 	// not share (one paper, two venues).
 	return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency}, inst.ISIN, inst.Ticker, brief.Currency, nil
+}
+
+// exchangeKinds maps the exchange reference's kind to the catalog's.
+var exchangeKinds = map[string]instrument.Type{
+	"share": instrument.TypeShare,
+	"bond":  instrument.TypeBond,
+	"etf":   instrument.TypeETF,
+}
+
+// fromExchange creates a paper the broker forgot from what the exchange still
+// says about it (decision Р-19): a receipt of a company that moved to Russia, a
+// fund wound up. Its full name, kind and ISIN are the exchange's; its currency
+// is the one the operation was paid in, since no board trades it any more.
+// Only an ISIN is asked about. An exchange that does not answer is not the
+// operation's fault: the row stays unresolved and the next sync asks again.
+func (r *Resolver) fromExchange(ctx context.Context, ref InstrumentRef) (instrument.Instrument, bool, error) {
+	if r.exchange == nil || ref.Currency == "" {
+		return instrument.Instrument{}, false, nil
+	}
+	isin, err := instrument.NormalizeISIN(ref.Ticker)
+	if err != nil || r.unknownToExchange[isin] {
+		return instrument.Instrument{}, false, nil
+	}
+	sec, found, err := r.exchange.RememberedByISIN(ctx, isin)
+	if err != nil {
+		r.log.Warn("tinvest: the exchange did not answer about a paper the broker forgot; it stays unresolved this run",
+			"isin", isin, "err", err)
+		r.unknownToExchange[isin] = true
+		return instrument.Instrument{}, false, nil
+	}
+	typ, held := exchangeKinds[sec.Kind]
+	if !found || !held {
+		r.unknownToExchange[isin] = true
+		return instrument.Instrument{}, false, nil
+	}
+	inst := instrument.Instrument{
+		Type: typ, Name: sec.Name, Ticker: sec.SecID, ISIN: sec.ISIN, Currency: strings.ToUpper(ref.Currency),
+	}
+	if typ == instrument.TypeBond {
+		face := sec.FaceValue.Mul(minorScale)
+		if !face.IsPositive() || !face.IsInteger() || sec.FaceCurrency == "" {
+			r.log.Warn("tinvest: the exchange names no usable face value for a bond the broker forgot; it stays unresolved",
+				"isin", isin, "face", sec.FaceValue, "face_currency", sec.FaceCurrency)
+			r.unknownToExchange[isin] = true
+			return instrument.Instrument{}, false, nil
+		}
+		faceMinor, faceCurrency := face.IntPart(), sec.FaceCurrency
+		inst.FaceValueMinor, inst.FaceCurrency = &faceMinor, &faceCurrency
+	}
+	created, err := r.catalog.Create(ctx, inst)
+	if errors.Is(err, instrument.ErrISINTaken) {
+		// Another writer created it first; the ISIN is the identity.
+		return r.catalogByISIN(ctx, isin)
+	}
+	if err != nil {
+		r.log.Warn("tinvest: creating a paper the broker forgot from the exchange's reference failed; it stays unresolved",
+			"isin", isin, "ticker", sec.SecID, "err", err)
+		r.unknownToExchange[isin] = true
+		return instrument.Instrument{}, false, nil
+	}
+	// Info, as createInstrument: a row added to the shared catalog.
+	r.log.Info("tinvest: created a catalog row for a paper the broker forgot, from the exchange's reference",
+		"instrument_id", created.ID, "type", created.Type, "ticker", created.Ticker,
+		"isin", created.ISIN, "currency", created.Currency)
+	return created, true, nil
 }
 
 // lookupMap is step 1: instrument_uid, then figi.
