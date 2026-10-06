@@ -65,9 +65,6 @@ const (
 	NoticeNotTaxed CostBasisNotice = "not_taxed"
 	// NoticeUnknownCountry: no row, so nothing is claimed about the country.
 	NoticeUnknownCountry CostBasisNotice = "unknown_country"
-	// NoticeUnverifiedRule: the row's method and perimeter are an assumption by
-	// analogy, not a rule found in the law (KZ). Supported must not affirm it.
-	NoticeUnverifiedRule CostBasisNotice = "unverified_rule"
 )
 
 // TaxRules is one country's row. It is comparable, so a test can check an
@@ -79,9 +76,6 @@ type TaxRules struct {
 	// CapitalGainsTaxed is false where individuals' capital gains are untaxed. It
 	// feeds the notices rather than being published.
 	CapitalGainsTaxed bool
-	// NormUnverified marks a row whose method and perimeter were not traced to a
-	// norm. See NoticeUnverifiedRule.
-	NormUnverified bool
 }
 
 // DefaultTaxResidency is a space's residency unless set otherwise, and what
@@ -106,11 +100,12 @@ var taxRules = map[string]TaxRules{
 	// 2025-05-14).
 	"DE": {Country: "DE", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true},
 
-	// Kazakhstan. Gains are taxed at 10% with exchange-list and three-year
-	// reliefs, but no mandatory method was found (research 2026-07, rechecked).
-	// fifo/account is an analogy, no norm is cited, and NormUnverified marks it.
-	// Replace when a cited method is found.
-	"KZ": {Country: "KZ", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, NormUnverified: true},
+	// Kazakhstan. Налоговый кодекс 2025 года (in force from 2026-01-01), ст. 387
+	// п. 6: a unit sold costs what the securities «поступивших первыми по
+	// времени» cost — FIFO, mandatory, over everything the owner holds, with no
+	// per-account limit. A cost with no documents behind it is zero there, as
+	// here.
+	"KZ": {Country: "KZ", Method: MethodFIFO, Perimeter: PerimeterOwner, CapitalGainsTaxed: true},
 
 	// United States. 26 CFR 1.1012-1(c)(1)(i): FIFO by default (specific
 	// identification permitted); the row records the default. Per account: 26 USC
@@ -130,8 +125,9 @@ var taxRules = map[string]TaxRules{
 	// "correct" it to fifo/account.
 	"AU": {Country: "AU", Method: MethodSpecificLot, Perimeter: PerimeterNotApplicable, CapitalGainsTaxed: true},
 
-	// Netherlands. Individuals' capital gains on securities are not taxed
-	// (research 2026-07).
+	// Netherlands. Individuals' capital gains on securities are not taxed as
+	// such (research 2026-07): wealth is taxed on a deemed return (box 3), which
+	// a regime of actual returns is planned to replace from 2028.
 	"NL": {Country: "NL", Method: MethodNotApplicable, Perimeter: PerimeterNotApplicable, CapitalGainsTaxed: false},
 
 	// Switzerland. A private investor's capital gains are exempt (research
@@ -185,8 +181,8 @@ func (r TaxRules) Supported() bool { return len(r.Notices()) == 0 }
 
 // Notices lists every way the computation fails to answer for the country.
 // All of them are returned (GB diverges in method and perimeter). An unknown
-// country claims nothing and an untaxed one has no method to diverge from;
-// NormUnverified is independent of both. Never nil, so JSON gets [].
+// country claims nothing and an untaxed one has no method to diverge from.
+// Never nil, so JSON gets [].
 func (r TaxRules) Notices() []CostBasisNotice {
 	if r.Method == MethodUnknown || r.Perimeter == PerimeterUnknown {
 		return []CostBasisNotice{NoticeUnknownCountry}
@@ -204,9 +200,6 @@ func (r TaxRules) Notices() []CostBasisNotice {
 		// No queue, no perimeter to get wrong; the method notice already covers it.
 	default:
 		out = append(out, NoticePerimeterMismatch)
-	}
-	if r.NormUnverified {
-		out = append(out, NoticeUnverifiedRule)
 	}
 	return out
 }
