@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // A name and an institution are bounded in characters, not bytes: a hundred
@@ -17,7 +18,7 @@ func TestAccountTextsAreBoundedInCharacters(t *testing.T) {
 	full := strings.Repeat("ж", account.MaxNameRunes)
 	over := full + "ж"
 
-	if resp := do(t, c, "POST", url+"/api/v1/accounts",
+	if resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"`+full+`","type":"cash","currency":"RUB","institution":"`+strings.Repeat("ж", account.MaxInstitutionRunes)+`"}`); resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("a name and an institution at their ceilings: %d %s", resp.StatusCode, body)
@@ -26,7 +27,7 @@ func TestAccountTextsAreBoundedInCharacters(t *testing.T) {
 		"name":        `{"name":"` + over + `","type":"cash","currency":"RUB"}`,
 		"institution": `{"name":"Счёт","type":"cash","currency":"RUB","institution":"` + strings.Repeat("ж", account.MaxInstitutionRunes+1) + `"}`,
 	} {
-		if resp := do(t, c, "POST", url+"/api/v1/accounts", body); resp.StatusCode != http.StatusBadRequest {
+		if resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts", body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("create with a %s one character too long = %d, want 400", name, resp.StatusCode)
 		}
 	}
@@ -36,11 +37,11 @@ func TestAccountTextsAreBoundedInCharacters(t *testing.T) {
 		"name":        `{"name":"` + over + `"}`,
 		"institution": `{"institution":"` + strings.Repeat("ж", account.MaxInstitutionRunes+1) + `"}`,
 	} {
-		if resp := do(t, c, "PATCH", url+"/api/v1/accounts/"+id, body); resp.StatusCode != http.StatusBadRequest {
+		if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+id, body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("rename with a %s one character too long = %d, want 400", name, resp.StatusCode)
 		}
 	}
-	if resp := do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"name":"`+full+`"}`); resp.StatusCode != http.StatusOK {
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"name":"`+full+`"}`); resp.StatusCode != http.StatusOK {
 		t.Errorf("rename to a name at the ceiling = %d, want 200", resp.StatusCode)
 	}
 }
@@ -49,7 +50,7 @@ func TestAccountTextsAreBoundedInCharacters(t *testing.T) {
 // refuses one too; bringing the account back from the archive opens it again.
 func TestArchivedAccountTakesNoBalanceMark(t *testing.T) {
 	url, c, id := newBoundedAccount(t)
-	if resp := do(t, c, "DELETE", url+"/api/v1/accounts/"+id, ""); resp.StatusCode != http.StatusNoContent {
+	if resp := apitest.Do(t, c, "DELETE", url+"/api/v1/accounts/"+id, ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("archive = %d", resp.StatusCode)
 	}
 	resp := putBalance(t, url, c, id, 100)
@@ -58,7 +59,7 @@ func TestArchivedAccountTakesNoBalanceMark(t *testing.T) {
 		t.Errorf("balance on an archived account = %d %s, want 400 naming the archive", resp.StatusCode, body)
 	}
 
-	if resp := do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"status":"active"}`); resp.StatusCode != http.StatusOK {
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+id, `{"status":"active"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("bring back = %d", resp.StatusCode)
 	}
 	if resp := putBalance(t, url, c, id, 100); resp.StatusCode != http.StatusOK {

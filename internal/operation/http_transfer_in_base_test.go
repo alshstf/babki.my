@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // positionInBase mirrors the part of apitypes.PositionInBase these tests read.
@@ -29,7 +30,7 @@ type positionItem struct {
 // listPositions fetches GET .../positions and decodes it.
 func listPositions(t *testing.T, url string, c *http.Client, accountID string) []positionItem {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("list positions = %d: %s", resp.StatusCode, b)
@@ -37,7 +38,7 @@ func listPositions(t *testing.T, url string, c *http.Client, accountID string) [
 	var out struct {
 		Positions []positionItem `json:"positions"`
 	}
-	decodeJSON(t, resp, &out)
+	apitest.Decode(t, resp, &out)
 	return out.Positions
 }
 
@@ -69,7 +70,7 @@ func TestTransferInBaseMatchesThePositionItProduces(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -77,7 +78,7 @@ func TestTransferInBaseMatchesThePositionItProduces(t *testing.T) {
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	const wantBase = int64(11_800_000)
 	const collapsed = int64(14_915_000)
@@ -137,7 +138,7 @@ func TestTransferWithoutBreakdownHasNoRubleEquivalentEither(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-05-13","quantity":"10","price":"180","amount_minor":-180000,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20","cost_minor":190000}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -145,7 +146,7 @@ func TestTransferWithoutBreakdownHasNoRubleEquivalentEither(t *testing.T) {
 		t.Fatalf("transfer with a manual basis = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
 	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
@@ -183,7 +184,7 @@ func TestBothTransferLegsConvertAtThePurchaseDates(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -191,7 +192,7 @@ func TestBothTransferLegsConvertAtThePurchaseDates(t *testing.T) {
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	const wantBase = int64(11_800_000)
 	const collapsed = int64(14_915_000)
@@ -244,7 +245,7 @@ func TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate(t *testing.T) 
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -252,7 +253,7 @@ func TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate(t *testing.T) 
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
 	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
@@ -291,7 +292,7 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -299,7 +300,7 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	inID, err := uuid.Parse(pair.In.ID)
 	if err != nil {
 		t.Fatalf("parse transfer_in id: %v", err)
@@ -371,7 +372,7 @@ func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-03-01","quantity":"5","price":"100","amount_minor":-50000,"currency":"USD"}`, b, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"5","occurred_on":"2026-04-01","cost_minor":70000}`,
 		a, b, tsla))
 	if resp.StatusCode != 201 {
@@ -379,7 +380,7 @@ func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
 		t.Fatalf("transfer A->B with a manual basis = %d: %s", resp.StatusCode, body)
 	}
 
-	resp2 := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp2 := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		b, dest, tsla))
 	if resp2.StatusCode != 201 {
@@ -387,7 +388,7 @@ func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
 		t.Fatalf("transfer B->C of the mixed parcel = %d: %s", resp2.StatusCode, body)
 	}
 	var pair transferResp
-	decodeJSON(t, resp2, &pair)
+	apitest.Decode(t, resp2, &pair)
 
 	if pair.Out.AmountMinor != 120_000 {
 		t.Fatalf("transfer_out amount_minor = %d, want 120000 (50000 dated + 70000 undated) — the fixture assumption the rest of this test rests on",
@@ -444,7 +445,7 @@ func TestTransferInBaseRoundsOnceForTheWholeAmount(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2019-03-02","quantity":"8","price":"119.89","amount_minor":-95912,"currency":"USD"}`, from, tsla))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"22","occurred_on":"2019-03-10"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -452,7 +453,7 @@ func TestTransferInBaseRoundsOnceForTheWholeAmount(t *testing.T) {
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	const wantSummedThenRounded = int64(17699474)
 	const roundedEachTermFirst = int64(17699475)

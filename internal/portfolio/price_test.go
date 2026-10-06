@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -40,7 +41,7 @@ func TestAPriceStatedByHandValuesAPaperNobodyQuotes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		decodeJSON(t, resp, &got)
+		apitest.Decode(t, resp, &got)
 		return got.Positions[0]
 	}
 	if p := position(); p["market_value_minor"] != nil || p["market_value_gap"] != "no_quote" {

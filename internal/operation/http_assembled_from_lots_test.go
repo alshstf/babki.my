@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // assembled_from_lots is published even when in_base is null because the
@@ -21,7 +23,7 @@ func TestAssembledFromLotsSurvivesWhenTheOperationIsAlreadyInTheBaseCurrency(t *
 	buy := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-05-13","quantity":"10","price":"250","amount_minor":-250000,"currency":"RUB"}`, from, sber))
 
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, sber))
 	if resp.StatusCode != 201 {
@@ -29,7 +31,7 @@ func TestAssembledFromLotsSurvivesWhenTheOperationIsAlreadyInTheBaseCurrency(t *
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	// True on the transfer response itself, which carries no in_base.
 	if !pair.Out.AssembledFromLots || !pair.In.AssembledFromLots {

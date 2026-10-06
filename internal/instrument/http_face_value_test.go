@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -53,7 +54,7 @@ func faceBondOnlyRule(instrumentType string) string {
 // mkBond creates an ordinary bond with a sound face value and returns its id.
 func mkBond(t *testing.T, url string, c *http.Client) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/instruments",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"bond","name":"ОФЗ 26238","ticker":"SU26238RMFS4","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
@@ -77,7 +78,7 @@ type facePair struct {
 // from one that wrote first.
 func readFacePair(t *testing.T, url string, c *http.Client, id string) facePair {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/instruments", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/instruments", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list instruments = %d", resp.StatusCode)
 	}
@@ -103,12 +104,12 @@ func TestCreateRefusesAFaceValueThatIsNotAValue(t *testing.T) {
 	url, c := newAPI(t)
 
 	// Zero prices the whole holding at nothing.
-	wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+	wantFaceRefusal(t, apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"bond","name":"X","currency":"RUB","face_value_minor":0,"face_currency":"RUB"}`),
 		facePositiveRule, "create with a face value of zero")
 
 	// And negative, which would price the holding below nothing.
-	wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+	wantFaceRefusal(t, apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"bond","name":"X","currency":"RUB","face_value_minor":-100000,"face_currency":"RUB"}`),
 		facePositiveRule, "create with a negative face value")
 }
@@ -117,7 +118,7 @@ func TestCreateRefusesAFaceValueThatIsNotAValue(t *testing.T) {
 func TestCreateTakesTheSmallestRealFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/instruments",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"bond","name":"Однокопеечная","currency":"RUB","face_value_minor":1,"face_currency":"RUB"}`)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
@@ -129,7 +130,7 @@ func TestCreateTakesTheSmallestRealFaceValue(t *testing.T) {
 func TestCreateTakesTheLargestRealFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/instruments",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		fmt.Sprintf(`{"type":"bond","name":"Крупный номинал","currency":"RUB","face_value_minor":%d,"face_currency":"RUB"}`,
 			money.MaxAmountMinor))
 	if resp.StatusCode != http.StatusCreated {
@@ -150,7 +151,7 @@ func TestCreateRefusesAFaceValueTooLarge(t *testing.T) {
 		{"create with a face value one minor unit past the cap", money.MaxAmountMinor + 1},
 		{"create with a face value of math.MaxInt64", math.MaxInt64},
 	} {
-		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+		wantFaceRefusal(t, apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 			fmt.Sprintf(`{"type":"bond","name":"X","currency":"RUB","face_value_minor":%d,"face_currency":"RUB"}`, tc.value)),
 			faceTooLargeRule, tc.what)
 	}
@@ -161,7 +162,7 @@ func TestUpdateRefusesAFaceValueTooLarge(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
 
-	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		fmt.Sprintf(`{"face_value_minor":%d,"face_currency":"RUB"}`, money.MaxAmountMinor+1)),
 		faceTooLargeRule, "update to a face value one minor unit past the cap")
 
@@ -183,7 +184,7 @@ func TestCreateStillTakesAnInstrumentWithNoFaceValue(t *testing.T) {
 		`{"type":"crypto","name":"Bitcoin","currency":"USD"}`,
 		`{"type":"etf","name":"Фонд","currency":"RUB","face_value_minor":null,"face_currency":null}`,
 	} {
-		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != http.StatusCreated {
+		if resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != http.StatusCreated {
 			b, _ := io.ReadAll(resp.Body)
 			t.Errorf("create %s = %d, want 201: %s", body, resp.StatusCode, b)
 		}
@@ -202,7 +203,7 @@ func TestCreateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
 		{"create with a currency name rather than a code", `"RUBLE"`},
 		{"create with a face currency of blanks", `"   "`},
 	} {
-		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+		wantFaceRefusal(t, apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 			`{"type":"bond","name":"X","currency":"RUB","face_value_minor":100000,"face_currency":`+tc.currency+`}`),
 			faceCurrencyRule, tc.what)
 	}
@@ -218,7 +219,7 @@ func TestUpdateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
 		{"update to an empty face currency", `""`},
 		{"update to a lowercase face currency", `"usd"`},
 	} {
-		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+		wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 			`{"face_value_minor":200000,"face_currency":`+tc.currency+`}`),
 			faceCurrencyRule, tc.what)
 	}
@@ -244,7 +245,7 @@ func TestUpdateRefusesToBreakThePair(t *testing.T) {
 		{"change the value alone", `{"face_value_minor":200000}`},
 		{"change the currency alone", `{"face_currency":"USD"}`},
 	} {
-		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
+		wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
 			faceMentionRule, tc.what)
 	}
 
@@ -253,7 +254,7 @@ func TestUpdateRefusesToBreakThePair(t *testing.T) {
 		{"null the value while naming a currency", `{"face_value_minor":null,"face_currency":"USD"}`},
 		{"null the currency while naming a value", `{"face_value_minor":200000,"face_currency":null}`},
 	} {
-		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
+		wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
 			facePairRule, tc.what)
 	}
 
@@ -273,7 +274,7 @@ func TestUpdateRefusesAFaceValueThatIsNotAValue(t *testing.T) {
 		{"update to a face value of zero", `{"face_value_minor":0,"face_currency":"RUB"}`},
 		{"update to a negative face value", `{"face_value_minor":-1,"face_currency":"RUB"}`},
 	} {
-		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
+		wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
 			facePositiveRule, tc.what)
 	}
 
@@ -289,7 +290,7 @@ func TestUpdateTakesBothHalvesTogether(t *testing.T) {
 	id := mkBond(t, url, c)
 
 	// Both changed at once.
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":200000,"face_currency":"USD"}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("patch both halves = %d, want 200: %s", resp.StatusCode, b)
@@ -301,7 +302,7 @@ func TestUpdateTakesBothHalvesTogether(t *testing.T) {
 	}
 
 	// Both cleared at once is accepted.
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":null,"face_currency":null}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("patch both halves to null = %d, want 200: %s", resp.StatusCode, b)
@@ -316,7 +317,7 @@ func TestUpdateOfSomethingElseLeavesThePairAlone(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
 
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"name":"ОФЗ 26238 (переименована)","frozen":true}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("patch of another field = %d, want 200: %s", resp.StatusCode, b)
@@ -336,7 +337,7 @@ func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	url, c := newAPI(t)
 
 	for _, kind := range []string{"share", "etf", "currency", "crypto", "metal", "custom"} {
-		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+		wantFaceRefusal(t, apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 			fmt.Sprintf(`{"type":%q,"name":"X","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`, kind)),
 			faceBondOnlyRule(kind), "create a "+kind+" carrying a face value")
 	}
@@ -347,7 +348,7 @@ func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 		{"create a share with a face value alone", `{"type":"share","name":"X","currency":"RUB","face_value_minor":100000}`},
 		{"create a share with a face currency alone", `{"type":"share","name":"X","currency":"RUB","face_currency":"RUB"}`},
 	} {
-		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments", tc.body),
+		wantFaceRefusal(t, apitest.Do(t, c, "POST", url+"/api/v1/instruments", tc.body),
 			faceBondOnlyRule("share"), tc.what)
 	}
 }
@@ -355,7 +356,7 @@ func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 // mkShare creates an ordinary share carrying no face value and returns its id.
 func mkShare(t *testing.T, url string, c *http.Client) string {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/instruments",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
@@ -376,7 +377,7 @@ func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkShare(t, url, c)
 
-	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":100000,"face_currency":"RUB"}`),
 		faceBondOnlyRule("share"), "patch a face value onto a share")
 
@@ -387,7 +388,7 @@ func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 
 	// Half a pair on a share pins the order of the checks: the type rule answers
 	// before the mention rule.
-	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	wantFaceRefusal(t, apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":100000}`),
 		faceBondOnlyRule("share"), "patch a face value alone onto a share")
 
@@ -414,7 +415,7 @@ func TestUpdateStillClearsAFaceValueRecordedBeforeTheRule(t *testing.T) {
 		t.Fatalf("seed the pre-existing row: %v", err)
 	}
 
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
 		`{"face_value_minor":null,"face_currency":null}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("clear the pair on a share = %d, want 200: %s", resp.StatusCode, b)
@@ -424,7 +425,7 @@ func TestUpdateStillClearsAFaceValueRecordedBeforeTheRule(t *testing.T) {
 	}
 
 	// Other fields of such a row stay editable.
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
 		`{"name":"Переименована"}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("patch another field of such a row = %d, want 200: %s", resp.StatusCode, b)
@@ -436,7 +437,7 @@ func TestUpdateOfABondsFaceValueIsUnaffected(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
 
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":200000,"face_currency":"USD"}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("patch a bond's face pair = %d, want 200: %s", resp.StatusCode, b)
@@ -452,7 +453,7 @@ func TestUpdateOfABondsFaceValueIsUnaffected(t *testing.T) {
 func TestUpdateOfAMissingInstrumentIsStill404(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+uuid.NewString(),
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+uuid.NewString(),
 		`{"face_value_minor":100000,"face_currency":"RUB"}`)
 	if resp.StatusCode != http.StatusNotFound {
 		b, _ := io.ReadAll(resp.Body)

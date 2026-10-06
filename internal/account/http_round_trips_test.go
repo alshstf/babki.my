@@ -7,10 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
-	"net/http/httptest"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +17,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -57,17 +55,8 @@ func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *ratetest.Counting) (st
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	account.NewHandler(account.NewStore(pool), famStore, conv, nil, auth, sm).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, client
+	base, client := apitest.Serve(t, srv.Handler())
+	return base, client
 }
 
 // accountsFixture builds two accounts in each of the first `currencies`
@@ -119,7 +108,7 @@ func getScreen(t *testing.T, url, path string, c *http.Client, pool *pgxpool.Poo
 	conv.Reset()
 	before := poolTrips(pool)
 
-	resp := do(t, c, "GET", url+path, "")
+	resp := apitest.Do(t, c, "GET", url+path, "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET %s = %d, want 200: %s", path, resp.StatusCode, b)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // A hand-made catalog row's name, ticker and FIGI are bounded in characters,
@@ -16,7 +17,7 @@ func TestAnInstrumentsTextsHaveACeiling(t *testing.T) {
 	ticker := strings.Repeat("Ж", instrument.MaxTickerRunes)
 	figi := strings.Repeat("Ж", instrument.MaxFIGIRunes)
 	create := func(name, ticker, figi string) *http.Response {
-		return do(t, c, "POST", url+"/api/v1/instruments",
+		return apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 			`{"type":"share","name":"`+name+`","ticker":"`+ticker+`","figi":"`+figi+`","currency":"RUB"}`)
 	}
 
@@ -40,7 +41,7 @@ func TestAnInstrumentsTextsHaveACeiling(t *testing.T) {
 		"ticker": `{"ticker":"` + ticker + `Ж"}`,
 		"figi":   `{"figi":"` + figi + `Ж"}`,
 	} {
-		if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id, body); resp.StatusCode != http.StatusBadRequest {
+		if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+id, body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("update with a %s one character too long = %d, want 400", field, resp.StatusCode)
 		}
 	}

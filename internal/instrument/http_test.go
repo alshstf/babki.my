@@ -7,13 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	neturl "net/url"
-	"strings"
 	"testing"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -40,34 +39,8 @@ func newAPIWithCatalog(t *testing.T) (string, *http.Client, *instrument.Store) {
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	instrument.NewHandler(store, auth, sm).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, client, store
-}
-
-func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
-	t.Helper()
-	var rd io.Reader
-	if body != "" {
-		rd = strings.NewReader(body)
-	}
-	req, _ := http.NewRequest(method, url, rd)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
-	}
-	return resp
+	base, client := apitest.Serve(t, srv.Handler())
+	return base, client, store
 }
 
 // catalogPage is the GET /api/v1/instruments envelope, decoded by hand so
@@ -82,7 +55,7 @@ type catalogPage struct {
 
 func searchCatalog(t *testing.T, c *http.Client, url string) catalogPage {
 	t.Helper()
-	resp := do(t, c, "GET", url, "")
+	resp := apitest.Do(t, c, "GET", url, "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET %s = %d, want 200: %s", url, resp.StatusCode, b)
@@ -98,7 +71,7 @@ func TestInstrumentsCatalog(t *testing.T) {
 	url, c := newAPI(t)
 
 	// create a bond with paired face fields
-	resp := do(t, c, "POST", url+"/api/v1/instruments",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"bond","name":"ОФЗ 26238","ticker":"SU26238RMFS4","isin":"RU000A1038V6","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
@@ -118,7 +91,7 @@ func TestInstrumentsCatalog(t *testing.T) {
 	}
 
 	// create a share with a Cyrillic name and no face fields
-	resp = do(t, c, "POST", url+"/api/v1/instruments",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
@@ -152,7 +125,7 @@ func TestInstrumentsCatalog(t *testing.T) {
 	}
 
 	// patch: freeze the bond
-	resp = do(t, c, "PATCH", url+"/api/v1/instruments/"+bond.ID, `{"frozen":true}`)
+	resp = apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+bond.ID, `{"frozen":true}`)
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("patch frozen = %d: %s", resp.StatusCode, b)
@@ -166,7 +139,7 @@ func TestInstrumentsCatalog(t *testing.T) {
 	}
 
 	// patch: empty name is rejected
-	if resp = do(t, c, "PATCH", url+"/api/v1/instruments/"+bond.ID, `{"name":""}`); resp.StatusCode != 400 {
+	if resp = apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+bond.ID, `{"name":""}`); resp.StatusCode != 400 {
 		t.Errorf("patch empty name = %d, want 400", resp.StatusCode)
 	}
 
@@ -178,26 +151,26 @@ func TestInstrumentsCatalog(t *testing.T) {
 		`{"type":"bond","name":"X","currency":"RUB","face_value_minor":1}`,  // face value without currency
 		`{"type":"bond","name":"X","currency":"RUB","face_currency":"RUB"}`, // face currency without value
 	} {
-		if resp = do(t, c, "POST", url+"/api/v1/instruments", bad); resp.StatusCode != 400 {
+		if resp = apitest.Do(t, c, "POST", url+"/api/v1/instruments", bad); resp.StatusCode != 400 {
 			t.Errorf("create %s = %d, want 400", bad, resp.StatusCode)
 		}
 	}
 
 	// viewer can search but cannot write
-	if resp = do(t, c, "POST", url+"/api/v1/members",
+	if resp = apitest.Do(t, c, "POST", url+"/api/v1/members",
 		`{"username":"vera","display_name":"V","password":"password9","role":"viewer"}`); resp.StatusCode != 201 {
 		t.Fatalf("create viewer = %d", resp.StatusCode)
 	}
 	jar, _ := cookiejar.New(nil)
 	vera := &http.Client{Jar: jar}
-	if resp = do(t, vera, "POST", url+"/api/v1/auth/login",
+	if resp = apitest.Do(t, vera, "POST", url+"/api/v1/auth/login",
 		`{"username":"vera","password":"password9"}`); resp.StatusCode != 200 {
 		t.Fatalf("vera login = %d", resp.StatusCode)
 	}
-	if resp = do(t, vera, "GET", url+"/api/v1/instruments", ""); resp.StatusCode != 200 {
+	if resp = apitest.Do(t, vera, "GET", url+"/api/v1/instruments", ""); resp.StatusCode != 200 {
 		t.Errorf("vera search = %d, want 200", resp.StatusCode)
 	}
-	if resp = do(t, vera, "POST", url+"/api/v1/instruments",
+	if resp = apitest.Do(t, vera, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"X","currency":"RUB"}`); resp.StatusCode != 403 {
 		t.Errorf("vera create = %d, want 403", resp.StatusCode)
 	}
@@ -212,7 +185,7 @@ func TestCatalogPagingReachesPastTheFirstPage(t *testing.T) {
 	const catalogSize = 5
 	for i := 1; i <= catalogSize; i++ {
 		body := fmt.Sprintf(`{"type":"share","name":"Бумага %02d","currency":"RUB"}`, i)
-		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != 201 {
+		if resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != 201 {
 			b, _ := io.ReadAll(resp.Body)
 			t.Fatalf("create %d = %d: %s", i, resp.StatusCode, b)
 		}
@@ -257,7 +230,7 @@ func TestCatalogRefusesAPageItCannotHonour(t *testing.T) {
 		"?offset=-1",
 		"?offset=half",
 	} {
-		resp := do(t, c, "GET", url+"/api/v1/instruments"+bad, "")
+		resp := apitest.Do(t, c, "GET", url+"/api/v1/instruments"+bad, "")
 		if resp.StatusCode != 400 {
 			b, _ := io.ReadAll(resp.Body)
 			t.Errorf("GET /api/v1/instruments%s = %d, want 400: %s", bad, resp.StatusCode, b)
@@ -284,7 +257,7 @@ func TestOnlyACryptocurrencyTakesACoin(t *testing.T) {
 	url, c := newAPI(t)
 	create := func(body string) string {
 		t.Helper()
-		resp := do(t, c, "POST", url+"/api/v1/instruments", body)
+		resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments", body)
 		defer func() { _ = resp.Body.Close() }()
 		var created struct{ ID string }
 		if err := json.NewDecoder(resp.Body).Decode(&created); err != nil || resp.StatusCode != 201 {
@@ -295,7 +268,7 @@ func TestOnlyACryptocurrencyTakesACoin(t *testing.T) {
 	coin := create(`{"type":"crypto","name":"Bitcoin","ticker":"BTC","currency":"USD"}`)
 	share := create(`{"type":"share","name":"Сбербанк","ticker":"SBER-T","currency":"RUB"}`)
 
-	resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+coin, `{"coingecko_id":" Bitcoin "}`)
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+coin, `{"coingecko_id":" Bitcoin "}`)
 	var got struct {
 		CoinGeckoID *string `json:"coingecko_id"`
 	}
@@ -306,7 +279,7 @@ func TestOnlyACryptocurrencyTakesACoin(t *testing.T) {
 	if got.CoinGeckoID == nil || *got.CoinGeckoID != "bitcoin" {
 		t.Errorf("coin = %v, want bitcoin", got.CoinGeckoID)
 	}
-	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+share, `{"coingecko_id":"bitcoin"}`); resp.StatusCode != 400 {
+	if resp := apitest.Do(t, c, "PATCH", url+"/api/v1/instruments/"+share, `{"coingecko_id":"bitcoin"}`); resp.StatusCode != 400 {
 		t.Errorf("a share took a coin: %d, want 400", resp.StatusCode)
 	}
 }

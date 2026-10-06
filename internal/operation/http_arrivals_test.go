@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 type arrivalsResp struct {
@@ -26,13 +28,13 @@ type arrivalsResp struct {
 
 func listArrivals(t *testing.T, c *http.Client, url, accountID, instrumentID string) arrivalsResp {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/instruments/"+instrumentID+"/arrivals", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/instruments/"+instrumentID+"/arrivals", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET arrivals = %d: %s", resp.StatusCode, b)
 	}
 	var out arrivalsResp
-	decodeJSON(t, resp, &out)
+	apitest.Decode(t, resp, &out)
 	return out
 }
 
@@ -45,20 +47,20 @@ func TestSharesFromAnotherBrokerCanBeRecordedByHand(t *testing.T) {
 	ko := createID(t, c, url+"/api/v1/instruments", `{"type":"share","name":"Coca-Cola","ticker":"KO","currency":"USD"}`)
 
 	// Without purchases: in at nought.
-	resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-06-15","quantity":"10","currency":"USD","note":"из Т-Банка"}`, acc, ko))
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST arrival = %d: %s", resp.StatusCode, b)
 	}
 	var bare opResp
-	decodeJSON(t, resp, &bare)
+	apitest.Decode(t, resp, &bare)
 	if bare.Type != "transfer_in" || bare.AmountMinor != 0 {
 		t.Errorf("arrival = %+v, want a transfer_in with a basis of nought", bare)
 	}
 
 	// With purchases: priced from the start, the cost struck by the server.
-	resp = do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-06-20","quantity":"5","currency":"USD",
 		  "purchases":[{"quantity":"5","price":"60.10","fee_minor":100,"acquired_on":"2025-02-03"}]}`, acc, ko))
 	if resp.StatusCode != http.StatusCreated {
@@ -66,13 +68,13 @@ func TestSharesFromAnotherBrokerCanBeRecordedByHand(t *testing.T) {
 		t.Fatalf("POST arrival with purchases = %d: %s", resp.StatusCode, b)
 	}
 	var priced opResp
-	decodeJSON(t, resp, &priced)
+	apitest.Decode(t, resp, &priced)
 	if priced.AmountMinor != 30_050+100 {
 		t.Errorf("amount_minor = %d, want 30150 (5 × 60,10 + 1,00 fee)", priced.AmountMinor)
 	}
 
 	// The bare one is given its purchases afterwards, by hand, like an imported one.
-	resp = do(t, c, "PUT", url+"/api/v1/operations/"+bare.ID+"/purchases",
+	resp = apitest.Do(t, c, "PUT", url+"/api/v1/operations/"+bare.ID+"/purchases",
 		`{"purchases":[{"quantity":"10","price":"55","acquired_on":"2024-08-01"}]}`)
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -81,7 +83,7 @@ func TestSharesFromAnotherBrokerCanBeRecordedByHand(t *testing.T) {
 
 	// Another paper arriving on the same account is that paper's, not this one's.
 	pep := createID(t, c, url+"/api/v1/instruments", `{"type":"share","name":"PepsiCo","ticker":"PEP","currency":"USD"}`)
-	if resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+	if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-06-15","quantity":"3","currency":"USD"}`, acc, pep)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("POST another paper's arrival = %d", resp.StatusCode)
 	}
@@ -97,7 +99,7 @@ func TestSharesFromAnotherBrokerCanBeRecordedByHand(t *testing.T) {
 	}
 
 	// Deleting it is an ordinary deletion of a hand-entered row.
-	if resp := do(t, c, "DELETE", url+"/api/v1/operations/"+priced.ID, ""); resp.StatusCode != http.StatusNoContent {
+	if resp := apitest.Do(t, c, "DELETE", url+"/api/v1/operations/"+priced.ID, ""); resp.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("DELETE arrival = %d: %s", resp.StatusCode, b)
 	}
@@ -118,7 +120,7 @@ func TestAnArrivalThatCannotBeIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-06-15",%s}`, acc, ko, tc.body)
-			if resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", body); resp.StatusCode != tc.want {
+			if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", body); resp.StatusCode != tc.want {
 				b, _ := io.ReadAll(resp.Body)
 				t.Errorf("status = %d, want %d: %s", resp.StatusCode, tc.want, b)
 			}
@@ -129,13 +131,13 @@ func TestAnArrivalThatCannotBeIsRefused(t *testing.T) {
 	}
 
 	// A paper already held in another currency: the journal will not take it.
-	createOperation := do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
+	createOperation := apitest.Do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-01-10","quantity":"1","price":"60","currency":"USD"}`, acc, ko))
 	if createOperation.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(createOperation.Body)
 		t.Fatalf("buy = %d: %s", createOperation.StatusCode, b)
 	}
-	resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-06-15","quantity":"5","currency":"EUR",
 		  "purchases":[{"quantity":"5","price":"50"}]}`, acc, ko))
 	if resp.StatusCode != http.StatusConflict {
@@ -151,12 +153,12 @@ func TestArrivalsNameTheAccountAMoveLeft(t *testing.T) {
 	from := createID(t, c, url+"/api/v1/accounts", `{"name":"Т-Банк","type":"brokerage","currency":"RUB"}`)
 	to := createID(t, c, url+"/api/v1/accounts", `{"name":"Freedom","type":"brokerage","currency":"RUB"}`)
 	sber := createID(t, c, url+"/api/v1/instruments", `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
-	if resp := do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
+	if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-01-10","quantity":"10","price":"300","currency":"RUB"}`,
 		from, sber)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("buy = %d", resp.StatusCode)
 	}
-	if resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	if resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-06-01"}`,
 		from, to, sber)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("transfer = %d", resp.StatusCode)

@@ -13,6 +13,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -59,19 +60,19 @@ func newArrivalFixture(t *testing.T) arrivalFixture {
 
 func createID(t *testing.T, c *http.Client, url, body string) string {
 	t.Helper()
-	resp := do(t, c, "POST", url, body)
+	resp := apitest.Do(t, c, "POST", url, body)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST %s = %d: %s", url, resp.StatusCode, b)
 	}
 	var out idResp
-	decodeJSON(t, resp, &out)
+	apitest.Decode(t, resp, &out)
 	return out.ID
 }
 
 func (f arrivalFixture) state(t *testing.T, body string) *http.Response {
 	t.Helper()
-	return do(t, f.c, "PUT", f.url+"/api/v1/operations/"+f.arrival+"/purchases", body)
+	return apitest.Do(t, f.c, "PUT", f.url+"/api/v1/operations/"+f.arrival+"/purchases", body)
 }
 
 // held folds the account's journal as every later read does.
@@ -125,7 +126,7 @@ func TestStatingThePurchasesBehindAnArrivalGivesItsSharesTheirCost(t *testing.T)
 		t.Fatalf("PUT purchases = %d: %s", resp.StatusCode, b)
 	}
 	var op opResp
-	decodeJSON(t, resp, &op)
+	apitest.Decode(t, resp, &op)
 	// 4 × 250,50 = 1 002,00 ₽ struck by the server; 1 800,00 + 1,50 fee.
 	if op.AmountMinor != 100_200+180_150 {
 		t.Errorf("amount_minor = %d, want 280350", op.AmountMinor)
@@ -199,7 +200,7 @@ func TestStatedPurchasesThatCannotBeTheseSharesAreRefused(t *testing.T) {
 func TestPurchasesCannotBeStatedForATransferBetweenOwnAccounts(t *testing.T) {
 	f := newArrivalFixture(t)
 	other := createID(t, f.c, f.url+"/api/v1/accounts", `{"name":"Другой","type":"brokerage","currency":"RUB"}`)
-	resp := do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-01"}`,
 		f.accountID, other, f.sberID))
 	if resp.StatusCode != http.StatusCreated {
@@ -207,9 +208,9 @@ func TestPurchasesCannotBeStatedForATransferBetweenOwnAccounts(t *testing.T) {
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var tr transferResp
-	decodeJSON(t, resp, &tr)
+	apitest.Decode(t, resp, &tr)
 
-	resp = do(t, f.c, "PUT", f.url+"/api/v1/operations/"+tr.In.ID+"/purchases",
+	resp = apitest.Do(t, f.c, "PUT", f.url+"/api/v1/operations/"+tr.In.ID+"/purchases",
 		`{"purchases":[{"quantity":"10","price":"100"}]}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		b, _ := io.ReadAll(resp.Body)
@@ -223,7 +224,7 @@ func TestPurchasesCannotBeStatedForATransferBetweenOwnAccounts(t *testing.T) {
 func TestStatingPurchasesCarriesThemToSharesMovedOnSince(t *testing.T) {
 	f := newArrivalFixture(t)
 	other := createID(t, f.c, f.url+"/api/v1/accounts", `{"name":"Другой","type":"brokerage","currency":"RUB"}`)
-	resp := do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"4","occurred_on":"2026-07-01"}`,
 		f.accountID, other, f.sberID))
 	if resp.StatusCode != http.StatusCreated {

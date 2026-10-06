@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -65,13 +66,13 @@ func TestPositionInBaseConvertsHeldSideValues(t *testing.T) {
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
 		"occurred_on":"2026-07-05","amount_minor":5000,"currency":"USD"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -126,13 +127,13 @@ func TestPositionInBaseNullWhenAlreadyBaseCurrency(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -156,13 +157,13 @@ func TestPositionInBaseNullWhenNoRate(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"GBP"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d, want 200 (missing rate must not fail the request): %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -197,13 +198,13 @@ func TestPositionInBaseNullMarketValueAndUnrealizedPnlWithoutQuote(t *testing.T)
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
 		"occurred_on":"2026-07-05","amount_minor":200,"currency":"USD"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -350,13 +351,13 @@ func TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency(t *testing.
 		"occurred_on":"2026-07-01","quantity":"1","price":"1000",
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, bond.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -451,13 +452,13 @@ func TestPositionInBaseValuationIsConvertedOnceFromItsOwnCurrency(t *testing.T) 
 		"occurred_on":"2026-03-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	byID := make(map[string]positionResp, len(got.Positions))
 	for _, p := range got.Positions {
 		byID[p.Instrument.Id] = p
@@ -668,7 +669,7 @@ const transferOn = "2026-07-20"
 
 func createTransfer(t *testing.T, c *http.Client, url, body string) {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", body)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create transfer = %d: %s", resp.StatusCode, b)
@@ -1092,7 +1093,7 @@ func TestPositionInBaseHistoricalRateErrorFailsRequest(t *testing.T) {
 		"occurred_on":%q,"quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID, lateBuyOn))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusInternalServerError {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions with a failing HISTORICAL rate lookup = %d, want 500 — a real outage must not be served as a 200 with in_base: null: %s",
@@ -1103,13 +1104,13 @@ func TestPositionInBaseHistoricalRateErrorFailsRequest(t *testing.T) {
 // onlyPosition fetches an account's positions and returns the single one.
 func onlyPosition(t *testing.T, c *http.Client, url, accountID string) positionResp {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d, want 200: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -1119,13 +1120,13 @@ func onlyPosition(t *testing.T, c *http.Client, url, accountID string) positionR
 // realizedTotalOf fetches the account's realized total.
 func realizedTotalOf(t *testing.T, c *http.Client, url, accountID string) realizedTotalResp {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d, want 200: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	return got.RealizedTotal
 }
 

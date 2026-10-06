@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -57,7 +58,7 @@ func TestAPapersHoldingsAcrossTheFamily(t *testing.T) {
 		t.Fatalf("holdings = %d", resp.StatusCode)
 	}
 	var got holdingsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 
 	if got.Instrument.ID != sber.ID || got.Instrument.Name != "Сбербанк" {
 		t.Errorf("instrument = %+v, want Сбербанк", got.Instrument)
@@ -108,7 +109,7 @@ func TestAPapersHoldingsAreNotAddedAcrossCurrenciesOrPastAGap(t *testing.T) {
 			t.Fatal(err)
 		}
 		var got holdingsResp
-		decodeJSON(t, resp, &got)
+		apitest.Decode(t, resp, &got)
 		return got
 	}
 	got := get()
@@ -159,7 +160,7 @@ func TestAPapersDailyPrices(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []map[string]any
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	want := []map[string]any{
 		{"on": "2026-09-01", "price": "145", "currency": "RUB", "source": "moex_history"},
 		{"on": "2026-09-02", "price": "150.5", "currency": "RUB", "source": "manual"},

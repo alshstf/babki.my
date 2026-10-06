@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // costBasisRules mirrors apitypes.CostBasisRules for decoding in tests.
@@ -25,19 +27,19 @@ type positionsWithRules struct {
 
 func getPositions(t *testing.T, c *http.Client, url, accountID string) positionsWithRules {
 	t.Helper()
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("positions = %d: %s", resp.StatusCode, b)
 	}
 	var out positionsWithRules
-	decodeJSON(t, resp, &out)
+	apitest.Decode(t, resp, &out)
 	return out
 }
 
 func patchSpace(t *testing.T, c *http.Client, url, body string) {
 	t.Helper()
-	resp := do(t, c, "PATCH", url+"/api/v1/space", body)
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/space", body)
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("PATCH space %s = %d: %s", body, resp.StatusCode, b)

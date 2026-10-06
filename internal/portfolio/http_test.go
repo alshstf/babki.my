@@ -8,8 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +22,7 @@ import (
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
@@ -87,17 +86,8 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv mark
 	portfolio.NewHandler(portfolio.NewService(stores.ops, stores.instruments, quotes, conv, stores.spaces).
 		WithAccounts(account.NewStore(pool)), auth, sm).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != 201 {
-		t.Fatalf("setup: %v %d", err, resp.StatusCode)
-	}
-	return ts.URL, client
+	base, client := apitest.Serve(t, srv.Handler())
+	return base, client
 }
 
 // newAPI is setupAPI with an empty quote store and an unseeded converter: no
@@ -109,61 +99,37 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	return setupAPI(t, pool, mdStore, marketdata.NewConverter(mdStore))
 }
 
-func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
-	t.Helper()
-	var rd io.Reader
-	if body != "" {
-		rd = strings.NewReader(body)
-	}
-	req, _ := http.NewRequest(method, url, rd)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
-	}
-	return resp
-}
-
-func decodeJSON(t *testing.T, resp *http.Response, dst any) {
-	t.Helper()
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-}
-
 type idResp struct {
 	ID string `json:"id"`
 }
 
 func createAccount(t *testing.T, c *http.Client, url, body string) idResp {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/accounts", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts", body)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create account = %d: %s", resp.StatusCode, b)
 	}
 	var out idResp
-	decodeJSON(t, resp, &out)
+	apitest.Decode(t, resp, &out)
 	return out
 }
 
 func createInstrument(t *testing.T, c *http.Client, url, body string) idResp {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/instruments", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/instruments", body)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
 	}
 	var out idResp
-	decodeJSON(t, resp, &out)
+	apitest.Decode(t, resp, &out)
 	return out
 }
 
 func createOperation(t *testing.T, c *http.Client, url, body string) {
 	t.Helper()
-	resp := do(t, c, "POST", url+"/api/v1/operations", body)
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations", body)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create operation = %d: %s", resp.StatusCode, b)
@@ -327,7 +293,7 @@ func TestPositionsEndpoint(t *testing.T) {
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
 		"occurred_on":"2026-07-05","amount_minor":5000,"currency":"RUB"}`, acc1.ID, sber.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions acc1 = %d: %s", resp.StatusCode, b)
@@ -369,7 +335,7 @@ func TestPositionsEndpoint(t *testing.T) {
 
 	// acc2: no operations: positions is [], not null (the rules declaration is
 	// still present, so only that key is checked).
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/positions", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET positions acc2 = %d", resp.StatusCode)
 	}
@@ -388,13 +354,13 @@ func TestPositionsEndpoint(t *testing.T) {
 		"occurred_on":"2026-07-02","quantity":"3","price":"210",
 		"amount_minor":63000,"currency":"RUB"}`, acc3.ID, lkoh.ID))
 
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc3.ID+"/positions", "")
+	resp = apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc3.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions acc3 = %d: %s", resp.StatusCode, b)
 	}
 	var got3 positionsResp
-	decodeJSON(t, resp, &got3)
+	apitest.Decode(t, resp, &got3)
 	if len(got3.Positions) != 1 {
 		t.Fatalf("acc3 positions = %+v, want exactly 1 (closed position kept)", got3.Positions)
 	}
@@ -494,13 +460,13 @@ func TestPositionsMarketValuation(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"2","price":"20",
 		"amount_minor":-4000,"currency":"RUB"}`, acc.ID, custom.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 4 {
 		t.Fatalf("positions = %+v, want exactly 4", got.Positions)
 	}
@@ -643,13 +609,13 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"1","price":"800",
 		"amount_minor":-80000,"currency":"RUB"}`, acc.ID, bond.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -759,13 +725,13 @@ func TestPositionsMarketValueFallsBackWithoutRate(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"1","price":"800",
 		"amount_minor":-80000,"currency":"RUB"}`, acc.ID, bond.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 1 {
 		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
 	}
@@ -867,13 +833,13 @@ func TestPositionsUnrealizedPnl(t *testing.T) {
 		"occurred_on":"2026-07-02","quantity":"4","price":"100",
 		"amount_minor":40000,"currency":"RUB"}`, acc.ID, closed.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	if len(got.Positions) != 5 {
 		t.Fatalf("positions = %+v, want exactly 5", got.Positions)
 	}
@@ -956,7 +922,7 @@ func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
 		"occurred_on":"2026-07-01","quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusInternalServerError {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with in_base: null: %s",

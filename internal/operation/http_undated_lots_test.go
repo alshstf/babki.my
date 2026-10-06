@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"testing"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // has_undated_lots says why in_base is null when the cause is an unrecorded
@@ -34,7 +36,7 @@ func TestJournalSaysWhenATransferHasNoPurchaseDates(t *testing.T) {
 
 	// cost_minor given by hand: no source lots are released, so no acquisition
 	// dates travel with the parcel and none exist for it anywhere.
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20","cost_minor":190000}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -42,7 +44,7 @@ func TestJournalSaysWhenATransferHasNoPurchaseDates(t *testing.T) {
 		t.Fatalf("transfer with a manual basis = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	source := listJournal(t, url, c, from)
 	outRow := findOperation(t, source, pair.Out.ID)
@@ -97,7 +99,7 @@ func TestTransferPairAnswersUndatedTheSameOnBothLegs(t *testing.T) {
 
 	// No cost_minor: the basis is released from the source's own lots, so both
 	// purchase dates travel with the parcel.
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
 	if resp.StatusCode != 201 {
@@ -105,7 +107,7 @@ func TestTransferPairAnswersUndatedTheSameOnBothLegs(t *testing.T) {
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 
 	if pair.Out.HasUndatedLots {
 		t.Errorf("the transfer response's departing leg says has_undated_lots = true about a parcel released from two dated lots (2026-05-13 and 2026-06-15) — the arriving leg of the same 201 says false, so one transfer contradicts itself inside one response")
@@ -140,14 +142,14 @@ func TestATransferBoughtForNothingIsNoughtInTheBaseCurrency(t *testing.T) {
 	tsla := mkInstrument(t, url, c, `{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
 
 	// Shares from another broker, their purchases not stated.
-	resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
 		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-07-20","quantity":"10","currency":"USD"}`, to, tsla))
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("arrival = %d: %s", resp.StatusCode, b)
 	}
 	var arrived journalItem
-	decodeJSON(t, resp, &arrived)
+	apitest.Decode(t, resp, &arrived)
 	row := findOperation(t, listJournal(t, url, c, to), arrived.ID)
 	if row.HasUndatedLots || row.InBase == nil || row.InBase.AmountMinor != 0 ||
 		row.InBase.RateOn != "2026-07-20" || row.InBase.DatedOn != "2026-07-20" {
@@ -156,7 +158,7 @@ func TestATransferBoughtForNothingIsNoughtInTheBaseCurrency(t *testing.T) {
 
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-08-03","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, to, tsla))
-	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"15","occurred_on":"2026-08-10"}`,
 		to, onward, tsla))
 	if resp.StatusCode != 201 {
@@ -164,7 +166,7 @@ func TestATransferBoughtForNothingIsNoughtInTheBaseCurrency(t *testing.T) {
 		t.Fatalf("moving the parcel on = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	// 1 000 $ bought on 2026-08-03 at 80 and 10 shares for nothing.
 	row = findOperation(t, listJournal(t, url, c, onward), pair.In.ID)
 	if row.HasUndatedLots || row.InBase == nil || row.InBase.AmountMinor != 8_000_000 || row.InBase.DatedOn != "2026-08-03" {

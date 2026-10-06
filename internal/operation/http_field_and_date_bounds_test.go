@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"babki.my/babki/internal/platform/apitest"
 )
 
 // A transfer with no instrument_id says the field is missing (#19), not
@@ -14,27 +16,27 @@ import (
 func TestTransferWithoutAnInstrumentNamesTheMissingField(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create acc1 = %d: %s", resp.StatusCode, b)
 	}
 	var acc1 idResp
-	decodeJSON(t, resp, &acc1)
+	apitest.Decode(t, resp, &acc1)
 
-	resp = do(t, c, "POST", url+"/api/v1/accounts",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер 2","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create acc2 = %d: %s", resp.StatusCode, b)
 	}
 	var acc2 idResp
-	decodeJSON(t, resp, &acc2)
+	apitest.Decode(t, resp, &acc2)
 
 	body := fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,
 		"quantity":"4","occurred_on":"2026-07-05"}`, acc1.ID, acc2.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", body)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", body)
 	got, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 400 {
 		t.Fatalf("transfer with no instrument_id = %d, want 400: %s", resp.StatusCode, got)
@@ -52,28 +54,28 @@ func TestTransferWithoutAnInstrumentNamesTheMissingField(t *testing.T) {
 func TestTransferFromAnAccountThatIsNotThereSaysSo(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create account = %d: %s", resp.StatusCode, b)
 	}
 	var acc idResp
-	decodeJSON(t, resp, &acc)
+	apitest.Decode(t, resp, &acc)
 
-	resp = do(t, c, "POST", url+"/api/v1/instruments",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
 	}
 	var sber idResp
-	decodeJSON(t, resp, &sber)
+	apitest.Decode(t, resp, &sber)
 
 	body := fmt.Sprintf(`{"from_account_id":"11111111-1111-1111-1111-111111111111",
 		"to_account_id":%q,"instrument_id":%q,"quantity":"4","occurred_on":"2026-07-05"}`,
 		acc.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", body)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", body)
 	got, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 404 {
 		t.Fatalf("transfer from an unknown account = %d, want 404: %s", resp.StatusCode, got)
@@ -91,39 +93,39 @@ func TestTransferFromAnAccountThatIsNotThereSaysSo(t *testing.T) {
 func TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths(t *testing.T) {
 	url, c := newAPI(t)
 
-	resp := do(t, c, "POST", url+"/api/v1/accounts",
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create acc1 = %d: %s", resp.StatusCode, b)
 	}
 	var acc1 idResp
-	decodeJSON(t, resp, &acc1)
+	apitest.Decode(t, resp, &acc1)
 
-	resp = do(t, c, "POST", url+"/api/v1/accounts",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/accounts",
 		`{"name":"Брокер 2","type":"brokerage","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create acc2 = %d: %s", resp.StatusCode, b)
 	}
 	var acc2 idResp
-	decodeJSON(t, resp, &acc2)
+	apitest.Decode(t, resp, &acc2)
 
-	resp = do(t, c, "POST", url+"/api/v1/instruments",
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
 	}
 	var sber idResp
-	decodeJSON(t, resp, &sber)
+	apitest.Decode(t, resp, &sber)
 
 	buy := func(date string) (int, string) {
 		t.Helper()
 		body := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 			"occurred_on":%q,"quantity":"10","price":"100",
 			"amount_minor":-100000,"currency":"RUB"}`, acc1.ID, sber.ID, date)
-		r := do(t, c, "POST", url+"/api/v1/operations", body)
+		r := apitest.Do(t, c, "POST", url+"/api/v1/operations", body)
 		b, _ := io.ReadAll(r.Body)
 		return r.StatusCode, string(b)
 	}
@@ -161,7 +163,7 @@ func TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths(t *testing.T) {
 	transfer := fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,
 		"instrument_id":%q,"quantity":"4","occurred_on":"1026-07-05"}`,
 		acc1.ID, acc2.ID, sber.ID)
-	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", transfer)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", transfer)
 	got2, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 400 {
 		t.Fatalf("transfer dated 1026-07-05 = %d, want 400: %s", resp.StatusCode, got2)
@@ -173,7 +175,7 @@ func TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths(t *testing.T) {
 	transferFuture := fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,
 		"instrument_id":%q,"quantity":"4","occurred_on":%q}`,
 		acc1.ID, acc2.ID, sber.ID, dayAfterTomorrow)
-	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", transferFuture)
+	resp = apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", transferFuture)
 	got3, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 400 {
 		t.Fatalf("transfer dated the day after tomorrow = %d, want 400: %s", resp.StatusCode, got3)

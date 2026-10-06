@@ -7,8 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -22,6 +20,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -97,16 +96,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
 	corporateaction.NewHandler(store, materializer, queue, auth, sm, slog.Default()).Mount(srv)
 
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
-		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
-	if err != nil || resp.StatusCode != http.StatusCreated {
-		t.Fatalf("setup: %v %v", err, resp)
-	}
-	_ = resp.Body.Close()
+	base, client := apitest.Serve(t, srv.Handler())
 
 	var spaceID uuid.UUID
 	if err := pool.QueryRow(ctx, `SELECT id FROM spaces LIMIT 1`).Scan(&spaceID); err != nil {
@@ -128,7 +118,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 			materializer: materializer, spaceID: spaceID,
 			accountID: acc.ID, amazonID: amazon.ID,
 		},
-		url: ts.URL, client: client, recheck: recheck, journal: journal, queue: queue,
+		url: base, client: client, recheck: recheck, journal: journal, queue: queue,
 	}
 }
 

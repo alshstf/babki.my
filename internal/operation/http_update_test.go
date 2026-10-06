@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitest"
 )
 
 func put(t *testing.T, c *http.Client, url, id, body string) (int, string) {
 	t.Helper()
-	resp := do(t, c, "PUT", url+"/api/v1/operations/"+id, body)
+	resp := apitest.Do(t, c, "PUT", url+"/api/v1/operations/"+id, body)
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
 }
@@ -89,14 +90,14 @@ func TestWhatCannotBeEditedIsRefused(t *testing.T) {
 	}
 	dep := mkOperation(t, url, c, deposit(acc))
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-07-10","quantity":"10","price":"300","currency":"RUB"}`, acc, sber))
-	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"5","occurred_on":"2026-07-15"}`, acc, other, sber))
 	if resp.StatusCode != 201 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
 	var pair transferResp
-	decodeJSON(t, resp, &pair)
+	apitest.Decode(t, resp, &pair)
 	imported := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-02","amount_minor":5000,"currency":"RUB"}`, acc))
 	if _, err := pool.Exec(t.Context(), `UPDATE operations SET source = 'tinvest' WHERE id = $1`, imported); err != nil {
 		t.Fatalf("mark imported: %v", err)
@@ -107,7 +108,7 @@ func TestWhatCannotBeEditedIsRefused(t *testing.T) {
 	}
 	// Neither a broker's row nor the registry's is a person's to delete.
 	for name, id := range map[string]string{"a broker's row": imported, "the registry's row": registry} {
-		if resp := do(t, c, "DELETE", url+"/api/v1/operations/"+id, ""); resp.StatusCode != http.StatusBadRequest {
+		if resp := apitest.Do(t, c, "DELETE", url+"/api/v1/operations/"+id, ""); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("deleting %s = %d, want 400", name, resp.StatusCode)
 		}
 	}

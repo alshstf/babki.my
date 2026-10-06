@@ -13,6 +13,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
+	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -462,13 +463,13 @@ func TestPositionMarketValueGapNullOnlyWhenTheValuationIsThere(t *testing.T) {
 			"amount_minor":-100000,"currency":"USD"}`, acc.ID, inst, lateBuyOn))
 	}
 
-	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
 	}
 	var got positionsResp
-	decodeJSON(t, resp, &got)
+	apitest.Decode(t, resp, &got)
 	byID := make(map[string]positionResp, len(got.Positions))
 	for _, p := range got.Positions {
 		byID[p.Instrument.Id] = p
