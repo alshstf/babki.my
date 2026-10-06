@@ -26,6 +26,7 @@ function makeSession(role: SessionInfo["role"] = "owner"): SessionInfo {
     space_id: "space-1",
     space_name: "Family",
     base_currency: "RUB",
+    full_valuation: "nav_and_foreign",
     tax_residency: "RU",
     cost_basis_rules: {
       country: "RU",

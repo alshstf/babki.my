@@ -49,12 +49,14 @@ type journalRow struct {
 	ValuedByBalance bool   `json:"valued_by_balance"`
 	CountedBy       string `json:"counted_by"`
 	Journal         *struct {
-		AmountMinor       int64    `json:"amount_minor"`
-		Currency          string   `json:"currency"`
-		UnpricedPositions int      `json:"unpriced_positions"`
-		MissingRates      []string `json:"missing_rates"`
-		NegativeCash      []string `json:"negative_cash"`
-		Reconciliation    *struct {
+		AmountMinor        int64    `json:"amount_minor"`
+		FullAmountMinor    int64    `json:"full_amount_minor"`
+		Currency           string   `json:"currency"`
+		UnpricedPositions  int      `json:"unpriced_positions"`
+		NotTradedPositions int      `json:"not_traded_positions"`
+		MissingRates       []string `json:"missing_rates"`
+		NegativeCash       []string `json:"negative_cash"`
+		Reconciliation     *struct {
 			Status             string `json:"status"`
 			BalanceAsOf        string `json:"balance_as_of"`
 			ComparedOn         string `json:"compared_on"`
@@ -72,6 +74,8 @@ type journalSummary struct {
 		DifferingDifferenceMinor int64 `json:"differing_difference_minor"`
 		PinnedToBalance          int   `json:"pinned_to_balance"`
 		UnpricedPositions        int   `json:"unpriced_positions"`
+		NotTradedPositions       int   `json:"not_traded_positions"`
+		FullDifferenceMinor      int64 `json:"full_difference_minor"`
 	} `json:"journal"`
 }
 
@@ -141,13 +145,16 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	balanceOn(t, url, c, empty, today, 10_000)
 	balanceOn(t, url, c, deposit, today, 50_000_000)
 	balanceOn(t, url, c, card, today, -3_000_000)
+	// A frozen fund the liquid worth counts as nothing and the full one at
+	// 50 000 ₽ (decision Р-11).
 	journals.byAccount[tinv] = account.JournalValue{
 		Currency: "RUB", Minor: 86_000_000, ByCurrency: map[string]int64{"RUB": 86_000_000},
-		Operations: 40, Unpriced: 1, MissingRates: []string{}, NegativeCash: []string{},
+		Operations: 40, Unpriced: 1, NotTraded: 1, MissingRates: []string{}, NegativeCash: []string{},
+		FullMinor: 91_000_000,
 	}
 	journals.byAccount[alfa] = account.JournalValue{
 		Currency: "RUB", Minor: 19_500_000, ByCurrency: map[string]int64{"RUB": 19_500_000},
-		Operations: 12, NegativeCash: []string{"RUB"},
+		Operations: 12, NegativeCash: []string{"RUB"}, FullMinor: 19_500_000,
 	}
 	journals.byAccount[gone] = account.JournalValue{
 		Currency: "RUB", Minor: 1_000_000, ByCurrency: map[string]int64{"RUB": 1_000_000}, Operations: 3,
@@ -163,8 +170,8 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 		t.Errorf("total = %v, want 152510000", sum.TotalInBaseMinor)
 	}
 	if j := sum.Journal; j.Accounts != 2 || j.Differing != 1 || j.DifferingDifferenceMinor != -34_500_000 ||
-		j.PinnedToBalance != 0 || j.UnpricedPositions != 1 {
-		t.Errorf("journal = %+v, want 2 accounts, Альфа off by −345 000, one unpriced", j)
+		j.PinnedToBalance != 0 || j.UnpricedPositions != 1 || j.NotTradedPositions != 1 || j.FullDifferenceMinor != 5_000_000 {
+		t.Errorf("journal = %+v, want 2 accounts, Альфа off by −345 000, one unpriced and not traded, 50 000 more in full", j)
 	}
 	if len(sum.Totals) != 1 || sum.Totals[0].AssetsMinor != 155_510_000 || sum.Totals[0].LiabilitiesMinor != -3_000_000 {
 		t.Errorf("totals = %+v, want assets 1 555 100, debts −30 000", sum.Totals)
@@ -173,6 +180,7 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	var rows []journalRow
 	getJSON(t, c, url+"/api/v1/accounts", &rows)
 	if r := rowOf(t, rows, tinv); r.CountedBy != "journal" || r.Journal == nil || r.Journal.AmountMinor != 86_000_000 ||
+		r.Journal.FullAmountMinor != 91_000_000 || r.Journal.NotTradedPositions != 1 ||
 		r.Journal.Reconciliation == nil || r.Journal.Reconciliation.Status != "agrees" ||
 		r.Journal.Reconciliation.DifferenceMinor != -21_000 || r.Journal.Reconciliation.BalanceInBaseMinor != 86_021_000 {
 		t.Errorf("Т-Инвестиции = %+v, want counted by a journal agreeing with the balance, 210 ₽ apart", r)
@@ -346,9 +354,11 @@ func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
 	deposit := createAccount(t, url, c, "Вклад", "deposit", "RUB")
 	card := createAccount(t, url, c, "Карта", "credit_card", "USD")
 	journals.byAccount[broker] = account.JournalValue{Currency: "RUB", Minor: 1, Operations: 3}
-	journals.onDay[broker+"@2026-01-31"] = account.JournalValue{Currency: "RUB", Minor: 1_000_000, Operations: 1}
-	journals.onDay[broker+"@2026-02-28"] = account.JournalValue{Currency: "RUB", Minor: 1_200_000, Operations: 2, Unpriced: 1}
-	journals.onDay[broker+"@2026-03-31"] = account.JournalValue{Currency: "RUB", Minor: 1_500_000, Operations: 3}
+	// The chart reads the full worth (decision Р-11); the liquid one beside it
+	// is left at nothing to show it is not read.
+	journals.onDay[broker+"@2026-01-31"] = account.JournalValue{Currency: "RUB", FullMinor: 1_000_000, Operations: 1}
+	journals.onDay[broker+"@2026-02-28"] = account.JournalValue{Currency: "RUB", FullMinor: 1_200_000, Operations: 2, FullUnpriced: 1}
+	journals.onDay[broker+"@2026-03-31"] = account.JournalValue{Currency: "RUB", FullMinor: 1_500_000, Operations: 3}
 	balanceOn(t, url, c, deposit, day("2026-02-10"), 5_000_000)
 	balanceOn(t, url, c, card, day("2026-01-15"), -10_000)
 

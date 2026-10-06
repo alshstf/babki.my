@@ -24,7 +24,15 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
     total_in_base_minor: 123_456_700,
     unconverted: [],
     rates_on: localToday(),
-    journal: { accounts: 0, differing: 0, differing_difference_minor: 0, pinned_to_balance: 0, unpriced_positions: 0 },
+    journal: {
+      accounts: 0,
+      differing: 0,
+      differing_difference_minor: 0,
+      pinned_to_balance: 0,
+      unpriced_positions: 0,
+      not_traded_positions: 0,
+      full_difference_minor: 0,
+    },
     ...overrides,
   };
 }
@@ -171,6 +179,8 @@ describe("SummaryCards", () => {
             differing_difference_minor: -34_500_000,
             pinned_to_balance: 1,
             unpriced_positions: 3,
+            not_traded_positions: 0,
+            full_difference_minor: 0,
           },
         })}
         mode="native"

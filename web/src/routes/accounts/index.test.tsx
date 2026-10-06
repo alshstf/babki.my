@@ -47,6 +47,7 @@ function makeSession(role: SessionInfo["role"] = "owner"): SessionInfo {
     space_id: "space-1",
     space_name: "Family",
     base_currency: "RUB",
+    full_valuation: "nav_and_foreign",
     tax_residency: "RU",
     cost_basis_rules: {
       country: "RU",
@@ -83,7 +84,15 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
     total_in_base_minor: 100_000,
     unconverted: [],
     rates_on: null,
-    journal: { accounts: 0, differing: 0, differing_difference_minor: 0, pinned_to_balance: 0, unpriced_positions: 0 },
+    journal: {
+      accounts: 0,
+      differing: 0,
+      differing_difference_minor: 0,
+      pinned_to_balance: 0,
+      unpriced_positions: 0,
+      not_traded_positions: 0,
+      full_difference_minor: 0,
+    },
     ...overrides,
   };
 }

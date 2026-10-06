@@ -46,15 +46,17 @@ type ReturnBasis struct {
 
 // ReturnBasis reckons the account's period from (exclusive) to to (inclusive).
 func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID, from, to time.Time) (ReturnBasis, error) {
-	history, ok := h.quotes.(quoteHistory)
-	if !ok {
-		return ReturnBasis{}, ErrNoQuoteHistory
-	}
 	values, err := h.ValuesOn(ctx, spaceID, accountID, []time.Time{from, to})
 	if err != nil {
 		return ReturnBasis{}, err
 	}
-	out := ReturnBasis{Currency: values[0].Currency, Start: values[0], End: values[1]}
+	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	if err != nil {
+		return ReturnBasis{}, err
+	}
+	// A return is reckoned on the full worth (decision Р-11): on the liquid one
+	// a freeze reads as a loss of everything and a thaw as profit from nowhere.
+	out := ReturnBasis{Currency: values[0].Currency, Start: fullView(values[0]), End: fullView(values[1])}
 	out.Complete = whole(out.Start) && whole(out.End)
 
 	ops, err := h.ops.ListForEngine(ctx, spaceID, accountID)
@@ -75,7 +77,7 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 		case TypeDeposit, TypeWithdrawal:
 			minor, currency = -o.AmountMinor, o.Currency
 		case TypeTransferIn, TypeTransferOut:
-			v, c, ok, err := h.parcelWorth(ctx, history, o)
+			v, c, ok, err := h.parcelWorth(ctx, sp.FullValuation, o)
 			if err != nil {
 				return ReturnBasis{}, err
 			}
@@ -103,15 +105,21 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 	return out, nil
 }
 
+// fullView is v's full worth in the fields a return reads.
+func fullView(v JournalValue) JournalValue {
+	v.Minor, v.ByCurrency, v.Unpriced, v.MissingRates = v.FullMinor, v.FullByCurrency, v.FullUnpriced, v.FullMissingRates
+	return v
+}
+
 // whole reports whether a valuation counted everything it holds.
 func whole(v JournalValue) bool {
 	return v.Unpriced == 0 && len(v.MissingRates) == 0
 }
 
 // parcelWorth is what the shares a transfer moved were worth at that day's
-// closing price, in the currency the price is struck in; ok is false when
-// there is no price within staleQuoteDays of the day.
-func (h *Handler) parcelWorth(ctx context.Context, history quoteHistory, o Operation) (int64, string, bool, error) {
+// full price, in the currency the price is struck in; ok is false when there
+// is none.
+func (h *Handler) parcelWorth(ctx context.Context, setting family.FullValuation, o Operation) (int64, string, bool, error) {
 	if o.InstrumentID == nil || o.Quantity == nil {
 		return 0, "", false, nil
 	}
@@ -123,15 +131,12 @@ func (h *Handler) parcelWorth(ctx context.Context, history quoteHistory, o Opera
 	if !ok {
 		return 0, "", false, errInstrumentNotInCatalog
 	}
-	quotes, err := history.QuotesOn(ctx, []uuid.UUID{*o.InstrumentID}, o.OccurredOn)
+	book, err := h.pricesOn(ctx, []uuid.UUID{*o.InstrumentID}, o.OccurredOn, setting, pastWindows)
 	if err != nil {
 		return 0, "", false, err
 	}
-	q, quoted := quotes[*o.InstrumentID]
-	if quoted && q.On.Before(o.OccurredOn.AddDate(0, 0, -staleQuoteDays)) {
-		quoted = false
-	}
-	minor, currency, gap, err := marketValue(paper.Type, paper.FaceValueMinor, paper.FaceCurrency, *o.Quantity, q, quoted)
+	q, quoted := book.full[*o.InstrumentID]
+	minor, currency, gap, err := marketValue(paper.Type, paper.FaceValueMinor, paper.FaceCurrency, *o.Quantity, q.Quote, quoted)
 	if err != nil {
 		return 0, "", false, err
 	}

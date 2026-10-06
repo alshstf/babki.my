@@ -1081,6 +1081,7 @@ export interface components {
             space_name: string;
             /** @description ISO-4217, e.g. RUB */
             base_currency: string;
+            full_valuation: components["schemas"]["FullValuation"];
             /** @description The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU. */
             tax_residency: string;
             /**
@@ -1089,10 +1090,18 @@ export interface components {
              */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
+        /** @enum {string} */
+        PriceSource: "market" | "manual" | "nav" | "foreign";
+        /**
+         * @description Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
+         * @enum {string}
+         */
+        FullValuation: "liquid" | "nav" | "nav_and_foreign";
         /** @description Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. minProperties enforces that in the schema itself, not only in this description, so a schema-aware client can reject an empty body without a round trip. */
         UpdateSpaceRequest: {
             /** @description ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. Changing it changes the currency every converted figure in this API is published in; nothing stored is rewritten, since those figures are computed on the way out. */
             base_currency?: string;
+            full_valuation?: components["schemas"]["FullValuation"];
             /** @description ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent. */
             tax_residency?: string;
         };
@@ -1176,13 +1185,20 @@ export interface components {
         AccountJournal: {
             /**
              * Format: int64
-             * @description Open holdings at their market value plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below).
+             * @description THE LIQUID WORTH (decision Р-11): open holdings at the market price they can be sold at now — none for a paper that does not trade — plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below).
              */
             amount_minor: number;
             /** @description The space's base currency (ISO-4217), same as Summary.base_currency */
             currency: string;
-            /** @description Open holdings with no market value at all — no quote, or a kind of paper with no valuation model — counted as nothing. */
+            /**
+             * Format: int64
+             * @description The same worth by the FULL valuation (decision Р-11): every holding at its full price — a fund's net asset value or a foreign share's home-exchange close where the space allows it, else its latest price of any source (Position.price_source) — plus the same cash. amount_minor is the liquid one.
+             */
+            full_amount_minor: number;
+            /** @description Open holdings amount_minor counts as nothing: no market price within a month (the paper does not trade, or nothing prices it), or a kind of paper with no valuation model. */
             unpriced_positions: number;
+            /** @description Of unpriced_positions, how many full_amount_minor still values: papers that do not trade now but have a price of another kind. */
+            not_traded_positions: number;
             /** @description Currencies held with no rate into the base currency today; what is held in them is left out of amount_minor. Sorted; empty when everything converted. */
             missing_rates: string[];
             /** @description Currencies whose cash by the journal is below zero: money spent that the journal never saw arrive, usually a deposit nobody recorded. Sorted; empty when none. */
@@ -1651,6 +1667,13 @@ export interface components {
             pinned_to_balance: number;
             /** @description Holdings with no price, counted as nothing, across the accounts counted by their journal */
             unpriced_positions: number;
+            /** @description Of unpriced_positions, the holdings that do not trade now but have a full valuation (AccountJournal.not_traded_positions summed) */
+            not_traded_positions: number;
+            /**
+             * Format: int64
+             * @description What the full valuation adds to the total, in the base currency: the sum over the accounts counted by their journal of full_amount_minor − amount_minor. The family's full valuation is total_in_base_minor plus this (decision Р-11).
+             */
+            full_difference_minor: number;
         };
         /** @enum {string} */
         InstrumentType: "share" | "bond" | "etf" | "currency" | "crypto" | "metal" | "custom";
@@ -2108,6 +2131,20 @@ export interface components {
              * @description What ONE unit of this instrument costs in money, at the quoted price. Published ONLY FOR A BOND, whose `price` is a percentage of face value rather than money, and whose reader was otherwise left multiplying by the face value in their head to compare the quote against a cost or a valuation that are both money. It is instrument.face_value_minor x price/100, denominated in instrument.face_currency (the same currency market_value_minor is struck in before any conversion — it is the same product that valuation is built from, with the quantity left out, struck and rounded ONCE on its own rather than divided out of the valuation, which would round a second time). Null for every other instrument type, where `price` is already money and this field would restate it; null too whenever there is no valuation at all, exactly like `price`. It carries the face value's drift: that snapshot is taken when the paper is catalogued and is not refreshed, so on an amortizing bond both this figure and the market valuation age together.
              */
             price_money_minor?: number | null;
+            /** @description Where `price` comes from (decision Р-11): `market` — an exchange's or a broker's quote; `manual` — stated by a person; `nav` — the fund's net asset value per unit, its manager's figure rather than a price it sells at; `foreign` — the share's close on its home exchange, while here it may not trade. Which of them a paper is valued at is the space's FullValuation: a published NAV or home-exchange close first, then the latest price of any source. Null exactly when `price` is. */
+            price_source?: components["schemas"]["PriceSource"] | null;
+            /**
+             * Format: int64
+             * @description What the holding can be sold for now, in the position's own `currency` (decision Р-11): its latest MARKET price — a price stated by hand is not one — if that price is no older than a month, valued as market_value_minor is and converted at today's rate. Null when the paper does not trade (see last_traded_on), when it has no market price at all, or when there is no valuation or rate: the liquid valuation then counts the holding as nothing. Equal to market_value_minor when the full valuation is struck from that same market price.
+             */
+            liquid_value_minor?: number | null;
+            /**
+             * Format: int64
+             * @description liquid_value_minor in the space's base currency, struck once from the valuation's own currency at today's rate. Null when liquid_value_minor is, or no rate.
+             */
+            liquid_value_in_base_minor?: number | null;
+            /** @description Date YYYY-MM-DD of the paper's latest market price, set only when that price is older than a month and the liquid valuation therefore counts the holding as nothing: the paper has not traded since. */
+            last_traded_on?: string | null;
             /** @description True when the price was stated by a person (POST /api/v1/instruments/{instrumentId}/prices) rather than taken from an exchange or a broker — an over-the-counter or net-asset-value estimate for a paper nobody quotes, say. Absent or false otherwise. */
             price_by_hand?: boolean;
             /** @description Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe. */

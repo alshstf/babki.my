@@ -1700,13 +1700,14 @@ components:
         display_name: { type: string }
     SessionInfo:
       type: object
-      required: [user, role, space_id, space_name, base_currency, tax_residency, cost_basis_rules]
+      required: [user, role, space_id, space_name, base_currency, tax_residency, full_valuation, cost_basis_rules]
       properties:
         user: { $ref: "#/components/schemas/UserInfo" }
         role: { $ref: "#/components/schemas/Role" }
         space_id: { type: string, format: uuid }
         space_name: { type: string }
         base_currency: { type: string, description: "ISO-4217, e.g. RUB" }
+        full_valuation: { $ref: "#/components/schemas/FullValuation" }
         tax_residency:
           type: string
           description: "The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU."
@@ -1736,6 +1737,13 @@ components:
             amount with nothing said about it.
           allOf:
             - $ref: "#/components/schemas/CostBasisRules"
+    PriceSource:
+      type: string
+      enum: [market, manual, nav, foreign]
+    FullValuation:
+      type: string
+      enum: [liquid, nav, nav_and_foreign]
+      description: "Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included."
     UpdateSpaceRequest:
       type: object
       description: "Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. minProperties enforces that in the schema itself, not only in this description, so a schema-aware client can reject an empty body without a round trip."
@@ -1745,6 +1753,7 @@ components:
           type: string
           pattern: "^[A-Z]{3}$"
           description: "ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. Changing it changes the currency every converted figure in this API is published in; nothing stored is rewritten, since those figures are computed on the way out."
+        full_valuation: { $ref: "#/components/schemas/FullValuation" }
         tax_residency:
           type: string
           description: "ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent."
@@ -1849,14 +1858,16 @@ components:
             - $ref: "#/components/schemas/AccountJournal"
     AccountJournal:
       type: object
-      required: [amount_minor, currency, unpriced_positions, missing_rates, negative_cash, reconciliation]
+      required: [amount_minor, full_amount_minor, currency, unpriced_positions, not_traded_positions, missing_rates, negative_cash, reconciliation]
       properties:
         amount_minor:
           type: integer
           format: int64
-          description: "Open holdings at their market value plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below)."
+          description: "THE LIQUID WORTH (decision Р-11): open holdings at the market price they can be sold at now — none for a paper that does not trade — plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below)."
         currency: { type: string, description: "The space's base currency (ISO-4217), same as Summary.base_currency" }
-        unpriced_positions: { type: integer, description: "Open holdings with no market value at all — no quote, or a kind of paper with no valuation model — counted as nothing." }
+        full_amount_minor: { type: integer, format: int64, description: "The same worth by the FULL valuation (decision Р-11): every holding at its full price — a fund's net asset value or a foreign share's home-exchange close where the space allows it, else its latest price of any source (Position.price_source) — plus the same cash. amount_minor is the liquid one." }
+        unpriced_positions: { type: integer, description: "Open holdings amount_minor counts as nothing: no market price within a month (the paper does not trade, or nothing prices it), or a kind of paper with no valuation model." }
+        not_traded_positions: { type: integer, description: "Of unpriced_positions, how many full_amount_minor still values: papers that do not trade now but have a price of another kind." }
         missing_rates:
           type: array
           items: { type: string }
@@ -2362,7 +2373,7 @@ components:
         journal: { $ref: "#/components/schemas/SummaryJournal" }
     SummaryJournal:
       type: object
-      required: [accounts, differing, differing_difference_minor, pinned_to_balance, unpriced_positions]
+      required: [accounts, differing, differing_difference_minor, pinned_to_balance, unpriced_positions, not_traded_positions, full_difference_minor]
       description: "What the total owes to journals rather than balances, so the total can say it."
       properties:
         accounts: { type: integer, description: "Active accounts counted by their journal" }
@@ -2370,6 +2381,8 @@ components:
         differing_difference_minor: { type: integer, format: int64, description: "The sum of difference_minor over those accounts, in the base currency: negative when the total may be short by that much, positive when it may be over" }
         pinned_to_balance: { type: integer, description: "Active brokerage accounts with operations counted by their balance by the family's choice (valued_by_balance)" }
         unpriced_positions: { type: integer, description: "Holdings with no price, counted as nothing, across the accounts counted by their journal" }
+        not_traded_positions: { type: integer, description: "Of unpriced_positions, the holdings that do not trade now but have a full valuation (AccountJournal.not_traded_positions summed)" }
+        full_difference_minor: { type: integer, format: int64, description: "What the full valuation adds to the total, in the base currency: the sum over the accounts counted by their journal of full_amount_minor − amount_minor. The family's full valuation is total_in_base_minor plus this (decision Р-11)." }
     InstrumentType:
       type: string
       enum: [share, bond, etf, currency, crypto, metal, custom]
@@ -2883,6 +2896,14 @@ components:
         market_value_source_minor: { type: integer, format: int64, nullable: true, description: "Set only when market_value_minor was converted from a different currency: the original, unconverted valuation amount in market_value_source_currency. It is what a client should name when it discloses where the converted figure came from (\"converted from 1 000,00 €\"), and — since it is also what in_base.market_value_minor is struck from, at the rate of THIS currency rather than the position's — that disclosure is true of the base-currency figure as well as of market_value_minor. Null when no conversion happened." }
         price: { type: string, nullable: true, description: "Decimal as string; latest quote price used for the valuation. What it MEANS depends on instrument.type: for share/etf it is money per unit, in the currency the QUOTE is denominated in — normally the position's own `currency`, but nothing in the model requires the two to agree: a quote carries a currency of its own, and where it differs the server converts the VALUATION into the position's currency (see market_value_minor) while this field stays exactly as quoted. That currency is therefore `market_value_source_currency` when that field is set, and `market_value_currency` otherwise. For a BOND it is instead a PERCENTAGE OF FACE VALUE (e.g. \"95.20\" meaning 95.20% of face, the MOEX convention) — not money, and not in any currency itself — so market_value_minor for a bond is instrument.face_value_minor × price/100 × quantity, denominated in instrument.face_currency rather than in this field's own unit." }
         price_money_minor: { type: integer, format: int64, nullable: true, description: "What ONE unit of this instrument costs in money, at the quoted price. Published ONLY FOR A BOND, whose `price` is a percentage of face value rather than money, and whose reader was otherwise left multiplying by the face value in their head to compare the quote against a cost or a valuation that are both money. It is instrument.face_value_minor x price/100, denominated in instrument.face_currency (the same currency market_value_minor is struck in before any conversion — it is the same product that valuation is built from, with the quantity left out, struck and rounded ONCE on its own rather than divided out of the valuation, which would round a second time). Null for every other instrument type, where `price` is already money and this field would restate it; null too whenever there is no valuation at all, exactly like `price`. It carries the face value's drift: that snapshot is taken when the paper is catalogued and is not refreshed, so on an amortizing bond both this figure and the market valuation age together." }
+        price_source:
+          nullable: true
+          description: "Where `price` comes from (decision Р-11): `market` — an exchange's or a broker's quote; `manual` — stated by a person; `nav` — the fund's net asset value per unit, its manager's figure rather than a price it sells at; `foreign` — the share's close on its home exchange, while here it may not trade. Which of them a paper is valued at is the space's FullValuation: a published NAV or home-exchange close first, then the latest price of any source. Null exactly when `price` is."
+          allOf:
+            - $ref: "#/components/schemas/PriceSource"
+        liquid_value_minor: { type: integer, format: int64, nullable: true, description: "What the holding can be sold for now, in the position's own `currency` (decision Р-11): its latest MARKET price — a price stated by hand is not one — if that price is no older than a month, valued as market_value_minor is and converted at today's rate. Null when the paper does not trade (see last_traded_on), when it has no market price at all, or when there is no valuation or rate: the liquid valuation then counts the holding as nothing. Equal to market_value_minor when the full valuation is struck from that same market price." }
+        liquid_value_in_base_minor: { type: integer, format: int64, nullable: true, description: "liquid_value_minor in the space's base currency, struck once from the valuation's own currency at today's rate. Null when liquid_value_minor is, or no rate." }
+        last_traded_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the paper's latest market price, set only when that price is older than a month and the liquid valuation therefore counts the holding as nothing: the paper has not traded since." }
         price_by_hand: { type: boolean, description: "True when the price was stated by a person (POST /api/v1/instruments/{instrumentId}/prices) rather than taken from an exchange or a broker — an over-the-counter or net-asset-value estimate for a paper nobody quotes, say. Absent or false otherwise." }
         price_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe." }
         unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available)." }

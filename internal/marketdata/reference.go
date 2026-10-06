@@ -10,6 +10,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// ManualQuoteSource is what the quotes table calls a price a person stated.
+const ManualQuoteSource = "manual"
+
 // ReferenceKind is which reference price a paper has (decision Р-11).
 type ReferenceKind string
 

@@ -17,7 +17,7 @@ import (
 )
 
 // ManualPriceSource is what the quotes table calls a price a person stated.
-const ManualPriceSource = "manual"
+const ManualPriceSource = marketdata.ManualQuoteSource
 
 // ErrNoQuoteWriter is a quote store this handler cannot write to.
 var ErrNoQuoteWriter = errors.New("portfolio: the quote store takes no prices")
