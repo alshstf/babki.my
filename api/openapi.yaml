@@ -2760,7 +2760,7 @@ components:
           description: "How many positions sold shares that arrived with no purchase price and are counted as bought for nothing (Position.has_unknown_cost): the whole of what they sold for is in this result as profit, in every currency, so it is HIGHER than the truth by whatever was really paid for them. 0 when every sale knew its cost."
     CashPosition:
       type: object
-      required: [currency, amount_minor, in_base]
+      required: [currency, amount_minor, overdrawn_since, in_base]
       description: "THE MONEY THE ACCOUNT HOLDS IN ONE CURRENCY, published as a holding rather than as a balance — because that is what it is. Yuan sitting on a Russian broker's account was bought at some rate and is worth another today, and the difference is real money made or lost. It is NOT the balance mark the reconciliation stores (Account.balance): that is one figure the broker named on one day, in rubles alone; this is computed from the journal, in every currency the account has touched."
       properties:
         currency: { type: string, description: "ISO-4217 code of the money this row is" }
@@ -2768,6 +2768,11 @@ components:
           type: integer
           format: int64
           description: "The balance in minor units of `currency`: every cash effect the journal records, added up — amount less commission on each entry, which is the same formula the reconciliation compares against the broker. CAN BE NEGATIVE, and is published so rather than clamped: an account whose journal is missing an operation genuinely shows money spent that never arrived (the owner's own yuan, spent on bonds while some of the purchases behind it are trades the broker will not explain), and a floor at nought would hide exactly the discrepancy a reader needs."
+        overdrawn_since:
+          type: string
+          format: date
+          nullable: true
+          description: "On a NEGATIVE balance only: the first day the journal took this money below zero, by the operations' own dates. An account whose journal starts after money was already there is short from that day on, and it is the date an opening balance goes on (decision Р-2, variant Б): one deposit of what the account holds now less `amount_minor`, recorded as an ordinary journal row. Null when the balance is zero or positive, even if it was negative once."
         in_base:
           $ref: "#/components/schemas/CashInBase"
     CashInBase:

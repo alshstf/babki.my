@@ -139,6 +139,10 @@ func TestCashGoesNegativeAndSaysSo(t *testing.T) {
 	if usd.AmountMinor != -20_000 {
 		t.Errorf("balance = %d, want -20000", usd.AmountMinor)
 	}
+	// The day an opening balance would go on (decision Р-2).
+	if usd.OverdrawnSince == nil || *usd.OverdrawnSince != "2026-03-10" {
+		t.Errorf("overdrawn since %v, want 2026-03-10, the withdrawal that took it below zero", usd.OverdrawnSince)
+	}
 	if usd.InBase.CostMinor == nil || *usd.InBase.CostMinor != 0 {
 		t.Errorf("cost = %v, want 0 — nothing is held, so nothing was paid for it", usd.InBase.CostMinor)
 	}

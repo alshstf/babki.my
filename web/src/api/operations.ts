@@ -105,9 +105,17 @@ export function useInvalidateJournal() {
     for (const id of accountIds) {
       void queryClient.invalidateQueries({ queryKey: ["operations", id] });
       void queryClient.invalidateQueries({ queryKey: ["positions", id] });
+      void queryClient.invalidateQueries({ queryKey: ["arrivals", id] });
     }
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     void queryClient.invalidateQueries({ queryKey: ["summary"] });
+    // Read from journals too: every return (an account's, the family's, a
+    // paper's), the capital chart and a paper's own page. Without these a new
+    // deposit left «вложено за период» as it was until the page was reloaded.
+    void queryClient.invalidateQueries({ queryKey: ["return"] });
+    void queryClient.invalidateQueries({ queryKey: ["capital"] });
+    void queryClient.invalidateQueries({ queryKey: ["instrument-holdings"] });
+    void queryClient.invalidateQueries({ queryKey: ["instrument-operations"] });
   };
 }
 

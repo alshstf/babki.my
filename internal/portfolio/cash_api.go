@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/oapi-codegen/nullable"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
@@ -49,12 +50,16 @@ func taxWithheldFromAccount(ops []Operation) []apitypes.CurrencyAmount {
 // negative balance has no cost; its valuation is still struck.
 func (s *Service) cashToAPI(ctx context.Context, p *CashPosition, base string, now time.Time, rates *marketdata.RateMemo) (apitypes.CashPosition, error) {
 	out := apitypes.CashPosition{
-		Currency:    p.Currency,
-		AmountMinor: p.Minor,
+		Currency:       p.Currency,
+		AmountMinor:    p.Minor,
+		OverdrawnSince: nullable.NewNullNullable[openapi_types.Date](),
 		InBase: apitypes.CashInBase{
 			Currency: base,
 			Gap:      nullable.NewNullNullable[apitypes.CashGap](),
 		},
+	}
+	if p.OverdrawnSince != nil {
+		out.OverdrawnSince = nullable.NewNullableWithValue(openapi_types.Date{Time: *p.OverdrawnSince})
 	}
 	value, ok, err := s.sumInBase(ctx, []datedMinor{{minor: p.Minor, from: p.Currency, on: now}}, base, rates)
 	if err != nil {

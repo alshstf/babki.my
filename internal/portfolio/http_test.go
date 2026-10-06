@@ -234,9 +234,10 @@ type positionsResp struct {
 // cashPositionResp mirrors apitypes.CashPosition; base figures are pointers,
 // since each may be null beside a gap.
 type cashPositionResp struct {
-	Currency    string `json:"currency"`
-	AmountMinor int64  `json:"amount_minor"`
-	InBase      struct {
+	Currency       string  `json:"currency"`
+	AmountMinor    int64   `json:"amount_minor"`
+	OverdrawnSince *string `json:"overdrawn_since"`
+	InBase         struct {
 		Currency           string  `json:"currency"`
 		ValueMinor         *int64  `json:"value_minor"`
 		CostMinor          *int64  `json:"cost_minor"`
