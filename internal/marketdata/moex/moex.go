@@ -35,6 +35,8 @@ type board struct {
 	path string
 	// history is the path to one security's session history on the board.
 	history string
+	// bond boards also state each bond's face value and accrued interest.
+	bond bool
 }
 
 // boards are queried in precedence order: when two report a ticker, the
@@ -59,14 +61,17 @@ var boards = []board{
 	{
 		label: "bonds/TQOB", path: "/iss/engines/stock/markets/bonds/boards/TQOB/securities.json",
 		history: "/iss/history/engines/stock/markets/bonds/boards/TQOB/securities/",
+		bond:    true,
 	},
 	{
 		label: "bonds/TQCB", path: "/iss/engines/stock/markets/bonds/boards/TQCB/securities.json",
 		history: "/iss/history/engines/stock/markets/bonds/boards/TQCB/securities/",
+		bond:    true,
 	},
 	{
 		label: "bonds/TQRD", path: "/iss/engines/stock/markets/bonds/boards/TQRD/securities.json",
 		history: "/iss/history/engines/stock/markets/bonds/boards/TQRD/securities/",
+		bond:    true,
 	},
 }
 
@@ -74,6 +79,10 @@ var boards = []board{
 // still mapped by name. PREVDATE dates the quote and costs about 50 KB a
 // refresh.
 const requestedColumns = "SECID,ISIN,PREVPRICE,PREVDATE,CURRENCYID"
+
+// bondColumns are what a bond board adds: the current face, the interest
+// accrued for the next settlement, and the face's currency.
+const bondColumns = ",FACEVALUE,ACCRUEDINT,FACEUNIT"
 
 // Client fetches instrument prices from the Moscow Exchange ISS API.
 type Client struct {
@@ -178,6 +187,7 @@ func (c *Client) QuotesFor(ctx context.Context, tickers []string) ([]marketdata.
 				Price:    *row.price,
 				Currency: normalizeCurrency(row.currency),
 				On:       on,
+				Bond:     row.bond,
 			})
 		}
 	}
@@ -205,6 +215,8 @@ type secRow struct {
 	// isin identifies the security rather than the listing; empty when ISS sends
 	// none.
 	isin string
+	// bond is a bond's face and accrued interest; nil off the bond boards.
+	bond *marketdata.BondDay
 }
 
 // parsePrevDate reads a PREVDATE cell as a UTC-midnight day, plus the raw cell
@@ -234,7 +246,11 @@ type issSecuritiesResponse struct {
 // fetchBoard requests and parses one board. iss.only=securities drops the
 // marketdata blocks, which would be eighteen times larger.
 func (c *Client) fetchBoard(ctx context.Context, b board) ([]secRow, error) {
-	url := c.baseURL + b.path + "?iss.meta=off&iss.only=securities&securities.columns=" + requestedColumns
+	columns := requestedColumns
+	if b.bond {
+		columns += bondColumns
+	}
+	url := c.baseURL + b.path + "?iss.meta=off&iss.only=securities&securities.columns=" + columns
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("moex: %s: build request: %w", b.label, err)
@@ -295,6 +311,9 @@ func parseSecurities(boardLabel string, columns []string, data [][]any) ([]secRo
 	// ISIN is optional: without it a price matches its catalog row by ticker
 	// alone.
 	isinIdx, hasISIN := index["ISIN"]
+	faceIdx, hasFace := index["FACEVALUE"]
+	accruedIdx, hasAccrued := index["ACCRUEDINT"]
+	faceUnitIdx, hasFaceUnit := index["FACEUNIT"]
 
 	rows := make([]secRow, 0, len(data))
 	for i, fields := range data {
@@ -318,6 +337,10 @@ func parseSecurities(boardLabel string, columns []string, data [][]any) ([]secRo
 			row.isin, _ = fields[isinIdx].(string)
 		}
 		row.priceOn, row.priceOnRaw = parsePrevDate(fields[dateIdx])
+		if hasFace && hasAccrued && hasFaceUnit {
+			unit, _ := fields[faceUnitIdx].(string)
+			row.bond = bondTerms(fields[faceIdx], fields[accruedIdx], unit, currency)
+		}
 
 		// PREVPRICE is null when the exchange has no price at all on the board; the
 		// ticker is simply absent from the result.

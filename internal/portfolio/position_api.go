@@ -161,14 +161,22 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		byHand := true
 		out.PriceByHand = &byHand
 	}
-	// Only a bond gets the money price, past every gap. The face value is non-nil
-	// here (marketValue reported otherwise), and only bonds carry one.
-	if inst.Type == instrument.TypeBond && inst.FaceValueMinor != nil {
-		perUnit, err := pricePerUnitMinor(*inst.FaceValueMinor, q.Price)
+	// Only a bond gets the money price and the accrued interest, past every gap,
+	// so it has a face (marketValue reported otherwise).
+	out.AccruedInterestMinor = nullable.NewNullNullable[int64]()
+	if face, _, ok := bondFace(inst.FaceValueMinor, inst.FaceCurrency, q, quoted); inst.Type == instrument.TypeBond && ok {
+		perUnit, err := pricePerUnitMinor(face, q.Price)
 		if err != nil {
-			return apitypes.Position{}, fmt.Errorf("%w: %s%% of a face value of %d", err, q.Price, *inst.FaceValueMinor)
+			return apitypes.Position{}, fmt.Errorf("%w: %s%% of a face value of %s", err, q.Price, face)
 		}
 		out.PriceMoneyMinor = nullable.NewNullableWithValue(perUnit)
+		if q.Bond != nil && q.Bond.Accrued != nil {
+			accrued, err := money.Minor(q.Bond.Accrued.Shift(centsPerUnit))
+			if err != nil {
+				return apitypes.Position{}, fmt.Errorf("%w: accrued interest of %s", err, q.Bond.Accrued)
+			}
+			out.AccruedInterestMinor = nullable.NewNullableWithValue(accrued)
+		}
 	}
 
 	// A bond's valuation is in its face currency, which may differ from the

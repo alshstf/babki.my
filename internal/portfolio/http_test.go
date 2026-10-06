@@ -193,6 +193,7 @@ type positionResp struct {
 	Price                     *string          `json:"price"`
 	PriceOn                   *string          `json:"price_on"`
 	PriceMoneyMinor           *int64           `json:"price_money_minor"`
+	AccruedInterestMinor      *int64           `json:"accrued_interest_minor"`
 	UnrealizedPnlMinor        *int64           `json:"unrealized_pnl_minor"`
 	HasUndatedLots            bool             `json:"has_undated_lots"`
 	HasUndatedRealizations    bool             `json:"has_undated_realizations"`
