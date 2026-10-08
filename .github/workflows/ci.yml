@@ -64,6 +64,9 @@ jobs:
   # database, seeded with the demo data. Runs beside build-test.
   e2e:
     runs-on: ubuntu-latest
+    env:
+      # This commit's program, built here, not a released image.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.build.yml
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

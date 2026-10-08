@@ -24,6 +24,17 @@ docker compose up -d
 # http://localhost:8080
 ```
 
+Программа приходит готовым образом `ghcr.io/alshstf/babki` для обычных
+компьютеров и ARM (Raspberry Pi, Mac); версию выбирает `BABKI_VERSION` в
+`.env`. Список версий и изменений — на
+[странице выпусков](https://github.com/alshstf/babki.my/releases).
+
+Собрать из исходников вместо готового образа:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
 Экран первого запуска попросит **код** — программа пишет его в журнал при
 старте, чтобы владельцем стал тот, у кого есть доступ к серверу, а не первый,
 кто откроет страницу:
@@ -61,6 +72,7 @@ openssl rand -hex 32
 | `BABKI_ENCRYPTION_KEY` | — (обязательна) | Ключ шифрования токенов брокеров, 64 шестнадцатеричных символа (`openssl rand -hex 32`) |
 | `BABKI_ENCRYPTION_KEY_PREVIOUS` | — | Прежний ключ на время его смены (см. ниже) |
 | `BABKI_SETUP_CODE` | — (код в журнале) | Код первого запуска, заданный заранее — для автоматической установки |
+| `BABKI_VERSION` | `latest` | Версия программы (номер со страницы выпусков без `v`, например `0.1.0`); `latest` — последняя |
 | `BABKI_PORT` | `8080` | Порт на машине, где открывается программа |
 | `BABKI_COOKIE_SECURE` | `true` | Вход только по HTTPS. `false` — если программа открывается по обычному http с другой машины, например в домашней сети (см. ниже) |
 | `BABKI_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
@@ -123,17 +135,24 @@ babki.example.org {
 
 ## Обновление
 
-Из каталога с исходниками:
+Сначала сделайте резервную копию (ниже). Затем из каталога `deploy/compose`:
 
 ```bash
-git pull
-cd deploy/compose
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-Схема базы обновится сама при запуске (`BABKI_AUTO_MIGRATE`). Перед
-обновлением сделайте резервную копию (ниже) — откатить программу на старую
-версию после обновления схемы можно только восстановлением копии.
+С `BABKI_VERSION=latest` так ставится последняя версия; с номером (`0.1.0`)
+— впишите в `.env` новый номер со
+[страницы выпусков](https://github.com/alshstf/babki.my/releases).
+Схема базы обновится сама при запуске (`BABKI_AUTO_MIGRATE`).
+
+**Откат** — прежний номер в `BABKI_VERSION` и `docker compose up -d`. Если
+новая версия уже обновила схему базы, старая с ней не запустится: тогда
+восстановите копию, сделанную перед обновлением.
+
+Установка, собранная из исходников, обновляется так: `git pull`, затем
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 ## Резервная копия
 

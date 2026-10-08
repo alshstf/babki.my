@@ -17,9 +17,9 @@ name: babki
 
 services:
   app:
-    image: babki:local
-    build:
-      context: ../..
+    # The released image; BABKI_VERSION in .env picks the version. To build
+    # from this checkout instead, add docker-compose.build.yml (see there).
+    image: ghcr.io/alshstf/babki:${BABKI_VERSION:-latest}
     restart: unless-stopped
     ports:
       - "${BABKI_PORT:-8080}:8080"

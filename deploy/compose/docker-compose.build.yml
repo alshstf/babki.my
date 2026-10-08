@@ -1,0 +1,9 @@
+# Builds the program from this checkout instead of pulling a released image:
+# for development, review stands and CI. Used on top of the main file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  app:
+    image: babki:local
+    build:
+      context: ../..
