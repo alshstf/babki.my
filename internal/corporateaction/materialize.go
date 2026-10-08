@@ -299,7 +299,7 @@ func (m *Materializer) desired(ctx context.Context, base []operation.Operation, 
 			if !held.IsPositive() {
 				continue
 			}
-			if e.Source == SourceKnown && !heldInRoubles(working, instrumentID) {
+			if e.Source == SourceKnown && e.Kind == KindConversion && !heldInRoubles(working, instrumentID) {
 				// The exchange replaced only receipts held through Russian
 				// depositories, bought for roubles; one bought for currency at a
 				// foreign broker stayed a receipt.
@@ -445,17 +445,20 @@ func eventNote(e Event) string {
 	default:
 		what = fmt.Sprintf("%s %d:%d", e.Kind, e.RatioFrom, e.RatioTo)
 	}
-	return what + " — из реестра корпоративных действий (" + sourceName(e.Source) + ")"
+	return what + " — из реестра корпоративных действий (" + sourceName(e) + ")"
 }
 
 // sourceName is where an event came from, as a journal row says it.
-func sourceName(source string) string {
-	switch source {
+func sourceName(e Event) string {
+	switch e.Source {
 	case SourceMOEX:
 		return "Московская биржа"
 	case SourceYahoo:
 		return "Yahoo Finance"
 	case SourceKnown:
+		if e.Kind == KindSpinOff {
+			return "раскрытие управляющей компании фонда"
+		}
 		return "замена на Московской бирже"
 	default:
 		return "внесено вручную"
@@ -464,7 +467,7 @@ func sourceName(source string) string {
 
 // splitNote is what a split row says on the screen, like eventNote.
 func splitNote(e Event) string {
-	return fmt.Sprintf("Дробление %d:%d — из реестра корпоративных действий (%s)", e.RatioFrom, e.RatioTo, sourceName(e.Source))
+	return fmt.Sprintf("Дробление %d:%d — из реестра корпоративных действий (%s)", e.RatioFrom, e.RatioTo, sourceName(e))
 }
 
 // externalIDFor names the row an event produces on one account's holding of

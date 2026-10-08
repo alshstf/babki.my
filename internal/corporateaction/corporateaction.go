@@ -101,8 +101,9 @@ const (
 	// SourceYahoo marks a split of a foreign paper the share feed's job wrote;
 	// like the exchange's, it is rewritten on every run.
 	SourceYahoo = "yahoo"
-	// SourceKnown marks a redomiciliation this program knows from the
-	// exchange's notice (KnownConversions); rewritten on every run.
+	// SourceKnown marks an event this program knows from its primary source: a
+	// redomiciliation from the exchange's notice (KnownConversions), a fund's
+	// spin-off from its manager's (KnownSpinOffs); rewritten on every run.
 	SourceKnown = "known"
 	// SourceManual marks a row a person recorded, with the evidence in
 	// SourceRef.
