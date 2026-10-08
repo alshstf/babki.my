@@ -278,6 +278,9 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		if err != nil {
 			return nil, err
 		}
+		if err := r.provePairs(ctx, src, rows, explained); err != nil {
+			return nil, err
+		}
 		for _, row := range rows {
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if explained[row.ContentKey] {
@@ -314,20 +317,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			// projection stays pure. Without an answer the trade stays unparsed.
 			var traded *TradedCurrency
 			if refusal == nil && row.InstrumentType == brokerCurrencyInstrumentType && row.InstrumentUID != "" {
-				// What the operation says about the pair, for a delisted dollar or euro
-				// pair the broker cannot answer about (two dozen in the owner's
-				// history). The price is checked against the official rate (see
-				// Resolver.currencyFromHint).
-				hint := CurrencyHint{
-					Ticker:     row.Ticker,
-					Settlement: row.Currency,
-					On:         row.OccurredAt,
-				}
-				// No price leaves the hint unprovable.
-				if row.Price != nil {
-					hint.PricePerUnit = *row.Price
-				}
-				resolvedCurrency, currencyErr := r.resolver.ResolveCurrency(ctx, src, row.InstrumentUID, hint)
+				resolvedCurrency, currencyErr := r.resolver.ResolveCurrency(ctx, src, row.InstrumentUID, hintOf(row))
 				switch {
 				case currencyErr == nil:
 					traded = &resolvedCurrency
@@ -406,6 +396,38 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 // A resolver sentinel becomes the row's reason, including the broker's "no such
 // instrument" for a delisted paper; a database or network failure is fatal, not
 // blamed on the operation.
+// hintOf is what a currency row says about its pair, for a delisted
+// dollar or euro pair the broker cannot answer about (two dozen in the owner's
+// history). The price is checked against the official rate (see
+// Resolver.currencyFromHint); a row with no price, such as a fee, leaves the hint
+// unprovable.
+func hintOf(row MirrorRow) CurrencyHint {
+	hint := CurrencyHint{Ticker: row.Ticker, Settlement: row.Currency, On: row.OccurredAt}
+	if row.Price != nil {
+		hint.PricePerUnit = *row.Price
+	}
+	return hint
+}
+
+// provePairs works out what each of a link's currency pairs trades from its
+// priced rows before any row is read. A fee on a pair the broker forgot carries
+// no price, so it was read only when a trade on the pair came first — and the
+// rows one sync files share their first-seen time, so their order was the order
+// of random ids (#395). A pair no row proves is left to the reading itself.
+func (r *Rebuilder) provePairs(ctx context.Context, src currencySource, rows []MirrorRow, explained map[string]bool) error {
+	for _, row := range rows {
+		if row.Price == nil || row.InstrumentType != brokerCurrencyInstrumentType || row.InstrumentUID == "" ||
+			row.State != stateExecuted || row.DisappearedAt != nil || explained[row.ContentKey] {
+			continue
+		}
+		_, err := r.resolver.ResolveCurrency(ctx, src, row.InstrumentUID, hintOf(row))
+		if err != nil && !errors.Is(err, ErrIncompletePassport) && !errors.Is(err, ErrInstrumentNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Rebuilder) resolve(ctx context.Context, connID uuid.UUID, src passportSource, row MirrorRow,
 	resolutions map[InstrumentRef]Resolved,
 ) (*Resolved, *UnparsedError, error) {
