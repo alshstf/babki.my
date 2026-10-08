@@ -1903,6 +1903,30 @@ func TestRebuildWorksOutAForgottenCurrencyPairFromItsName(t *testing.T) {
 	}
 }
 
+// A fee on a forgotten pair has no price to prove the pair by, so it borrows
+// the proof of the pair's trade — whichever of the two is read first. Rows one
+// sync files are read in the order of random ids; here the fee is filed by an
+// earlier sync (the broker lists every row each time), so it comes first (#395).
+func TestRebuildReadsAFeeOnAForgottenPairWhicheverRowComesFirst(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.rates.byCode["USD"] = decimal.RequireFromString("89.50")
+
+	trade := loadOperationItem(t, "currency_buy.json")
+	trade.InstrumentUID = "uid-usd-delisted"
+	trade.Ticker = "USD000UTSTOM"
+	fee := loadOperationItem(t, "broker_fee.json")
+	fee.ID = "op-cur-fee-1"
+	fee.ParentOperationID = trade.ID
+	fee.InstrumentUID, fee.InstrumentType, fee.Ticker = trade.InstrumentUID, trade.InstrumentType, trade.Ticker
+	fee.Payment = trade.Commission
+	f.sync(t, f.link, fee)
+	f.sync(t, f.link, fee, trade)
+
+	if stats := f.rebuild(t); stats.Unparsed != 0 {
+		t.Fatalf("left %d rows unparsed, want none: the trade proves the pair for its fee too", stats.Unparsed)
+	}
+}
+
 // Without the rate the forgotten pair stays unparsed.
 func TestRebuildLeavesAForgottenPairUnparsedWithoutARate(t *testing.T) {
 	f := newRebuildFixture(t)
