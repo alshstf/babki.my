@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -233,32 +234,56 @@ type DividendPaper struct {
 // day. Foreign by ISIN country: a Russian issuer's tax comes as its own broker
 // line; a foreign one is taken abroad, out of sight.
 func (s *Store) ForeignDividendPapers(ctx context.Context, spaceID, connID uuid.UUID) ([]DividendPaper, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT i.id, i.isin, i.figi,
-		       COALESCE((SELECT m.instrument_uid FROM tinvest_instrument_map m
-		                 WHERE m.connection_id = $2 AND m.instrument_id = i.id
-		                 ORDER BY m.updated_at DESC LIMIT 1), ''),
-		       min(o.occurred_on)
-		FROM operations o
-		JOIN instruments i ON i.id = o.instrument_id
-		WHERE o.space_id = $1 AND o.type = 'dividend'
-		  AND i.isin <> '' AND upper(left(i.isin, 2)) <> 'RU'
-		GROUP BY i.id, i.isin, i.figi
-		ORDER BY i.id`, spaceID, connID)
+	const what = "list the foreign papers with dividends"
+	firsts, err := s.journal().FirstDaysInSpace(ctx, spaceID, operation.TypeDividend)
 	if err != nil {
-		return nil, fmt.Errorf("tinvest: list the foreign papers with dividends: %w", err)
+		return nil, fmt.Errorf("tinvest: %s: read the journal: %w", what, err)
 	}
-	defer rows.Close()
-	var out []DividendPaper
-	for rows.Next() {
-		var p DividendPaper
-		if err := rows.Scan(&p.InstrumentID, &p.ISIN, &p.FIGI, &p.InstrumentUID, &p.FirstDividendOn); err != nil {
-			return nil, fmt.Errorf("tinvest: list the foreign papers with dividends: %w", err)
+	ids := make([]uuid.UUID, 0, len(firsts))
+	for id := range firsts {
+		ids = append(ids, id)
+	}
+	papers, err := s.catalogOf(ctx, what, ids)
+	if err != nil {
+		return nil, err
+	}
+	var foreign []uuid.UUID
+	for _, id := range byID(ids) {
+		if isin := papers[id].ISIN; isin != "" && !strings.HasPrefix(strings.ToUpper(isin), "RU") {
+			foreign = append(foreign, id)
 		}
-		out = append(out, p)
+	}
+	// The most recently updated listing of each, as the resolver's figi lookup
+	// picks.
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (instrument_id) instrument_id, instrument_uid
+		FROM tinvest_instrument_map
+		WHERE connection_id = $1 AND instrument_id = ANY($2)
+		ORDER BY instrument_id, updated_at DESC`, connID, foreign)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
+	}
+	uids := map[uuid.UUID]string{}
+	for rows.Next() {
+		var (
+			id  uuid.UUID
+			uid string
+		)
+		if err := rows.Scan(&id, &uid); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("tinvest: %s: %w", what, err)
+		}
+		uids[id] = uid
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tinvest: list the foreign papers with dividends: %w", err)
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
+	}
+	var out []DividendPaper
+	for _, id := range foreign {
+		out = append(out, DividendPaper{
+			InstrumentID: id, ISIN: papers[id].ISIN, FIGI: papers[id].FIGI,
+			InstrumentUID: uids[id], FirstDividendOn: firsts[id],
+		})
 	}
 	return out, nil
 }

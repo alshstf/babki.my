@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"babki.my/babki/internal/operation"
 )
 
 // ErrRowNotInLink: a named content key is not one of the link's mirror rows.
@@ -86,32 +88,56 @@ func (s *Store) attachExplanations(ctx context.Context, rows []MirrorRow) error 
 
 	// WITH ORDINALITY: each answer knows which pair asked for it, rather than
 	// rebuilding the key from values that come back changed (a date returns as
-	// midnight UTC).
-	q := `SELECT p.ord, e.id, e.operation_id, o.occurred_on, o.type
+	// midnight UTC). The link's space is where the journal finds the operation.
+	q := `SELECT p.ord, e.id, e.operation_id, l.space_id
 		    FROM unnest($1::uuid[], $2::text[]) WITH ORDINALITY AS p(link_id, content_key, ord)
 		    JOIN tinvest_mirror_explanations e
 		      ON e.link_id = p.link_id AND e.content_key = p.content_key
-		    JOIN operations o ON o.id = e.operation_id`
+		    JOIN tinvest_account_links l ON l.id = e.link_id`
 	res, err := s.db.Query(ctx, q, links, keys)
 	if err != nil {
 		return fmt.Errorf("tinvest: attach the explanations of mirror rows: %w", err)
 	}
-	defer res.Close()
-	for res.Next() {
-		var (
-			ord int
-			e   RowExplanation
-		)
-		if err := res.Scan(&ord, &e.ID, &e.OperationID, &e.OperationOn, &e.OperationType); err != nil {
-			return fmt.Errorf("tinvest: attach the explanations of mirror rows: %w", err)
-		}
-		if ord < 1 || ord > len(rows) {
-			return fmt.Errorf("tinvest: attach the explanations of mirror rows: row %d of %d", ord, len(rows))
-		}
-		rows[ord-1].ExplainedBy = &e
+	type found struct {
+		ord   int
+		e     RowExplanation
+		space uuid.UUID
 	}
-	if err := res.Err(); err != nil {
+	all, err := pgx.CollectRows(res, func(row pgx.CollectableRow) (found, error) {
+		var f found
+		return f, row.Scan(&f.ord, &f.e.ID, &f.e.OperationID, &f.space)
+	})
+	if err != nil {
 		return fmt.Errorf("tinvest: attach the explanations of mirror rows: %w", err)
+	}
+
+	bySpace := map[uuid.UUID][]uuid.UUID{}
+	for _, f := range all {
+		bySpace[f.space] = append(bySpace[f.space], f.e.OperationID)
+	}
+	ops := map[uuid.UUID]operation.Operation{}
+	for space, ids := range bySpace {
+		got, err := s.journal().ByIDs(ctx, space, ids)
+		if err != nil {
+			return fmt.Errorf("tinvest: attach the explanations of mirror rows: read the journal: %w", err)
+		}
+		for _, op := range got {
+			ops[op.ID] = op
+		}
+	}
+	for _, f := range all {
+		if f.ord < 1 || f.ord > len(rows) {
+			return fmt.Errorf("tinvest: attach the explanations of mirror rows: row %d of %d", f.ord, len(rows))
+		}
+		// The operation's deletion takes its explanation with it, so it is
+		// found; were it not, the row would read as unexplained, as a join gave.
+		op, ok := ops[f.e.OperationID]
+		if !ok {
+			continue
+		}
+		e := f.e
+		e.OperationOn, e.OperationType = op.OccurredOn, string(op.Type)
+		rows[f.ord-1].ExplainedBy = &e
 	}
 	return nil
 }

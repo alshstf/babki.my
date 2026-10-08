@@ -61,22 +61,6 @@ var core = map[string]bool{
 // a new crossing fails the test until it goes through the owner's store or is
 // written here with its reason.
 var crossings = map[string]map[string]string{
-	// The broker import joins its own tables with the journal, the catalog and
-	// the accounts in single statements: atomic (a link is created only into an
-	// account of the same space) and one round trip each. To go through the
-	// core's stores — tech debt, plan item 2.3.
-	"internal/importer/tinvest/store.go": {
-		"accounts":    "a link is created only into an account of the connection's space, in one statement",
-		"operations":  "the papers a space holds that the connection's map does not know",
-		"instruments": "the instrument map read with each paper's ISIN, type and currency",
-	},
-	"internal/importer/tinvest/dividends.go": {
-		"operations":  "the foreign papers a space has dividends on",
-		"instruments": "their ISINs and FIGIs",
-	},
-	"internal/importer/tinvest/explanations.go": {
-		"operations": "an explained mirror row shown with the hand entry that explains it",
-	},
 	// The journal locks the account row while it writes, so an archived account
 	// takes no entries and two writers queue: the lock is the write's own.
 	"internal/operation/store.go": {

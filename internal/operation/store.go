@@ -695,8 +695,25 @@ func (s *Store) CounterpartAccounts(ctx context.Context, spaceID uuid.UUID, ids 
 // FirstDaysByInstrument is, for every paper any journal names, the day of its
 // first operation — instance-wide, like the market data it is asked for.
 func (s *Store) FirstDaysByInstrument(ctx context.Context) (map[uuid.UUID]time.Time, error) {
-	rows, err := s.db.Query(ctx, `SELECT instrument_id, min(occurred_on) FROM operations
+	return s.firstDays(ctx, `SELECT instrument_id, min(occurred_on) FROM operations
 		WHERE instrument_id IS NOT NULL GROUP BY instrument_id`)
+}
+
+// FirstDaysInSpace is, for every paper the space's journal names, the day of
+// its first operation; with types given, of its first operation of those types.
+func (s *Store) FirstDaysInSpace(ctx context.Context, spaceID uuid.UUID, types ...Type) (map[uuid.UUID]time.Time, error) {
+	names := make([]string, len(types))
+	for i, t := range types {
+		names[i] = string(t)
+	}
+	return s.firstDays(ctx, `SELECT instrument_id, min(occurred_on) FROM operations
+		WHERE space_id = $1 AND instrument_id IS NOT NULL
+		  AND (cardinality($2::text[]) = 0 OR type::text = ANY($2))
+		GROUP BY instrument_id`, spaceID, names)
+}
+
+func (s *Store) firstDays(ctx context.Context, sql string, args ...any) (map[uuid.UUID]time.Time, error) {
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

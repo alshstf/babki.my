@@ -1,17 +1,21 @@
 package tinvest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
 )
 
@@ -219,6 +223,29 @@ type Store struct{ db db.Executor }
 
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
+// The catalog, the journal and the accounts belong to other modules: this store
+// reads them through their stores (plan item 2.3), over its own executor, so a
+// read inside a transaction stays in it.
+func (s *Store) catalog() *instrument.Store { return instrument.NewStore(s.db) }
+func (s *Store) journal() *operation.Store  { return operation.NewStore(s.db) }
+func (s *Store) accounts() *account.Store   { return account.NewStore(s.db) }
+
+// catalogOf reads the catalog rows behind ids, failing as what.
+func (s *Store) catalogOf(ctx context.Context, what string, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error) {
+	found, err := s.catalog().ByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: %s: read the catalog: %w", what, err)
+	}
+	return found, nil
+}
+
+// byID orders ids as Postgres orders uuids, byte by byte, so a list built in Go
+// keeps the order its query once gave it.
+func byID(ids []uuid.UUID) []uuid.UUID {
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	return ids
+}
+
 // connectionCols and scanConnection keep every connection read on the same
 // columns.
 const connectionCols = `id, space_id, status, token_ciphertext, token_last4, created_at, updated_at`
@@ -362,23 +389,32 @@ func scanLink(row pgx.Row) (AccountLink, error) {
 
 // CreateLink files one broker account against one babki account; link.ID is
 // ignored. The connection and the account must both be in link.SpaceID, which the
-// foreign keys cannot check: ErrLinkOutsideSpace otherwise. One statement, so a
-// connection deleted in between cannot surface as a confusing foreign-key
-// error.
+// foreign keys cannot check: ErrLinkOutsideSpace otherwise.
+//
+// The account is asked of its own store first. That is as good as asking in the
+// insert: an account never changes space and is never deleted on its own, only
+// with its space, which takes the connection too. The connection is checked in
+// the insert, so one deleted in between cannot surface as a confusing
+// foreign-key error.
 func (s *Store) CreateLink(ctx context.Context, link AccountLink) (AccountLink, error) {
+	outside := fmt.Errorf("%w: connection %s, account %s, space %s",
+		ErrLinkOutsideSpace, link.ConnectionID, link.AccountID, link.SpaceID)
+	if _, err := s.accounts().ByID(ctx, link.SpaceID, link.AccountID); errors.Is(err, pgx.ErrNoRows) {
+		return AccountLink{}, outside
+	} else if err != nil {
+		return AccountLink{}, fmt.Errorf("tinvest: create account link: read the account: %w", err)
+	}
 	l, err := scanLink(s.db.QueryRow(ctx, `
 		INSERT INTO tinvest_account_links (connection_id, space_id, account_id,
 			broker_account_id, broker_account_name, broker_account_type, opened_on)
 		SELECT $1::uuid, $2::uuid, $3::uuid, $4::text, $5::text, $6::text, $7::date
 		WHERE EXISTS (SELECT 1 FROM tinvest_connections WHERE id = $1 AND space_id = $2)
-		  AND EXISTS (SELECT 1 FROM accounts WHERE id = $3 AND space_id = $2)
 		RETURNING `+linkCols,
 		link.ConnectionID, link.SpaceID, link.AccountID, link.BrokerAccountID,
 		link.BrokerAccountName, link.BrokerAccountType, link.OpenedOn))
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Only the WHERE above can stop the insert.
-		return AccountLink{}, fmt.Errorf("%w: connection %s, account %s, space %s",
-			ErrLinkOutsideSpace, link.ConnectionID, link.AccountID, link.SpaceID)
+		return AccountLink{}, outside
 	}
 	if err != nil {
 		return AccountLink{}, fmt.Errorf("tinvest: create account link: %w", err)
@@ -570,29 +606,50 @@ type UnmappedHeldInstrument struct {
 // only two holdings left unpriced. Ordered by catalog id; the caller bounds it,
 // since each row is a broker search.
 func (s *Store) UnmappedHeldInstruments(ctx context.Context, spaceID, connID uuid.UUID) ([]UnmappedHeldInstrument, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT DISTINCT i.id, i.isin, i.ticker, i.type::text, i.currency
-		FROM operations o
-		JOIN instruments i ON i.id = o.instrument_id
-		WHERE o.space_id = $1
-		  AND NOT EXISTS (
-			SELECT 1 FROM tinvest_instrument_map m
-			WHERE m.connection_id = $2 AND m.instrument_id = i.id)
-		ORDER BY i.id`, spaceID, connID)
+	const what = "list unmapped held instruments"
+	held, err := s.journal().FirstDaysInSpace(ctx, spaceID)
 	if err != nil {
-		return nil, fmt.Errorf("tinvest: list unmapped held instruments: %w", err)
+		return nil, fmt.Errorf("tinvest: %s: read the journal: %w", what, err)
 	}
-	defer rows.Close()
-	out := []UnmappedHeldInstrument{}
-	for rows.Next() {
-		var u UnmappedHeldInstrument
-		if err := rows.Scan(&u.InstrumentID, &u.ISIN, &u.Ticker, &u.Type, &u.Currency); err != nil {
-			return nil, fmt.Errorf("tinvest: list unmapped held instruments: %w", err)
+	mapped, err := s.mappedInstruments(ctx, connID)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
+	}
+	var ids []uuid.UUID
+	for id := range held {
+		if !mapped[id] {
+			ids = append(ids, id)
 		}
-		out = append(out, u)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tinvest: list unmapped held instruments: %w", err)
+	papers, err := s.catalogOf(ctx, what, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := []UnmappedHeldInstrument{}
+	for _, id := range byID(ids) {
+		if i, ok := papers[id]; ok {
+			out = append(out, UnmappedHeldInstrument{
+				InstrumentID: id, ISIN: i.ISIN, Ticker: i.Ticker, Type: string(i.Type), Currency: i.Currency,
+			})
+		}
+	}
+	return out, nil
+}
+
+// mappedInstruments is every catalog instrument this connection's map knows.
+func (s *Store) mappedInstruments(ctx context.Context, connID uuid.UUID) (map[uuid.UUID]bool, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT instrument_id FROM tinvest_instrument_map WHERE connection_id = $1`, connID)
+	if err != nil {
+		return nil, fmt.Errorf("read the instrument map: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, fmt.Errorf("read the instrument map: %w", err)
+	}
+	out := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
 	}
 	return out, nil
 }
@@ -851,9 +908,9 @@ func (s *Store) LastReconcileByLink(ctx context.Context, connID uuid.UUID) (map[
 	return out, nil
 }
 
-// mapMatch is one instrument-map hit joined with the catalog's type, currency,
-// isin and ticker, so a hit answers Resolve without a catalog round trip, which
-// is the point of checking the map first.
+// mapMatch is one instrument-map hit with the catalog's type, currency, isin
+// and ticker: what Resolve answers with, without asking the broker, which is the
+// point of checking the map first.
 type mapMatch struct {
 	InstrumentID uuid.UUID
 	Type         instrument.Type
@@ -863,24 +920,16 @@ type mapMatch struct {
 
 // mapByInstrumentUID and mapByFIGI are lookupMap's two lookups, in that order;
 // both return pgx.ErrNoRows on a miss. instrument_id cascades on delete, so a
-// match always joins.
+// match always has its catalog row.
 func (s *Store) mapByInstrumentUID(ctx context.Context, connectionID uuid.UUID, instrumentUID string) (mapMatch, error) {
 	if instrumentUID == "" {
 		// An empty uid would match whatever an earlier empty write left; refused
 		// before the query.
 		return mapMatch{}, fmt.Errorf("tinvest: instrument map by instrument_uid: %w", pgx.ErrNoRows)
 	}
-	var m mapMatch
-	err := s.db.QueryRow(ctx, `
-		SELECT im.instrument_id, i.type, i.currency, i.isin, i.ticker
-		FROM tinvest_instrument_map im
-		JOIN instruments i ON i.id = im.instrument_id
-		WHERE im.connection_id = $1 AND im.instrument_uid = $2`,
-		connectionID, instrumentUID).Scan(&m.InstrumentID, &m.Type, &m.Currency, &m.ISIN, &m.Ticker)
-	if err != nil {
-		return mapMatch{}, fmt.Errorf("tinvest: instrument map by instrument_uid: %w", err)
-	}
-	return m, nil
+	return s.mapHit(ctx, "instrument map by instrument_uid", `
+		SELECT instrument_id FROM tinvest_instrument_map
+		WHERE connection_id = $1 AND instrument_uid = $2`, connectionID, instrumentUID)
 }
 
 // mapByFIGI is the fallback when the operation's instrument_uid is unknown
@@ -892,19 +941,24 @@ func (s *Store) mapByFIGI(ctx context.Context, connectionID uuid.UUID, figi stri
 		// instrument.
 		return mapMatch{}, fmt.Errorf("tinvest: instrument map by figi: %w", pgx.ErrNoRows)
 	}
-	var m mapMatch
-	err := s.db.QueryRow(ctx, `
-		SELECT im.instrument_id, i.type, i.currency, i.isin, i.ticker
-		FROM tinvest_instrument_map im
-		JOIN instruments i ON i.id = im.instrument_id
-		WHERE im.connection_id = $1 AND im.figi = $2
-		ORDER BY im.updated_at DESC
-		LIMIT 1`,
-		connectionID, figi).Scan(&m.InstrumentID, &m.Type, &m.Currency, &m.ISIN, &m.Ticker)
-	if err != nil {
-		return mapMatch{}, fmt.Errorf("tinvest: instrument map by figi: %w", err)
+	return s.mapHit(ctx, "instrument map by figi", `
+		SELECT instrument_id FROM tinvest_instrument_map
+		WHERE connection_id = $1 AND figi = $2
+		ORDER BY updated_at DESC
+		LIMIT 1`, connectionID, figi)
+}
+
+// mapHit reads the one instrument a map query names, then its catalog row.
+func (s *Store) mapHit(ctx context.Context, what, sql string, args ...any) (mapMatch, error) {
+	var id uuid.UUID
+	if err := s.db.QueryRow(ctx, sql, args...).Scan(&id); err != nil {
+		return mapMatch{}, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
-	return m, nil
+	i, err := s.catalog().ByID(ctx, id)
+	if err != nil {
+		return mapMatch{}, fmt.Errorf("tinvest: %s: read the catalog: %w", what, err)
+	}
+	return mapMatch{InstrumentID: id, Type: i.Type, Currency: i.Currency, ISIN: i.ISIN, Ticker: i.Ticker}, nil
 }
 
 // saveMap records instrumentID for ref.InstrumentUID with the other identifiers
@@ -967,25 +1021,36 @@ type QuotableInstrument struct {
 // may appear twice (drifted ids, another venue); both are priced, and the price's
 // own day decides the latest quote.
 func (s *Store) QuotableByConnection(ctx context.Context, connectionID uuid.UUID) ([]QuotableInstrument, error) {
+	const what = "list quotable instruments"
 	rows, err := s.db.Query(ctx, `
-		SELECT m.instrument_uid, m.instrument_id, m.currency, i.type = 'bond'
-		FROM tinvest_instrument_map m JOIN instruments i ON i.id = m.instrument_id
-		WHERE m.connection_id = $1 AND m.instrument_uid <> ''
-		ORDER BY m.instrument_uid`, connectionID)
+		SELECT instrument_uid, instrument_id, currency
+		FROM tinvest_instrument_map
+		WHERE connection_id = $1 AND instrument_uid <> ''
+		ORDER BY instrument_uid`, connectionID)
 	if err != nil {
-		return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
-	defer rows.Close()
-	out := []QuotableInstrument{}
-	for rows.Next() {
+	listings, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (QuotableInstrument, error) {
 		var q QuotableInstrument
-		if err := rows.Scan(&q.InstrumentUID, &q.InstrumentID, &q.Currency, &q.Bond); err != nil {
-			return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
-		}
-		out = append(out, q)
+		return q, row.Scan(&q.InstrumentUID, &q.InstrumentID, &q.Currency)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
+	ids := make([]uuid.UUID, len(listings))
+	for i, q := range listings {
+		ids[i] = q.InstrumentID
+	}
+	papers, err := s.catalogOf(ctx, what, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := []QuotableInstrument{}
+	for _, q := range listings {
+		if i, ok := papers[q.InstrumentID]; ok {
+			q.Bond = i.Type == instrument.TypeBond
+			out = append(out, q)
+		}
 	}
 	return out, nil
 }
@@ -1021,28 +1086,42 @@ func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (Inst
 		return InstrumentIndex{}, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
 	}
 
+	type entry struct {
+		uid, figi string
+		id        uuid.UUID
+	}
 	rows, err := s.db.Query(ctx, `
-		SELECT im.instrument_uid, im.figi, im.instrument_id, i.ticker, i.name
-		FROM tinvest_instrument_map im
-		JOIN instruments i ON i.id = im.instrument_id
-		WHERE im.connection_id = $1`, connectionID)
+		SELECT instrument_uid, figi, instrument_id
+		FROM tinvest_instrument_map
+		WHERE connection_id = $1`, connectionID)
 	if err != nil {
 		return fail(err)
 	}
-	defer rows.Close()
+	entries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (entry, error) {
+		var e entry
+		return e, row.Scan(&e.uid, &e.figi, &e.id)
+	})
+	if err != nil {
+		return fail(err)
+	}
+	ids := make([]uuid.UUID, len(entries))
+	for i, e := range entries {
+		ids[i] = e.id
+	}
+	papers, err := s.catalog().ByIDs(ctx, ids)
+	if err != nil {
+		return fail(err)
+	}
 
 	index := InstrumentIndex{ByUID: map[string]uuid.UUID{}, ByFIGI: map[string]uuid.UUID{}}
 	contested := map[string]bool{}
 	labels := map[uuid.UUID]string{}
-	for rows.Next() {
-		var (
-			uid, figi    string
-			id           uuid.UUID
-			ticker, name string
-		)
-		if err := rows.Scan(&uid, &figi, &id, &ticker, &name); err != nil {
-			return fail(err)
+	for _, e := range entries {
+		paper, ok := papers[e.id]
+		if !ok {
+			continue
 		}
+		uid, figi, id, ticker, name := e.uid, e.figi, e.id, paper.Ticker, paper.Name
 		if uid != "" {
 			index.ByUID[uid] = id
 		}
@@ -1059,9 +1138,6 @@ func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (Inst
 		} else {
 			labels[id] = name
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return fail(err)
 	}
 	return index, labels, nil
 }
