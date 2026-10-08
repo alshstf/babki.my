@@ -1652,7 +1652,7 @@ export interface components {
          */
         InstrumentEventKind: "split" | "conversion" | "spin_off";
         /**
-         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. `known`: a receipt the exchange replaced by a Russian company's share one for one, from a list this program carries with each notice in `source_ref` (decision Р-19); it reaches only receipts bought for roubles, the ones Russian depositories held. None of the three is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. `yahoo`: a foreign paper's split on its home exchange, read daily from Yahoo Finance for the foreign papers the journals hold. `known`: from a list this program carries, with the primary source in `source_ref` — a receipt the exchange replaced by a Russian company's share one for one (decision Р-19), which reaches only receipts bought for roubles, the ones Russian depositories held; or a fund whose blocked assets its manager moved into a new fund, one unit for one, with none of the cost basis. None of the three is a person's to remove — the job rewrites it on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
          * @enum {string}
          */
         InstrumentEventSource: "moex_iss" | "yahoo" | "known" | "manual";

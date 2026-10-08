@@ -124,7 +124,7 @@ func NewWorkers(
 	}
 	river.AddWorker(workers, corporateaction.NewRefreshForeignSplitsWorker(
 		caStore, caMaterializer, operations, instruments, references.Splits, log))
-	river.AddWorker(workers, corporateaction.NewRecordKnownConversionsWorker(caStore, caMaterializer, log))
+	river.AddWorker(workers, corporateaction.NewRecordKnownConversionsWorker(caStore, caMaterializer, instruments, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeAllWorker(caMaterializer, log))
 	river.AddWorker(workers, corporateaction.NewMaterializeISINWorker(caMaterializer, log))
 	river.AddWorker(workers, marketdata.NewReferencePricesWorker(mdStore, operations, instruments,
