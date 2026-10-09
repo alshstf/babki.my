@@ -184,3 +184,46 @@ func TestNoHistoryIsTakenFromAListingInAnotherCurrency(t *testing.T) {
 		t.Errorf("stored %+v after %d candle requests, want nothing asked and nothing stored", store.stored, f.broker.callCount(rpcCandles))
 	}
 }
+
+// A bond's candles come in points, a percentage of its face, as its last prices
+// do: they are stored in the listing's currency like its current price, so a
+// bond the exchange has no history for (a redeemed one, one in yuan) gets its
+// past prices. A share's candles in points are still not a price.
+func TestBrokerCandlesOfABondAreStoredAsItsPercentagePrice(t *testing.T) {
+	f := newQuotesFixture(t)
+	face, faceCurrency := int64(100_000), "RUB"
+	bond, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "SU26238RMFS4", Currency: "RUB",
+		FaceValueMinor: &face, FaceCurrency: &faceCurrency,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := f.instrument(t, "SBER", "RUB")
+	f.mapTo(t, "uid-ofz", bond.ID, "RUB")
+	f.mapTo(t, "uid-sber", share.ID, "RUB")
+	f.broker.answer(rpcCandles, 200, `{"priceCurrency":"pt.","candles":[
+		{"close":{"units":"61","nano":250000000},"time":"2026-07-21T00:00:00Z","isComplete":true}
+	]}`)
+
+	store := &historyStore{}
+	log := slog.New(f.logs)
+	newClient := func(token string) (*Client, error) {
+		return NewClient(f.broker.srv.Client(), f.broker.srv.URL, token, log), nil
+	}
+	w := NewBackfillQuotesWorker(f.store, store, opsFirst{
+		bond.ID:  time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
+		share.ID: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
+	}, f.sealer, newClient, log).(*backfillQuotesWorker)
+	w.now = func() time.Time { return f.now }
+	if err := w.Work(f.ctx, &river.Job[BackfillQuotesArgs]{JobRow: &rivertype.JobRow{ID: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.stored) != 1 {
+		t.Fatalf("stored %+v, want the bond's one closed day and nothing of the share", store.stored)
+	}
+	if q := store.stored[0]; q.InstrumentID != bond.ID || q.Currency != "RUB" || q.Source != HistorySource || q.Price.String() != "61.25" {
+		t.Errorf("stored %+v, want the bond at 61.25 %% of its face, in roubles, from the broker's history", q)
+	}
+}
