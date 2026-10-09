@@ -26,8 +26,10 @@ func reportRow(tradeID, tradedAt, clearValueDate string) string {
 		tradeID, tradedAt, clearValueDate)
 }
 
-// brokerReport answers both requests of the report method: the task id and
-// a finished one-page report; each decoder reads its own half.
+// brokerReport answers the report method with a finished one-page report and
+// its task: the order takes it as handed back at once (a report built before),
+// as the broker answers for one of the owner's accounts. The order-then-page
+// path has its own test (TestTradeSettlementsWaitsForTheReportAndReadsEveryPage).
 func brokerReport(rows ...string) string {
 	return `{"generateBrokerReportResponse":{"taskId":"task-1"},` +
 		`"getBrokerReportResponse":{"brokerReport":[` + strings.Join(rows, ",") + `],` +
@@ -391,14 +393,14 @@ func TestSyncWorkerDatesATradeByTheDayTheBrokerReportSaysItSettled(t *testing.T)
 	if journal[0].SettledOn == nil || !journal[0].SettledOn.Equal(on("2026-03-17")) {
 		t.Fatalf("the purchase settled on %v, want 2026-03-17 — the broker report's day", journal[0].SettledOn)
 	}
-	if n := f.broker.callCount(rpcBrokerReport); n != 2 {
-		t.Fatalf("the report method was called %d times, want 2 (the order and its one page)", n)
+	if n := f.broker.callCount(rpcBrokerReport); n != 1 {
+		t.Fatalf("the report method was called %d times, want 1 (the order, answered with the report)", n)
 	}
 
 	if err := f.work(t, "schedule"); err != nil {
 		t.Fatalf("second Work: %v", err)
 	}
-	if n := f.broker.callCount(rpcBrokerReport); n != 2 {
+	if n := f.broker.callCount(rpcBrokerReport); n != 1 {
 		t.Errorf("the second run called the report method again (%d calls), want no call — every trade has its day", n)
 	}
 	again := f.journal(t)
