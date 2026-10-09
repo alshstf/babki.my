@@ -14,8 +14,22 @@ permissions:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    env:
+      # The tests' Postgres (and testcontainers' own reaper) from the mirror too.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: mirror.gcr.io/
     steps:
       - uses: actions/checkout@v7
+      # Docker Hub limits anonymous pulls per address, and the shared runners
+      # run out of them; Google's mirror serves the same official images. The
+      # daemon's mirror setting does not reach the runners' image store, so the
+      # images the build and compose name are pulled from the mirror ahead and
+      # given their usual names (the list is read from the files themselves).
+      - name: Docker Hub images from Google's mirror
+        run: |
+          images=$( { grep -hoP '^FROM\s+(--platform=\S+\s+)?\K\S+' Dockerfile; grep -hoP '^\s+image:\s+\Kpostgres\S*' deploy/compose/docker-compose.yml; } | sort -u)
+          for image in $images; do
+            docker pull -q "mirror.gcr.io/library/$image" && docker tag "mirror.gcr.io/library/$image" "$image"
+          done
 
       - uses: actions/setup-node@v7
         with:
@@ -36,6 +50,10 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26.x"
+          # The newest 1.26 patch, not the runner's cached one: a security
+          # release (Go's own fixes in net/http, crypto/tls) is what the
+          # vulnerability check asks for the day it ships.
+          check-latest: true
       - name: Check generated code is fresh
         run: |
           make gen
@@ -69,6 +87,17 @@ jobs:
       COMPOSE_FILE: docker-compose.yml:docker-compose.build.yml
     steps:
       - uses: actions/checkout@v7
+      # Docker Hub limits anonymous pulls per address, and the shared runners
+      # run out of them; Google's mirror serves the same official images. The
+      # daemon's mirror setting does not reach the runners' image store, so the
+      # images the build and compose name are pulled from the mirror ahead and
+      # given their usual names (the list is read from the files themselves).
+      - name: Docker Hub images from Google's mirror
+        run: |
+          images=$( { grep -hoP '^FROM\s+(--platform=\S+\s+)?\K\S+' Dockerfile; grep -hoP '^\s+image:\s+\Kpostgres\S*' deploy/compose/docker-compose.yml; } | sort -u)
+          for image in $images; do
+            docker pull -q "mirror.gcr.io/library/$image" && docker tag "mirror.gcr.io/library/$image" "$image"
+          done
       - uses: actions/setup-node@v7
         with:
           node-version: 22
