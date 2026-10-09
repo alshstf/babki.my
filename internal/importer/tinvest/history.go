@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
@@ -183,7 +184,7 @@ func (w *backfillQuotesWorker) backfillConnection(ctx context.Context, conn Conn
 		if _, ok := fromExchange[l.InstrumentID]; ok {
 			continue
 		}
-		if err := w.fetch(ctx, client, l.InstrumentID, l.InstrumentUID, l.Currency, w.since(day, covered[l.InstrumentID]), today); err != nil {
+		if err := w.fetch(ctx, client, l.InstrumentID, l.InstrumentUID, l.Currency, l.Bond, w.since(day, covered[l.InstrumentID]), today); err != nil {
 			return err
 		}
 	}
@@ -232,7 +233,8 @@ func (w *backfillQuotesWorker) backfillUnmapped(ctx context.Context, conn Connec
 		if !ok {
 			continue
 		}
-		if err := w.fetch(ctx, client, u.InstrumentID, listing.UID, currency, w.since(day, covered[u.InstrumentID]), today); err != nil {
+		bond := u.Type == string(instrument.TypeBond)
+		if err := w.fetch(ctx, client, u.InstrumentID, listing.UID, currency, bond, w.since(day, covered[u.InstrumentID]), today); err != nil {
 			return err
 		}
 	}
@@ -248,9 +250,18 @@ func (w *backfillQuotesWorker) since(firstOperation, lastFetched time.Time) time
 	return from
 }
 
+// bondCandleUnit is how the broker names the unit of a bond's candles: points,
+// a percentage of the face, as its last prices for bonds are (quotes.go).
+const bondCandleUnit = "PT."
+
 // fetch stores a listing's daily closes from from to today in the listing's
-// currency; candles in another currency are skipped.
-func (w *backfillQuotesWorker) fetch(ctx context.Context, client *Client, instrumentID uuid.UUID, uid, listingCurrency string, from, today time.Time) error {
+// currency; candles in another currency are skipped. A bond's candles are in
+// points and are stored like its current price, as a percentage the valuation
+// applies to the face: skipping them left a bond the exchange has no history
+// for (a redeemed one, one in yuan) without any past price.
+func (w *backfillQuotesWorker) fetch(ctx context.Context, client *Client, instrumentID uuid.UUID, uid, listingCurrency string,
+	bond bool, from, today time.Time,
+) error {
 	for start := from; !start.After(today); start = start.AddDate(0, 0, candleWindow) {
 		end := start.AddDate(0, 0, candleWindow)
 		if tomorrow := today.AddDate(0, 0, 1); end.After(tomorrow) {
@@ -260,7 +271,8 @@ func (w *backfillQuotesWorker) fetch(ctx context.Context, client *Client, instru
 		if err != nil {
 			return err
 		}
-		if currency != "" && currency != listingCurrency {
+		inPoints := bond && currency == bondCandleUnit
+		if currency != "" && currency != listingCurrency && !inPoints {
 			w.log.Warn("tinvest: candles in another currency than the listing's, not stored",
 				"instrument_uid", uid, "candles", currency, "listing", listingCurrency)
 			return nil
