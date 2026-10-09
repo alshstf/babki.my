@@ -16,6 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Docker Hub limits anonymous pulls per address, and the shared runners
+      # run out of them: the tests' Postgres and the image's bases come from
+      # Docker Hub through Google's mirror instead.
+      - name: Pull Docker Hub images through a mirror
+        run: |
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f.new" >/dev/null
+          sudo mv "$f.new" "$f"
+          sudo systemctl restart docker
+          docker info --format '{{.RegistryConfig.Mirrors}}'
 
       - uses: actions/setup-node@v7
         with:
@@ -73,6 +83,16 @@ jobs:
       COMPOSE_FILE: docker-compose.yml:docker-compose.build.yml
     steps:
       - uses: actions/checkout@v7
+      # Docker Hub limits anonymous pulls per address, and the shared runners
+      # run out of them: the tests' Postgres and the image's bases come from
+      # Docker Hub through Google's mirror instead.
+      - name: Pull Docker Hub images through a mirror
+        run: |
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f.new" >/dev/null
+          sudo mv "$f.new" "$f"
+          sudo systemctl restart docker
+          docker info --format '{{.RegistryConfig.Mirrors}}'
       - uses: actions/setup-node@v7
         with:
           node-version: 22
