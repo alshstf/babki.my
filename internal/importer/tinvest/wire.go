@@ -384,6 +384,10 @@ type wireGenerateBrokerReportResponse struct {
 	Generate struct {
 		TaskID string `json:"taskId"`
 	} `json:"generateBrokerReportResponse"`
+	// Ready is a report built before: the order returns its first page at once
+	// instead of a task (one of the owner's four accounts, every month,
+	// 2026-10-10).
+	Ready *wireBrokerReport `json:"getBrokerReportResponse"`
 }
 
 type wireGetBrokerReportResponse struct {
@@ -395,6 +399,8 @@ type wireGetBrokerReportResponse struct {
 type wireBrokerReport struct {
 	Rows       []wireBrokerReportRow `json:"brokerReport"`
 	PagesCount int                   `json:"pagesCount"`
+	// TaskID comes with a page handed back at once, for asking the next.
+	TaskID string `json:"taskId"`
 }
 
 type wireBrokerReportRow struct {
