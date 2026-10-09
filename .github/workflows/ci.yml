@@ -36,6 +36,10 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26.x"
+          # The newest 1.26 patch, not the runner's cached one: a security
+          # release (Go's own fixes in net/http, crypto/tls) is what the
+          # vulnerability check asks for the day it ships.
+          check-latest: true
       - name: Check generated code is fresh
         run: |
           make gen
