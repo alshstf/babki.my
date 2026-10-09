@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/platform/jobs"
 )
 
 // RefreshFxArgs refreshes today's FX rates.
@@ -422,7 +423,8 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 		return err
 	}
 
-	for _, code := range codes {
+	for i, code := range codes {
+		jobs.ProgressFrom(ctx).Stage(ctx, "rates", i, len(codes))
 		// Gold is fetched from the exchange (see backfillGoldWorker), not reported as
 		// unquoted.
 		if code == GoldCode {

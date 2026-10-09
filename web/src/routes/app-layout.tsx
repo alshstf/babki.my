@@ -5,6 +5,7 @@ import { KeyRound, LogOut, Settings, Users, Wallet } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { BackgroundActivity } from "@/components/background-activity";
 import { DisplayCurrencyToggle } from "@/components/display-currency-toggle";
 import { useLogout, useSession } from "@/api/session";
 import { PasswordDialog } from "@/components/password-dialog";
@@ -72,6 +73,7 @@ export function AppLayout() {
                 <Badge variant="secondary" className="hidden sm:inline-flex">
                   {t(`roles.${session.role}`)}
                 </Badge>
+                <BackgroundActivity />
                 <HeaderCurrencyToggle />
                 {/* Disabled only while a request is in flight: with networkMode
                    "always" isPending no longer covers a request held offline. */}

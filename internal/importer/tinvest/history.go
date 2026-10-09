@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -173,7 +174,8 @@ func (w *backfillQuotesWorker) backfillConnection(ctx context.Context, conn Conn
 		return err
 	}
 	today := mskDay(w.now())
-	for _, l := range listings {
+	for i, l := range listings {
+		jobs.ProgressFrom(ctx).Stage(ctx, "quotes", i, len(listings))
 		day, held := first[l.InstrumentID]
 		if !held || l.Currency == "" {
 			continue

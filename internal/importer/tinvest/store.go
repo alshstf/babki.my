@@ -654,6 +654,15 @@ func (s *Store) mappedInstruments(ctx context.Context, connID uuid.UUID) (map[uu
 	return out, nil
 }
 
+// mirrorRowCount is how many rows the connection's mirror holds.
+func (s *Store) mirrorRowCount(ctx context.Context, connID uuid.UUID) (int, error) {
+	var n int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM tinvest_operations_mirror WHERE connection_id = $1`, connID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("tinvest: count the mirror's rows: %w", err)
+	}
+	return n, nil
+}
+
 // CurrencyTradesUnparsedByLink counts, per link, the currency trades this
 // program does not import (ReasonCurrencyTrade). Each leaves the cash comparison
 // off by its sum in both currencies for good, so the reconciliation shows it

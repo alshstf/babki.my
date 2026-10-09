@@ -149,3 +149,20 @@ describe("AccountsTable", () => {
     expect(cell).toHaveAttribute("title", "Баланс этого счёта ещё не записан");
   });
 });
+
+describe("AccountsTable busy accounts", () => {
+  it("marks the account a running job still changes, and only it", async () => {
+    wrap(
+      <AccountsTable
+        accounts={[makeAccount({ id: "acc-1", name: "Т-Брокер" }), makeAccount({ id: "acc-2", name: "Вклад" })]}
+        mode="native"
+        baseCurrency="RUB"
+        busy={new Set(["acc-1"])}
+      />,
+    );
+    const marks = await screen.findAllByTestId("account-busy");
+    expect(marks).toHaveLength(1);
+    expect(marks[0].getAttribute("aria-label")).toBe("Идёт загрузка — числа этого счёта ещё не окончательные");
+    expect(marks[0].closest("tr")?.textContent).toContain("Т-Брокер");
+  });
+});

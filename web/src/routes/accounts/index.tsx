@@ -22,6 +22,7 @@ import { SummaryCards } from "./summary-cards";
 import { CapitalChart } from "./capital-chart";
 import { FamilyReturnLine } from "./account-return";
 import { AccountsTable } from "./accounts-table";
+import { useBusyAccounts } from "@/components/background-activity";
 import { AccountDialog } from "./account-dialog";
 import { BalanceDialog } from "./balance-dialog";
 import { RowMenu } from "./row-menu";
@@ -31,6 +32,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 
 export function AccountsPage() {
   const { t } = useTranslation();
+  const busy = useBusyAccounts();
   const { data: session } = useSession();
   const accounts = useAccounts();
   const summary = useSummary();
@@ -103,6 +105,7 @@ export function AccountsPage() {
       ) : (
         <AccountsTable
           accounts={list}
+          busy={busy}
           mode={mode}
           baseCurrency={baseCurrency}
           onValueBy={

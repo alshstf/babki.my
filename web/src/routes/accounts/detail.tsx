@@ -34,6 +34,7 @@ import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { AccountBusyNotice } from "@/components/background-activity";
 import { queryState, refreshFailed } from "@/lib/query-state";
 
 // undefined = no dialog open; otherwise the action picked from the
@@ -106,6 +107,9 @@ export function AccountDetailPage() {
       >
         {t("accounts.back")}
       </Link>
+
+      {/* Above the figures, which are what is not final while a job runs. */}
+      <AccountBusyNotice accountId={accountId} />
 
       <div className="grid gap-1">
         <div className="flex items-center gap-2">

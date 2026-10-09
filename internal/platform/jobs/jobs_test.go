@@ -17,7 +17,7 @@ func TestHeartbeat(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 
-	client, err := jobs.NewClient(pool, jobs.NewWorkers(slog.Default(), pool), nil, jobs.NewEnqueuer(), slog.Default())
+	client, err := jobs.NewClient(pool, jobs.NewWorkers(slog.Default(), pool), nil, nil, jobs.NewEnqueuer(), slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestSigtermLeavesARunningJobItsGracefulWindow(t *testing.T) {
 	workers := jobs.NewWorkers(slog.Default(), pool)
 	river.AddWorker(workers, probe)
 
-	client, err := jobs.NewClient(pool, workers, nil, jobs.NewEnqueuer(), slog.Default())
+	client, err := jobs.NewClient(pool, workers, nil, nil, jobs.NewEnqueuer(), slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -133,4 +133,67 @@ func TestAnEnqueuerRefusesBeforeTheQueueRuns(t *testing.T) {
 	if _, err := jobs.NewEnqueuer().Insert(context.Background(), gracefulProbeArgs{}, nil); err == nil {
 		t.Fatal("an unattached Enqueuer accepted a job")
 	}
+}
+
+type shownProbeArgs struct{}
+
+func (shownProbeArgs) Kind() string { return "test.shown_probe" }
+
+type shownProbeWorker struct {
+	river.WorkerDefaults[shownProbeArgs]
+	release chan struct{}
+}
+
+func (w *shownProbeWorker) Work(ctx context.Context, _ *river.Job[shownProbeArgs]) error {
+	jobs.ProgressFrom(ctx).Stage(ctx, "reading", 3, 10)
+	<-w.release
+	return nil
+}
+
+// The queue itself keeps a shown job's progress row: there while it runs, with
+// what the job said, and gone when it ends.
+func TestTheQueueKeepsAShownJobsProgressWhileItRuns(t *testing.T) {
+	pool := testdb.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	probe := &shownProbeWorker{release: make(chan struct{})}
+	workers := jobs.NewWorkers(slog.Default(), pool)
+	river.AddWorker(workers, probe)
+	client, err := jobs.NewClient(pool, workers, nil, []string{shownProbeArgs{}.Kind()}, jobs.NewEnqueuer(), slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	}()
+	if _, err := client.Insert(ctx, shownProbeArgs{}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if cond() {
+				return
+			}
+		}
+		t.Fatalf("never saw %s", what)
+	}
+	waitFor("the running job's row", func() bool {
+		var stage string
+		var done, total int
+		err := pool.QueryRow(ctx, `SELECT stage, done, total FROM job_progress WHERE kind = $1`,
+			shownProbeArgs{}.Kind()).Scan(&stage, &done, &total)
+		return err == nil && stage == "reading" && done == 3 && total == 10
+	})
+	close(probe.release)
+	waitFor("the row go with its job", func() bool {
+		var n int
+		return pool.QueryRow(ctx, `SELECT count(*) FROM job_progress`).Scan(&n) == nil && n == 0
+	})
 }

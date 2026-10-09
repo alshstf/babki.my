@@ -15,6 +15,7 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -176,7 +177,8 @@ func (m *Materializer) All(ctx context.Context) (Stats, error) {
 	// ForISIN returns what it did along with what it could not do.
 	var total Stats
 	var failed []error
-	for _, isin := range isins {
+	for i, isin := range isins {
+		jobs.ProgressFrom(ctx).Stage(ctx, "registry", i, len(isins))
 		stats, err := m.ForISIN(ctx, isin)
 		total.add(stats)
 		if err != nil {

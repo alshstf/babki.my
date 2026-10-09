@@ -1049,5 +1049,35 @@
     "price": "Цена за штуку, {{currency}}",
     "pricePercent": "Цена, % от номинала",
     "error": "Не удалось сохранить цену"
+  },
+  "background": {
+    "indicator": "Фоновые операции: {{count}}",
+    "title": "Идут фоновые операции",
+    "count": "{{done}} из {{total}}",
+    "accounts": "Счета: {{names}}",
+    "wholeInstance": "Для всей программы",
+    "since": "с {{time}}",
+    "starting": "начинается",
+    "accountBusy": "Идёт загрузка — числа этого счёта ещё не окончательные",
+    "accountNotice": "{{task}}: {{stage}}. Числа этого счёта ещё не окончательные — обновятся сами, когда загрузка закончится.",
+    "kinds": {
+      "tinvest_sync": "Загрузка из Т-Инвестиций",
+      "marketdata_backfill_fx": "Курсы ЦБ за прошлые дни",
+      "marketdata_backfill_gold": "Цены золота за прошлые дни",
+      "marketdata_backfill_quotes": "История цен Мосбиржи",
+      "tinvest_backfill_quotes": "История цен Т-Инвестиций",
+      "corporateaction_materialize_all": "Сплиты и конвертации в журналы",
+      "other": "Фоновая операция"
+    },
+    "stages": {
+      "operations": "читаем операции у брокера, счёт за счётом",
+      "settlements": "даты расчётов из отчёта брокера",
+      "journal": "разбираем операции в журнал",
+      "write": "записываем журнал",
+      "registry": "применяем сплиты и конвертации",
+      "reconcile": "сверяем с брокером",
+      "rates": "валюты",
+      "quotes": "бумаги"
+    }
   }
 }
