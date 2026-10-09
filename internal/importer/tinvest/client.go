@@ -513,7 +513,8 @@ const brokerReportMaxPolls = 10
 // TradeSettlements returns the trades of [from, to) and their settlement days.
 // The report is built asynchronously: the first request orders it and returns a
 // task id, later ones page the finished report and answer errReportNotReady until
-// then. The wait is c.sleep.
+// then. The wait is c.sleep. A report built before comes back at once as its
+// first page, with the task id for the rest.
 func (c *Client) TradeSettlements(ctx context.Context, brokerAccountID string, from, to time.Time) ([]TradeSettlement, error) {
 	var ordered wireGenerateBrokerReportResponse
 	if err := c.do(ctx, brokerReportRPC, generateBrokerReportRequest{Generate: generateBrokerReport{
@@ -524,13 +525,16 @@ func (c *Client) TradeSettlements(ctx context.Context, brokerAccountID string, f
 		return nil, err
 	}
 	taskID := ordered.Generate.TaskID
-	if taskID == "" {
+	if ordered.Ready != nil {
+		taskID = ordered.Ready.TaskID
+	}
+	if taskID == "" && (ordered.Ready == nil || ordered.Ready.PagesCount > 1) {
 		return nil, fmt.Errorf("tinvest: %s: the broker ordered a report and named no task to fetch it by", brokerReportRPC)
 	}
 
 	var out []TradeSettlement
 	for page := 0; ; page++ {
-		report, err := c.brokerReportPage(ctx, taskID, page)
+		report, err := c.reportPage(ctx, ordered.Ready, taskID, page)
 		if err != nil {
 			return nil, err
 		}
@@ -547,6 +551,15 @@ func (c *Client) TradeSettlements(ctx context.Context, brokerAccountID string, f
 			return out, nil
 		}
 	}
+}
+
+// reportPage is page of the report: the one the order handed back at once,
+// or one asked for by task.
+func (c *Client) reportPage(ctx context.Context, ready *wireBrokerReport, taskID string, page int) (wireBrokerReport, error) {
+	if page == 0 && ready != nil {
+		return *ready, nil
+	}
+	return c.brokerReportPage(ctx, taskID, page)
 }
 
 // brokerReportPage is one page of an ordered report, waiting while it is

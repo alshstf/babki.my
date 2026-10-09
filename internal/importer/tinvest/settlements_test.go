@@ -497,3 +497,38 @@ func TestReadSettlementsStopsWhenItsTimeIsSpent(t *testing.T) {
 		t.Errorf("asked for %v, want March then February and no more", src.asked)
 	}
 }
+
+// A report built before comes back at once, in answer to the order, as its
+// first page with the task to ask the rest by: one of the owner's accounts
+// answers so every month (2026-10-10), and its settlement days were never read.
+func TestTradeSettlementsReadsAReportTheBrokerHandsBackAtOnce(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := readRequestBody(r)
+		calls = append(calls, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(body), "generateBrokerReportRequest") {
+			_, _ = w.Write([]byte(`{"getBrokerReportResponse":{"brokerReport":[` +
+				reportRow("901", "2026-08-16T07:00:00Z", "2026-08-17T00:00:00Z") +
+				`],"itemsCount":2,"pagesCount":2,"page":0,"taskId":"task-ready"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"getBrokerReportResponse":{"brokerReport":[` +
+			reportRow("902", "2026-08-20T07:00:00Z", "2026-08-21T00:00:00Z") +
+			`],"pagesCount":2,"page":1}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+
+	got, err := c.TradeSettlements(context.Background(), "2000000001", on("2026-08-01"), on("2026-09-01"))
+	if err != nil {
+		t.Fatalf("TradeSettlements: %v", err)
+	}
+	if len(got) != 2 || got[0].TradeID != "901" || !got[0].SettledOn.Equal(on("2026-08-17")) ||
+		got[1].TradeID != "902" || !got[1].SettledOn.Equal(on("2026-08-21")) {
+		t.Fatalf("got %+v, want trades 901 and 902 with their settlement days", got)
+	}
+	if len(calls) != 2 || !strings.Contains(calls[1], `"taskId":"task-ready"`) || !strings.Contains(calls[1], `"page":1`) {
+		t.Errorf("calls %q, want the order and then page 1 by the task it named", calls)
+	}
+}
