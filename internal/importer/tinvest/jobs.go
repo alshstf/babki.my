@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -299,6 +300,8 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 		w.log.Debug(noLinksMessage, "connection", conn.ID)
 		return nil
 	}
+	// The linked accounts' figures are not final until the run ends.
+	jobs.ProgressFrom(ctx).Scope(ctx, &conn.SpaceID, accountsOf(links))
 	return w.sync(ctx, conn, links, client, trigger)
 }
 
@@ -316,8 +319,10 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 	client *Client, trigger SyncTrigger,
 ) error {
 	runs := make([]*linkRun, 0, len(links))
+	progress := jobs.ProgressFrom(ctx)
 
-	for _, link := range links {
+	for i, link := range links {
+		progress.Stage(ctx, "operations", i, len(links))
 		run, err := w.store.StartRun(ctx, conn.ID, link.ID, trigger)
 		if err != nil {
 			return w.failed(ctx, conn, runs, err)
@@ -341,6 +346,7 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 	// rate-limited, and "sync now" is waiting for the journal. A trade without
 	// a day keeps its trade day until a later hour.
 	if trigger == TriggerSchedule {
+		progress.Stage(ctx, "settlements", 0, 0)
 		readSettlements(ctx, w.store, client, links, time.Now, settlementBudget, w.log)
 	}
 
@@ -352,7 +358,8 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 
 	w.alignWithRegistry(ctx, links)
 
-	for _, lr := range runs {
+	for i, lr := range runs {
+		progress.Stage(ctx, "reconcile", i, len(runs))
 		// Kept whatever comes back: "not checked" arrives with the error.
 		res, err := w.reconciler.ReconcileLink(ctx, client, conn, lr.link)
 		lr.reconcile = res
@@ -410,7 +417,8 @@ func (w *syncWorker) alignWithRegistry(ctx context.Context, links []AccountLink)
 	if w.registry == nil {
 		return
 	}
-	for _, link := range links {
+	for i, link := range links {
+		jobs.ProgressFrom(ctx).Stage(ctx, "registry", i, len(links))
 		stats, err := w.registry.ForAccount(ctx, link.SpaceID, link.AccountID)
 		if err != nil {
 			logAt(ctx, w.log, err, "tinvest: the import was written but the registry's rows were not brought into line",

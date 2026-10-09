@@ -99,6 +99,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	positions := portfolio.NewService(opStore, instStore, mdStore, converter, famStore).WithAccounts(accStore)
 	portfolio.NewHandler(positions, famAuth, famSM).Mount(srv)
 	background.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
+	background.NewTasksHandler(r.pool, famAuth, famSM).Mount(srv)
 	// For an outside watcher, and Prometheus when asked for (decision Р-22).
 	background.NewDataHealthHandler(r.pool).Mount(srv)
 	if r.cfg.Metrics {

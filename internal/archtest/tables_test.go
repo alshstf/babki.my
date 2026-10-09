@@ -19,6 +19,7 @@ import (
 var owners = map[string]string{
 	"meta":                        "internal/platform/jobs",
 	"job_outcomes":                "internal/platform/jobs",
+	"job_progress":                "internal/platform/jobs",
 	"users":                       "internal/family",
 	"spaces":                      "internal/family",
 	"memberships":                 "internal/family",

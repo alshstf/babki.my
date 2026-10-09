@@ -457,6 +457,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/background-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The background jobs running now that change what the screens show — the broker import and what catches up the rates, prices and corporate-action registry it needs — for the caller's space and for the whole instance, oldest first. A task disappears when its job ends; one whose process died stops being listed two minutes after it last reported. */
+        get: operations["listBackgroundTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capital": {
         parameters: {
             query?: never;
@@ -1514,6 +1531,27 @@ export interface components {
             source: string;
             source_ref: string;
             note: string;
+        };
+        BackgroundTask: {
+            /**
+             * Format: int64
+             * @description The job's id, stable while it runs
+             */
+            id: number;
+            /** @description The job: tinvest.sync, marketdata.backfill_fx, marketdata.backfill_gold, marketdata.backfill_quotes, tinvest.backfill_quotes, corporateaction.materialize_all */
+            kind: string;
+            /** @description The stage it is in, empty before it says: for tinvest.sync operations (reading the broker's history, one account after another), settlements, journal (reading the rows into entries), write, registry, reconcile; rates, quotes and registry for the others */
+            stage: string;
+            /** @description How far through the stage; 0 when total is */
+            done: number;
+            /** @description The stage's size; 0 when it cannot be counted */
+            total: number;
+            /** @description The accounts whose figures are not final until it ends; empty for a task of the whole instance */
+            account_ids: string[];
+            /** @description A job of the whole instance (rates, prices), seen by every space */
+            whole_instance: boolean;
+            /** Format: date-time */
+            started_at: string;
         };
         DataSource: {
             /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices */
@@ -3477,6 +3515,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataSource"][];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    listBackgroundTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The running tasks; empty when nothing runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundTask"][];
                 };
             };
             401: components["responses"]["Error"];

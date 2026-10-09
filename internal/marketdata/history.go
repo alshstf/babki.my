@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/platform/jobs"
 )
 
 // BackfillQuotesArgs downloads the closing prices of every paper in the
@@ -102,7 +103,8 @@ func (w *backfillQuotesWorker) Work(ctx context.Context, _ *river.Job[BackfillQu
 		return err
 	}
 	today := utcDay(w.now())
-	for _, id := range ids {
+	for i, id := range ids {
+		jobs.ProgressFrom(ctx).Stage(ctx, "quotes", i, len(ids))
 		paper, ok := papers[id]
 		if !ok || !historyKind(paper.Type) {
 			continue

@@ -1124,6 +1124,31 @@ type ArrivalsResponse struct {
 	Arrivals []Arrival `json:"arrivals"`
 }
 
+// BackgroundTask defines model for BackgroundTask.
+type BackgroundTask struct {
+	// AccountIds The accounts whose figures are not final until it ends; empty for a task of the whole instance
+	AccountIds []openapi_types.UUID `json:"account_ids"`
+
+	// Done How far through the stage; 0 when total is
+	Done int `json:"done"`
+
+	// Id The job's id, stable while it runs
+	Id int64 `json:"id"`
+
+	// Kind The job: tinvest.sync, marketdata.backfill_fx, marketdata.backfill_gold, marketdata.backfill_quotes, tinvest.backfill_quotes, corporateaction.materialize_all
+	Kind string `json:"kind"`
+
+	// Stage The stage it is in, empty before it says: for tinvest.sync operations (reading the broker's history, one account after another), settlements, journal (reading the rows into entries), write, registry, reconcile; rates, quotes and registry for the others
+	Stage     string    `json:"stage"`
+	StartedAt time.Time `json:"started_at"`
+
+	// Total The stage's size; 0 when it cannot be counted
+	Total int `json:"total"`
+
+	// WholeInstance A job of the whole instance (rates, prices), seen by every space
+	WholeInstance bool `json:"whole_instance"`
+}
+
 // BalancePoint defines model for BalancePoint.
 type BalancePoint struct {
 	AmountMinor int64 `json:"amount_minor"`

@@ -140,7 +140,20 @@ func NewWorkers(
 func NewClient(pool *pgxpool.Pool, workers *river.Workers, enqueuer *jobs.Enqueuer, log *slog.Logger) (
 	*river.Client[pgx.Tx], error,
 ) {
-	return jobs.NewClient(pool, workers, Schedule(), enqueuer, log)
+	return jobs.NewClient(pool, workers, Schedule(), Shown(), enqueuer, log)
+}
+
+// Shown are the jobs the screen shows while they run (jobs.Progress): the broker
+// import, and what catches up the rates, prices and registry its figures need.
+func Shown() []string {
+	return []string{
+		tinvest.SyncArgs{}.Kind(),
+		marketdata.BackfillFxArgs{}.Kind(),
+		marketdata.BackfillGoldArgs{}.Kind(),
+		marketdata.BackfillQuotesArgs{}.Kind(),
+		tinvest.BackfillQuotesArgs{}.Kind(),
+		corporateaction.MaterializeAllArgs{}.Kind(),
+	}
 }
 
 // Schedule is every periodic job of the modules; each also runs once at start.

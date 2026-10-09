@@ -653,6 +653,25 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/DataSource" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/background-tasks:
+    get:
+      tags: [service]
+      operationId: listBackgroundTasks
+      description: >-
+        The background jobs running now that change what the screens show — the broker
+        import and what catches up the rates, prices and corporate-action registry it needs —
+        for the caller's space and for the whole instance, oldest first. A task disappears
+        when its job ends; one whose process died stops being listed two minutes after it
+        last reported.
+      responses:
+        "200":
+          description: The running tasks; empty when nothing runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BackgroundTask" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
       tags: [accounts]
@@ -2081,6 +2100,23 @@ components:
         source: { type: string }
         source_ref: { type: string }
         note: { type: string }
+    BackgroundTask:
+      type: object
+      required: [id, kind, stage, done, total, account_ids, whole_instance, started_at]
+      properties:
+        id: { type: integer, format: int64, description: "The job's id, stable while it runs" }
+        kind: { type: string, description: "The job: tinvest.sync, marketdata.backfill_fx, marketdata.backfill_gold, marketdata.backfill_quotes, tinvest.backfill_quotes, corporateaction.materialize_all" }
+        stage:
+          type: string
+          description: "The stage it is in, empty before it says: for tinvest.sync operations (reading the broker's history, one account after another), settlements, journal (reading the rows into entries), write, registry, reconcile; rates, quotes and registry for the others"
+        done: { type: integer, description: "How far through the stage; 0 when total is" }
+        total: { type: integer, description: "The stage's size; 0 when it cannot be counted" }
+        account_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: "The accounts whose figures are not final until it ends; empty for a task of the whole instance"
+        whole_instance: { type: boolean, description: "A job of the whole instance (rates, prices), seen by every space" }
+        started_at: { type: string, format: date-time }
     DataSource:
       type: object
       required: [kind, every_seconds, last_success_at, last_failure_at, last_error, stale]

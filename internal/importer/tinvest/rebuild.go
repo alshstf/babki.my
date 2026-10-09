@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/jobs"
 )
 
 // The rebuild turns the mirror into journal entries, and can do it again over a
@@ -148,6 +149,7 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 		return RebuildStats{}, err
 	}
 
+	jobs.ProgressFrom(ctx).Stage(ctx, "write", 0, 0)
 	delta, keptByRow, err := r.difference(ctx, conn.SpaceID, accountsOf(links), p.want)
 	if err != nil {
 		return RebuildStats{}, err
@@ -262,6 +264,15 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 	// once. Local, so a later run sees catalog changes.
 	resolutions := map[InstrumentRef]Resolved{}
 
+	// Rows read so far of every link's, for the screen: resolving papers asks
+	// the broker, and a first import reads thousands.
+	progress := jobs.ProgressFrom(ctx)
+	total, err := r.store.mirrorRowCount(ctx, conn.ID)
+	if err != nil {
+		return nil, err
+	}
+	read := 0
+
 	for _, link := range links {
 		rows, err := r.store.MirrorRowsByLink(ctx, link.ID)
 		if err != nil {
@@ -282,6 +293,8 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			return nil, err
 		}
 		for _, row := range rows {
+			read++
+			progress.Stage(ctx, "journal", read, max(total, read))
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if explained[row.ContentKey] {
 				// The owner explained this row: it produces no entries and carries no

@@ -56,8 +56,9 @@ func NewWorkers(log *slog.Logger, pool *pgxpool.Pool) *river.Workers {
 }
 
 // NewClient builds the River client with the workers and the schedule (the
-// heartbeat is added to it), and attaches it to enqueuer.
-func NewClient(pool *pgxpool.Pool, workers *river.Workers, schedule []Periodic, enqueuer *Enqueuer,
+// heartbeat is added to it), and attaches it to enqueuer. The jobs of the
+// shown kinds keep a progress row for the screen while they run (Progress).
+func NewClient(pool *pgxpool.Pool, workers *river.Workers, schedule []Periodic, shown []string, enqueuer *Enqueuer,
 	log *slog.Logger,
 ) (*river.Client[pgx.Tx], error) {
 	all := append([]Periodic{heartbeat}, schedule...)
@@ -72,6 +73,7 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, schedule []Periodic, 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Logger:          log,
 		Hooks:           []rivertype.Hook{&outcomeHook{pool: pool, log: log}},
+		Middleware:      []rivertype.Middleware{newProgressMiddleware(pool, shown, log)},
 		Workers:         workers,
 		SoftStopTimeout: SoftStopTimeout,
 		Queues: map[string]river.QueueConfig{

@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { LoaderCircle } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import {
   Table,
@@ -25,8 +26,11 @@ export function AccountsTable({
   onRowAction,
   onValueBy,
   switching,
+  busy,
 }: {
   accounts: AccountWithBalance[];
+  // The accounts a running job is still changing (BackgroundActivity).
+  busy?: ReadonlySet<string>;
   mode: DisplayCurrencyMode;
   // The base currency, to tell "nothing to convert" from "no rate" when
   // balance_in_base is null (see resolveDisplayAmount).
@@ -64,6 +68,16 @@ export function AccountsTable({
                   >
                     {account.name}
                   </Link>
+                  {busy?.has(account.id) && (
+                    <LoaderCircle
+                      className="ml-2 inline size-3.5 animate-spin align-[-2px] text-muted-foreground"
+                      role="img"
+                      aria-label={t("background.accountBusy")}
+                      data-testid="account-busy"
+                    >
+                      <title>{t("background.accountBusy")}</title>
+                    </LoaderCircle>
+                  )}
                   {archived && (
                     <Badge variant="outline" className="ml-2">
                       {t("accounts.archived")}
