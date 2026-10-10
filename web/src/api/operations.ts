@@ -120,6 +120,7 @@ export function useInvalidateJournal() {
     void queryClient.invalidateQueries({ queryKey: ["capital"] });
     void queryClient.invalidateQueries({ queryKey: ["instrument-holdings"] });
     void queryClient.invalidateQueries({ queryKey: ["instrument-operations"] });
+    void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
   };
 }
 
@@ -135,8 +136,8 @@ export function useCreateOperation() {
   });
 }
 
-// Files a row under a category or takes it out (null). Only the journal shows
-// it, so only the journal is read again.
+// Files a row under a category or takes it out (null). Only the journal and
+// the money report show it, so only they are read again.
 export function useSetOperationCategory() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -148,7 +149,10 @@ export function useSetOperationCategory() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    onSuccess: (data) => void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] }),
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] });
+      void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+    },
   });
 }
 

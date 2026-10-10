@@ -28,6 +28,7 @@ var layers = map[string]int{
 	"internal/corporateaction": 3,
 	"internal/importer/":       4,
 	"internal/export":          4,
+	"internal/cashflow":        4,
 	"cmd/":                     5,
 	// The background jobs register the workers of every module, so they sit
 	// with the binary that wires the modules.

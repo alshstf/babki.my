@@ -586,6 +586,25 @@ func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *u
 	return ops, hasMore, nil
 }
 
+// MoneyFlowTypes are the rows a family's money report reads: money that came or
+// went, and what investments paid. Transfers between the family's own accounts
+// are left out by ListMoneyFlows.
+var MoneyFlowTypes = []Type{TypeDeposit, TypeWithdrawal, TypeInterest, TypeFee, TypeTax, TypeDividend, TypeCoupon}
+
+// ListMoneyFlows is every row of the space between from and to, both days
+// included, that moved money in or out of the family: MoneyFlowTypes, halves
+// of a move between two accounts excepted. Oldest first.
+func (s *Store) ListMoneyFlows(ctx context.Context, spaceID uuid.UUID, from, to time.Time) ([]Operation, error) {
+	types := make([]string, len(MoneyFlowTypes))
+	for i, t := range MoneyFlowTypes {
+		types[i] = string(t)
+	}
+	return s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND occurred_on BETWEEN $2 AND $3
+			AND transfer_group_id IS NULL AND type = ANY($4)
+		`+engineOrder, spaceID, from, to, types)
+}
+
 // ListForEngine returns the account's whole journal in engine order, with
 // breakdowns attached: they date the lots a transfer brought in.
 func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {

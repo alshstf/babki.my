@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { KeyRound, LogOut, Settings, Users, Wallet } from "lucide-react";
+import { KeyRound, LogOut, PiggyBank, Settings, Users, Wallet } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,15 @@ function HeaderCurrencyToggle() {
 
 // One entry of the nav: icon and name side by side, the name shown from sm up
 // and always the link's accessible name.
-function NavLink({ to, icon, label }: { to: "/accounts" | "/family" | "/settings"; icon: ReactNode; label: string }) {
+function NavLink({
+  to,
+  icon,
+  label,
+}: {
+  to: "/accounts" | "/money" | "/family" | "/settings";
+  icon: ReactNode;
+  label: string;
+}) {
   return (
     <Link
       to={to}
@@ -57,6 +65,7 @@ export function AppLayout() {
           </div>
           <nav className="flex flex-1 gap-1 px-2 md:grid md:content-start">
             <NavLink to="/accounts" icon={<Wallet className="size-4" />} label={t("nav.accounts")} />
+            <NavLink to="/money" icon={<PiggyBank className="size-4" />} label={t("nav.money")} />
             <NavLink to="/family" icon={<Users className="size-4" />} label={t("nav.family")} />
             {session?.role === "owner" && (
               <NavLink to="/settings" icon={<Settings className="size-4" />} label={t("nav.settings")} />
