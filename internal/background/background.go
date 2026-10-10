@@ -13,11 +13,14 @@ import (
 	"github.com/riverqueue/river"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/notify"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
@@ -36,6 +39,9 @@ const (
 	// Dividends are declared weeks ahead and paid quarterly at most; reading a
 	// calendar once a day is plenty.
 	tinvestDividendsInterval = 24 * time.Hour
+	// pushRemindersInterval is how often the reminders due are pushed: each
+	// goes once, in the day, so an hour is soon enough.
+	pushRemindersInterval = time.Hour
 
 	// Splits are announced days ahead and take effect on a date.
 	corporateActionsInterval = 24 * time.Hour
@@ -137,6 +143,18 @@ func NewWorkers(
 	if schedules, ok := quoteProvider.(marketdata.BondScheduleFeed); ok {
 		river.AddWorker(workers, marketdata.NewBondScheduleWorker(mdStore, operations, instruments, schedules, log))
 	}
+	// Push reminders (decision Р-27): the keys come from the encryption key,
+	// so without one the worker is registered but sends nothing.
+	var sender notify.Sender
+	if tinvestDeps.Box != nil {
+		if keys, err := notify.KeysFrom(tinvestDeps.Box); err == nil {
+			sender = notify.NewWebPush(keys)
+		} else {
+			log.Error("push keys", "error", err)
+		}
+	}
+	river.AddWorker(workers, notify.NewRemindersWorker(notify.NewStore(pool),
+		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)), sender, log))
 	return workers
 }
 
@@ -181,6 +199,7 @@ func Schedule() []jobs.Periodic {
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshDividendCalendarArgs{}},
 		{Every: referencePricesInterval, Args: marketdata.RefreshCryptoPricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshBondSchedulesArgs{}},
+		{Every: pushRemindersInterval, Args: notify.SendRemindersArgs{}},
 	}
 }
 

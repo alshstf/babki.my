@@ -110,6 +110,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/push/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The server's public push key (VAPID) a browser subscribes with (decision Р-27). 503 when the process has no encryption key to derive it from. */
+        get: operations["getPushKey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/push/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Turns reminders on for the member's device: the address and keys its browser's push service gave. Only an https address of a known push service (Google, Mozilla, Apple, Microsoft) is taken — the server sends to it on its own. The same address again moves the device to the caller. */
+        put: operations["subscribePush"];
+        post?: never;
+        /** @description Turns reminders off for one of the member's devices. */
+        delete: operations["unsubscribePush"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/push/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Pushes a sample to the member's devices now, so they see it works. */
+        post: operations["testPush"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/forecast": {
         parameters: {
             query?: never;
@@ -2139,6 +2191,19 @@ export interface components {
             by_journal: boolean;
             status: components["schemas"]["CreditCardStatus"];
         };
+        PushKey: {
+            /** @description Uncompressed P-256 point, base64url without padding */
+            public_key: string;
+        };
+        PushSubscriptionRequest: {
+            endpoint: string;
+            p256dh: string;
+            auth: string;
+        };
+        PushTestResult: {
+            devices: number;
+            delivered: number;
+        };
         ForecastDay: {
             /** @description Date YYYY-MM-DD */
             on: string;
@@ -3780,6 +3845,97 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    getPushKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushKey"];
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    subscribePush: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Turned on */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    unsubscribePush: {
+        parameters: {
+            query: {
+                endpoint: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Turned off */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    testPush: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many devices there are and how many took it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushTestResult"];
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getForecast: {

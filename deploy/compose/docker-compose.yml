@@ -33,6 +33,9 @@ services:
       BABKI_COOKIE_SECURE: ${BABKI_COOKIE_SECURE:-true}
       BABKI_SETUP_CODE: ${BABKI_SETUP_CODE:-}
       BABKI_METRICS: ${BABKI_METRICS:-false}
+      # The server's clock for what is «today» and for when reminders may be
+      # pushed (9 to 21); UTC unless set.
+      TZ: ${TZ:-UTC}
     depends_on:
       postgres:
         condition: service_healthy

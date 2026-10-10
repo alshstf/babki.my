@@ -36,6 +36,7 @@ import (
 	"babki.my/babki/internal/marketdata/moex"
 	"babki.my/babki/internal/marketdata/tcapital"
 	"babki.my/babki/internal/marketdata/yahoo"
+	"babki.my/babki/internal/notify"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/payouts"
 	"babki.my/babki/internal/platform/db"
@@ -121,6 +122,18 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)
 	creditcard.NewHandler(cardSvc, famAuth, famSM).Mount(srv)
+	// Push reminders need keys derived from the encryption key; without one
+	// the endpoints say push is off.
+	var pushKeys *notify.Keys
+	var pushSender notify.Sender
+	if r.box != nil {
+		keys, err := notify.KeysFrom(r.box)
+		if err != nil {
+			return err
+		}
+		pushKeys, pushSender = &keys, notify.NewWebPush(keys)
+	}
+	notify.NewHandler(notify.NewStore(r.pool), pushKeys, pushSender, famAuth, famSM, r.log).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurringSvc := recurring.NewService(opStore, accStore)

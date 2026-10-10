@@ -34,3 +34,39 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(fetch(request).catch(() => caches.match(request)));
   }
 });
+
+// Reminders pushed by the server (decision Р-27): the text was encrypted for
+// this device; shown as it came, a tap opens the page it names.
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data ? event.data.text() : "" };
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || "babki.my", {
+      body: data.body || "",
+      tag: data.tag,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      data: { url: data.url || "/accounts" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url || "/accounts", self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((tabs) => {
+      for (const tab of tabs) {
+        if (tab.url.startsWith(self.location.origin) && "focus" in tab) {
+          tab.navigate(url);
+          return tab.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    }),
+  );
+});

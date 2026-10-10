@@ -189,3 +189,20 @@ func TestOpenEmptyEverythingStillErrors(t *testing.T) {
 		t.Fatal("Open(nil) succeeded, want an error")
 	}
 }
+
+// A derived key is the same for the same key and label, differs by label and
+// by key, and is not the key itself.
+func TestDerivedKeysAreStableAndApart(t *testing.T) {
+	one, _ := secretbox.New(bytes.Repeat([]byte{1}, secretbox.KeySize))
+	two, _ := secretbox.New(bytes.Repeat([]byte{2}, secretbox.KeySize))
+	a, err := one.Derive("push", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := one.Derive("push", 32)
+	other, _ := one.Derive("other", 32)
+	elsewhere, _ := two.Derive("push", 32)
+	if !bytes.Equal(a, again) || bytes.Equal(a, other) || bytes.Equal(a, elsewhere) || bytes.Equal(a, bytes.Repeat([]byte{1}, secretbox.KeySize)) {
+		t.Errorf("derived keys: %x %x %x %x", a, again, other, elsewhere)
+	}
+}
