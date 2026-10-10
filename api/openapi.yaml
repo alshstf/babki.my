@@ -3008,7 +3008,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3033,10 +3033,31 @@ components:
           items: { type: string, format: uuid }
           description: "The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family"
         fees: { $ref: "#/components/schemas/CreditCardFees" }
+        cashback: { $ref: "#/components/schemas/CreditCardCashback" }
         min_percent: { type: string, description: "The minimum payment, percent of the debt the statement shows (decimal)" }
         min_floor_minor: { type: integer, format: int64, minimum: 0, description: "The smallest minimum payment" }
         annual_rate: { type: string, description: "Percent a year charged once the grace is lost (decimal)" }
         own_rate: { type: string, nullable: true, description: "Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named" }
+    CreditCardCashback:
+      type: object
+      required: [base_percent, categories, monthly_cap_minor, points, credit_days]
+      description: >-
+        The card's cashback rules, to tell the cashback before it comes (decision Р-31): a purchase
+        earns its category's percent or base_percent, whichever is higher (subcategories with their
+        category); the period's sum not past monthly_cap_minor when it is above 0. Transfers, cash and
+        the bank's charges earn nothing. All zero and empty when the card names none.
+      properties:
+        base_percent: { type: string, description: "Percent of every purchase (decimal, 0 to 99.999)" }
+        categories: { type: array, items: { $ref: "#/components/schemas/CreditCardCashbackCategory" } }
+        monthly_cap_minor: { type: integer, format: int64, minimum: 0, description: "The most a period earns; 0 for no cap" }
+        points: { type: boolean, description: "It comes as the bank's points, not money: shown, kept out of the money forecast" }
+        credit_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the period's statement it comes in" }
+    CreditCardCashbackCategory:
+      type: object
+      required: [category_id, percent]
+      properties:
+        category_id: { type: string, format: uuid, description: "One of the family's spending categories; 400 otherwise" }
+        percent: { type: string, description: "Decimal, 0 to 99.999" }
     CreditCardFees:
       type: object
       required: [monthly_minor, cash_free_minor, cash_percent, cash_fixed_minor, transfer_percent, transfer_fixed_minor, penalty_daily_percent]
@@ -3069,7 +3090,7 @@ components:
         early: { type: boolean, description: "The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)" }
     CreditCardStatus:
       type: object
-      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor]
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, cashback_expected_minor, cashback_on]
       properties:
         debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
         available_minor: { type: integer, format: int64, description: "What is left of the limit" }
@@ -3088,6 +3109,8 @@ components:
         to_restore_minor: { type: integer, format: int64, description: "While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise" }
         cash_this_period_minor: { type: integer, format: int64, description: "Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor" }
         penalty_minor: { type: integer, format: int64, description: "Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed" }
+        cashback_expected_minor: { type: integer, format: int64, description: "The cashback this period's purchases so far bring by the card's rules, capped" }
+        cashback_on: { type: string, nullable: true, description: "The day it comes; null when the card names no cashback rules" }
     CreditCardBenefit:
       type: object
       required: [from, to, own_rate_known, own_earned_minor, cashback_minor, costs_minor, pending_interest_minor, total_minor]
@@ -3160,7 +3183,7 @@ components:
       properties:
         on: { type: string, description: "Date YYYY-MM-DD" }
         name: { type: string, description: "The payee, or the loan account's name" }
-        kind: { type: string, enum: [regular, loan] }
+        kind: { type: string, enum: [regular, loan, cashback], description: "regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)" }
         account_id: { type: string, format: uuid }
         amount_minor: { type: integer, format: int64, description: "Signed as the journal signs it, in currency" }
         currency: { type: string }

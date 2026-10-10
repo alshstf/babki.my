@@ -76,6 +76,31 @@ type Terms struct {
 	// Р-29); their subcategories with them.
 	TransferCategories []uuid.UUID
 	Fees               Fees
+	Cashback           Cashback
+}
+
+// Cashback is the card's cashback rules (decision Р-31), to tell it before
+// it comes: BasePercent of every purchase, or a category's own percent where
+// it is higher (its subcategories with it); not more than MonthlyCap a
+// period when one is named; as the bank's points rather than money (Points);
+// coming CreditDays after the period's statement.
+type Cashback struct {
+	BasePercent decimal.Decimal
+	Categories  []CategoryPercent
+	MonthlyCap  int64
+	Points      bool
+	CreditDays  int
+}
+
+// CategoryPercent is a category's cashback percent.
+type CategoryPercent struct {
+	CategoryID uuid.UUID       `json:"category_id"`
+	Percent    decimal.Decimal `json:"percent"`
+}
+
+// Named says whether the card has cashback rules at all.
+func (c Cashback) Named() bool {
+	return c.BasePercent.IsPositive() || len(c.Categories) > 0
 }
 
 // Fees are what the tariff charges besides interest (decision Р-30), told
@@ -152,6 +177,10 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: a fee is 0 to 99.999 percent", family.ErrValidation)
 	case t.Fees.PenaltyDaily.IsNegative() || t.Fees.PenaltyDaily.GreaterThanOrEqual(decimal.NewFromInt(10)):
 		return fmt.Errorf("%w: the penalty is 0 to 9.9999 percent a day", family.ErrValidation)
+	case !share(t.Cashback.BasePercent) || slices.ContainsFunc(t.Cashback.Categories, func(c CategoryPercent) bool { return !share(c.Percent) }):
+		return fmt.Errorf("%w: a cashback is 0 to 99.999 percent", family.ErrValidation)
+	case t.Cashback.MonthlyCap < 0 || t.Cashback.CreditDays < 0 || t.Cashback.CreditDays > 60:
+		return fmt.Errorf("%w: the cashback's cap cannot be below zero, and it comes 0 to 60 days after the statement", family.ErrValidation)
 	}
 	return nil
 }
@@ -283,6 +312,11 @@ type Status struct {
 	// Penalty is roughly what the bank charges for the minimum missed so
 	// far, at Fees.PenaltyDaily.
 	Penalty int64
+	// CashbackExpected is the cashback this period's purchases so far bring
+	// by the card's rules, capped; it comes on CashbackOn (zero time when
+	// the card names no rules).
+	CashbackExpected int64
+	CashbackOn       time.Time
 }
 
 // item is one debit still (partly) owed: a purchase the grace covers, a
@@ -536,6 +570,7 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			chargedBefore, chargedNow = chargedBefore || !now, chargedNow || now
 		}
 	}
+	st.cashback(t, rows, kinds)
 	var fee int64
 	if !chargedBefore && first.Before(st.LastStatement) {
 		fee = t.Fees.Monthly
@@ -553,6 +588,33 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		st.nextMinimum(t, st.Debt+fee, owedOf(isCharge)+fee)
 	}
 	return st
+}
+
+// cashback is what this period's purchases bring by the card's rules: each
+// at its category's percent or the base one, whichever is higher, the sum not
+// past the cap.
+func (st *Status) cashback(t Terms, rows []operation.Operation, kinds Kinds) {
+	if !t.Cashback.Named() {
+		return
+	}
+	st.CashbackOn = st.NextStatement.AddDate(0, 0, t.Cashback.CreditDays)
+	var sum decimal.Decimal
+	for _, op := range rows {
+		if op.OccurredOn.Before(st.LastStatement) || op.AmountMinor >= 0 || !purchase(op, kinds) {
+			continue
+		}
+		pct := t.Cashback.BasePercent
+		if op.CategoryID != nil {
+			if own, ok := kinds.Earns[*op.CategoryID]; ok && own.GreaterThan(pct) {
+				pct = own
+			}
+		}
+		sum = sum.Add(decimal.NewFromInt(-op.AmountMinor).Mul(pct).Div(hundred))
+	}
+	st.CashbackExpected, _ = money.Minor(sum.Floor())
+	if t.Cashback.MonthlyCap > 0 {
+		st.CashbackExpected = min(st.CashbackExpected, t.Cashback.MonthlyCap)
+	}
 }
 
 // nextMinimum is the next statement's minimum, from the debt it will show
@@ -622,6 +684,9 @@ type Kinds struct {
 	Charges   map[uuid.UUID]bool
 	Transfers map[uuid.UUID]bool
 	Cash      map[uuid.UUID]bool
+	// Earns is the card's cashback percent by category, its subcategories
+	// with it (Terms.Cashback.Categories).
+	Earns map[uuid.UUID]decimal.Decimal
 }
 
 func (k Kinds) cashback(op operation.Operation) bool {

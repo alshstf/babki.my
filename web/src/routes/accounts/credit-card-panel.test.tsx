@@ -42,19 +42,22 @@ const noFees = {
   transfer_percent: "0", transfer_fixed_minor: 0, penalty_daily_percent: "0",
 };
 
+const noCashback = { base_percent: "0", categories: [], monthly_cap_minor: 0, points: false, credit_days: 0 };
+
 const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   debt_minor: 57_300_00, available_minor: 92_700_00, last_statement: inDays(-9), next_statement: inDays(22),
   minimum_minor: 1_569_00, minimum_on: inDays(11), minimum_missed: false, minimum_estimate: false,
   grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
-  grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0, ...over,
+  grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0,
+  cashback_expected_minor: 0, cashback_on: null, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
   terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
-    transfer_categories: [], fees: noFees },
+    transfer_categories: [], fees: noFees, cashback: noCashback },
   status: status(over), by_journal: byJournal, benefit,
 });
 
@@ -102,7 +105,7 @@ describe("CreditCardPanel", () => {
       limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
-      transfer_categories: [], fees: noFees,
+      transfer_categories: [], fees: noFees, cashback: noCashback,
     });
   });
 
@@ -150,6 +153,14 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({ transfer_categories: ["c-wallets"] });
+  });
+
+  it("tells the cashback this month's purchases bring by the card's rules", async () => {
+    answer({ "/credit-card": card({ cashback_expected_minor: 1_250_00, cashback_on: "2026-11-06" }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    expect(norm((await screen.findByTestId("card-cashback")).textContent ?? "")).toBe(
+      "Кэшбэк за этот месяц по правилам карты ≈ 1 250,00 ₽, придёт ~06.11.2026.",
+    );
   });
 
   it("says when the grace is off the whole debt, and what brings it back", async () => {

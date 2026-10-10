@@ -18,6 +18,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
@@ -30,8 +31,9 @@ import (
 type Kind string
 
 const (
-	KindRegular Kind = "regular"
-	KindLoan    Kind = "loan"
+	KindRegular  Kind = "regular"
+	KindLoan     Kind = "loan"
+	KindCashback Kind = "cashback"
 )
 
 // Event is one payment ahead. Amount is in Currency, signed as the journal
@@ -110,6 +112,10 @@ type loans interface {
 	All(ctx context.Context, spaceID uuid.UUID) ([]loan.Terms, error)
 }
 
+type cards interface {
+	All(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Card, error)
+}
+
 // Service builds forecasts.
 type Service struct {
 	accounts  accounts
@@ -117,12 +123,13 @@ type Service struct {
 	spaces    spaces
 	regulars  regulars
 	loans     loans
+	cards     cards
 	rates     marketdata.RateSource
 	now       func() time.Time
 }
 
-func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, rates marketdata.RateSource) *Service {
-	return &Service{accounts: acc, positions: pos, spaces: sp, regulars: reg, loans: l, rates: rates, now: time.Now}
+func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c cards, rates marketdata.RateSource) *Service {
+	return &Service{accounts: acc, positions: pos, spaces: sp, regulars: reg, loans: l, cards: c, rates: rates, now: time.Now}
 }
 
 // Of is the space's forecast for the given number of days from today.
@@ -197,15 +204,38 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int) (Forecast
 		}
 	}
 
+	// A card's cashback by its rules (decision Р-31), in money: what this
+	// period's purchases bring, on the day it comes. It stands for the
+	// card's regular incomes, which are that cashback.
+	cardList, err := s.cards.All(ctx, spaceID)
+	if err != nil {
+		return Forecast{}, err
+	}
+	cashback := map[uuid.UUID]bool{}
+	for _, c := range cardList {
+		rules, st := c.Terms.Cashback, c.Status
+		if !inScope[c.Account.ID] || !rules.Named() || rules.Points {
+			continue
+		}
+		cashback[c.Account.ID] = true
+		if st.CashbackExpected > 0 && !st.CashbackOn.Before(today) && st.CashbackOn.Before(end) {
+			events = append(events, Event{
+				On: st.CashbackOn, Name: c.Account.Name, Kind: KindCashback, AccountID: c.Account.ID,
+				Amount: st.CashbackExpected, Currency: c.Account.Currency,
+			})
+		}
+	}
+
 	payments, err := s.regulars.Find(ctx, spaceID)
 	if err != nil {
 		return Forecast{}, err
 	}
 	for _, p := range payments {
 		// Only what moves the money counted here; a loan's interest, written
-		// under the loan's name, is already in its schedule; and what the
-		// family said is not regular is not.
-		if !inScope[p.AccountID] || loanNames[fold(p.Name)] || p.Hidden {
+		// under the loan's name, is already in its schedule; a card's
+		// cashback, by its rules, above; and what the family said is not
+		// regular is not.
+		if !inScope[p.AccountID] || loanNames[fold(p.Name)] || p.Hidden || cashback[p.AccountID] && p.Amount > 0 {
 			continue
 		}
 		mark, byBalance := markedOn[p.AccountID]

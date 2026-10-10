@@ -101,6 +101,10 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if t.Cashback, err = cashbackFromAPI(req.Cashback); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.OwnRate.IsSpecified() && !req.OwnRate.IsNull() {
 		own, err := decimal.NewFromString(req.OwnRate.MustGet())
 		if err != nil {
@@ -153,6 +157,44 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 
 func date(t time.Time) string { return t.Format(time.DateOnly) }
 
+// cashbackFromAPI reads the cashback rules; an empty percent is none.
+func cashbackFromAPI(in apitypes.CreditCardCashback) (Cashback, error) {
+	c := Cashback{MonthlyCap: in.MonthlyCapMinor, Points: in.Points, CreditDays: in.CreditDays}
+	read := func(name, s string) (decimal.Decimal, error) {
+		if s == "" {
+			return decimal.Zero, nil
+		}
+		v, err := decimal.NewFromString(s)
+		if err != nil {
+			return decimal.Zero, fmt.Errorf("cashback.%s must be a decimal", name)
+		}
+		return v, nil
+	}
+	var err error
+	if c.BasePercent, err = read("base_percent", in.BasePercent); err != nil {
+		return Cashback{}, err
+	}
+	for _, cat := range in.Categories {
+		pct, err := read("categories.percent", cat.Percent)
+		if err != nil {
+			return Cashback{}, err
+		}
+		c.Categories = append(c.Categories, CategoryPercent{CategoryID: cat.CategoryId, Percent: pct})
+	}
+	return c, nil
+}
+
+func cashbackAPI(c Cashback) apitypes.CreditCardCashback {
+	out := apitypes.CreditCardCashback{
+		BasePercent: c.BasePercent.String(), MonthlyCapMinor: c.MonthlyCap, Points: c.Points, CreditDays: c.CreditDays,
+		Categories: make([]apitypes.CreditCardCashbackCategory, 0, len(c.Categories)),
+	}
+	for _, cat := range c.Categories {
+		out.Categories = append(out.Categories, apitypes.CreditCardCashbackCategory{CategoryId: cat.CategoryID, Percent: cat.Percent.String()})
+	}
+	return out
+}
+
 // feesFromAPI reads the tariff's fees; an empty percent is none.
 func feesFromAPI(in apitypes.CreditCardFees) (Fees, error) {
 	f := Fees{Monthly: in.MonthlyMinor, CashFree: in.CashFreeMinor, CashFixed: in.CashFixedMinor, TransferFixed: in.TransferFixedMinor}
@@ -200,6 +242,7 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 			CashFixedMinor: t.Fees.CashFixed, TransferPercent: t.Fees.TransferPercent.String(),
 			TransferFixedMinor: t.Fees.TransferFixed, PenaltyDailyPercent: t.Fees.PenaltyDaily.String(),
 		},
+		Cashback: cashbackAPI(t.Cashback),
 	}
 	if out.TransferCategories == nil {
 		out.TransferCategories = []uuid.UUID{}
@@ -230,6 +273,10 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		Grace: make([]apitypes.CreditCardDue, 0, len(st.Grace)), Lost: make([]apitypes.CreditCardLost, 0, len(st.Lost)),
 		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
 		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty,
+		CashbackExpectedMinor: st.CashbackExpected, CashbackOn: nullable.NewNullNullable[string](),
+	}
+	if !st.CashbackOn.IsZero() {
+		out.CashbackOn = nullable.NewNullableWithValue(date(st.CashbackOn))
 	}
 	if !st.GraceOffSince.IsZero() {
 		out.GraceOffSince = nullable.NewNullableWithValue(date(st.GraceOffSince))
