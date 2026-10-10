@@ -138,21 +138,22 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 
 func date(t time.Time) string { return t.Format(time.DateOnly) }
 
-func cardAPI(c Card) apitypes.CreditCard {
+// TermsAPI is the terms as the API and the export write them.
+func TermsAPI(t Terms) apitypes.CreditCardTerms {
 	own := nullable.NewNullNullable[string]()
-	if c.Terms.OwnRate != nil {
-		own = nullable.NewNullableWithValue(c.Terms.OwnRate.String())
+	if t.OwnRate != nil {
+		own = nullable.NewNullableWithValue(t.OwnRate.String())
 	}
-	return apitypes.CreditCard{
-		Terms: apitypes.CreditCardTerms{
-			LimitMinor: c.Terms.Limit, StatementDay: c.Terms.StatementDay, PaymentDays: c.Terms.PaymentDays,
-			GraceKind: apitypes.CreditCardTermsGraceKind(c.Terms.GraceKind), GraceDays: c.Terms.GraceDays,
-			MinPercent: c.Terms.MinPercent.String(), MinFloorMinor: c.Terms.MinFloor,
-			AnnualRate: c.Terms.AnnualRate.String(), OwnRate: own,
-		},
-		Status:    statusAPI(c.Status),
-		ByJournal: c.ByJournal,
+	return apitypes.CreditCardTerms{
+		LimitMinor: t.Limit, StatementDay: t.StatementDay, PaymentDays: t.PaymentDays,
+		GraceKind: apitypes.CreditCardTermsGraceKind(t.GraceKind), GraceDays: t.GraceDays,
+		MinPercent: t.MinPercent.String(), MinFloorMinor: t.MinFloor,
+		AnnualRate: t.AnnualRate.String(), OwnRate: own,
 	}
+}
+
+func cardAPI(c Card) apitypes.CreditCard {
+	return apitypes.CreditCard{Terms: TermsAPI(c.Terms), Status: statusAPI(c.Status), ByJournal: c.ByJournal}
 }
 
 func statusAPI(st Status) apitypes.CreditCardStatus {

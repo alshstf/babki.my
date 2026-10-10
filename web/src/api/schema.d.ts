@@ -1767,6 +1767,10 @@ export interface components {
             operations: components["schemas"]["ExportOperation"][];
             /** @description Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first */
             withheld_stated: components["schemas"]["ExportWithheldStated"][];
+            /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
+            loan: components["schemas"]["LoanTerms"] | null;
+            /** @description A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account */
+            credit_card: components["schemas"]["CreditCardTerms"] | null;
         };
         ExportOperation: {
             /** Format: uuid */

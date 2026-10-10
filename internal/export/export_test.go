@@ -18,9 +18,11 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/httpserver"
@@ -52,7 +54,11 @@ func newStack(t *testing.T) stack {
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(operation.NewService(opStore), opStore, famStore, marketdata.NewConverter(md), auth, sm).Mount(srv)
 	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
-	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), auth, sm).Mount(srv)
+	loanSvc := loan.NewService(pool, accStore, operation.NewService(opStore), category.NewStore(pool))
+	cardSvc := creditcard.NewService(pool, accStore, opStore)
+	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
+	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
+	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -302,4 +308,63 @@ func day(t *testing.T, s string) time.Time {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// A loan's and a credit card's terms ride on their accounts in the export;
+// every other account says null.
+func TestTheExportCarriesLoanAndCardTerms(t *testing.T) {
+	s := newStack(t)
+	mk := func(name, typ string) string {
+		return post(t, s.c, s.url+"/api/v1/accounts", fmt.Sprintf(`{"name":%q,"type":%q,"currency":"RUB"}`, name, typ), http.StatusCreated)["id"].(string)
+	}
+	mortgage, card, current := mk("Ипотека", "loan"), mk("Кредитка", "credit_card"), mk("Текущий", "checking")
+	put := func(url, body string) {
+		req, _ := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := s.c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s = %d", url, resp.StatusCode)
+		}
+	}
+	put(s.url+"/api/v1/accounts/"+mortgage+"/loan", `{"principal_minor":300000000,"annual_rate":"18.5","term_months":240,"issued_on":"2026-03-15","kind":"annuity"}`)
+	put(s.url+"/api/v1/accounts/"+card+"/credit-card", `{"limit_minor":15000000,"statement_day":1,"payment_days":20,"grace_kind":"long","grace_days":120,"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":"15"}`)
+
+	var doc struct {
+		Accounts []struct {
+			ID         string          `json:"id"`
+			Loan       json.RawMessage `json:"loan"`
+			CreditCard json.RawMessage `json:"credit_card"`
+		} `json:"accounts"`
+	}
+	resp := get(t, s.c, s.url+"/api/v1/export")
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, a := range doc.Accounts {
+		switch a.ID {
+		case mortgage:
+			seen++
+			if !strings.Contains(string(a.Loan), `"term_months":240`) || string(a.CreditCard) != "null" {
+				t.Errorf("mortgage: loan %s, card %s", a.Loan, a.CreditCard)
+			}
+		case card:
+			seen++
+			if !strings.Contains(string(a.CreditCard), `"grace_days":120`) || !strings.Contains(string(a.CreditCard), `"own_rate":"15"`) || string(a.Loan) != "null" {
+				t.Errorf("card: card %s, loan %s", a.CreditCard, a.Loan)
+			}
+		case current:
+			seen++
+			if string(a.Loan) != "null" || string(a.CreditCard) != "null" {
+				t.Errorf("current: loan %s, card %s", a.Loan, a.CreditCard)
+			}
+		}
+	}
+	if seen != 3 {
+		t.Errorf("saw %d of the 3 accounts", seen)
+	}
 }
