@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 )
 
@@ -89,6 +90,41 @@ func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 			case d > 0 && d <= soonDays:
 				add("min:"+day(minimumOn)+":soon", fmt.Sprintf("Обязательный платёж %s до %s.", amount(minimum, cur), short(minimumOn)))
 			}
+		}
+	}
+	return out
+}
+
+// near is the share of a budget's limit spent from which a push warns.
+const near = 0.9
+
+// BudgetReminders are the pushes the month's budget calls for (decision
+// Р-25): a category nine tenths through its limit with its копилка, and one
+// past it — each once a month, to the whole family; names are the
+// categories' by id.
+func BudgetReminders(b budget.Month, names map[uuid.UUID]string) []Reminder {
+	var out []Reminder
+	month := b.Month.Format("2006-01")
+	for _, l := range b.Lines {
+		planned := l.Carried + l.Limit
+		if planned <= 0 && l.Spent == 0 {
+			continue
+		}
+		name := names[l.CategoryID]
+		key := "budget:" + l.CategoryID.String() + ":" + month
+		switch {
+		case l.Left < 0:
+			out = append(out, Reminder{
+				Key: key + ":over", Title: "Бюджет: " + name, URL: "/money",
+				Body: fmt.Sprintf("Лимит превышен на %s: потрачено %s из %s.", amount(-l.Left, b.BaseCurrency),
+					amount(l.Spent, b.BaseCurrency), amount(planned, b.BaseCurrency)),
+			})
+		case float64(l.Spent) >= near*float64(planned):
+			out = append(out, Reminder{
+				Key: key + ":near", Title: "Бюджет: " + name, URL: "/money",
+				Body: fmt.Sprintf("Потрачено %s из %s — до конца месяца осталось %s.", amount(l.Spent, b.BaseCurrency),
+					amount(planned, b.BaseCurrency), amount(l.Left, b.BaseCurrency)),
+			})
 		}
 	}
 	return out
