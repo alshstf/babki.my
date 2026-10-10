@@ -35,6 +35,7 @@ var layers = map[string]int{
 	"internal/recurring":       4,
 	"internal/forecast":        4,
 	"internal/creditcard":      4,
+	"internal/notify":          4,
 	"cmd/":                     5,
 	// The background jobs register the workers of every module, so they sit
 	// with the binary that wires the modules.

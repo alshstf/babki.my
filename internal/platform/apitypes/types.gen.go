@@ -2884,6 +2884,25 @@ type PositionsResponse struct {
 // PriceSource defines model for PriceSource.
 type PriceSource string
 
+// PushKey defines model for PushKey.
+type PushKey struct {
+	// PublicKey Uncompressed P-256 point, base64url without padding
+	PublicKey string `json:"public_key"`
+}
+
+// PushSubscriptionRequest defines model for PushSubscriptionRequest.
+type PushSubscriptionRequest struct {
+	Auth     string `json:"auth"`
+	Endpoint string `json:"endpoint"`
+	P256dh   string `json:"p256dh"`
+}
+
+// PushTestResult defines model for PushTestResult.
+type PushTestResult struct {
+	Delivered int `json:"delivered"`
+	Devices   int `json:"devices"`
+}
+
 // RealizedCurrencyTotal defines model for RealizedCurrencyTotal.
 type RealizedCurrencyTotal struct {
 	// Currency ISO-4217 of the positions this figure adds up — their own currency, not the base one
@@ -3761,6 +3780,11 @@ type GetPayoutsParams struct {
 	InstrumentId *openapi_types.UUID `form:"instrument_id,omitempty" json:"instrument_id,omitempty"`
 }
 
+// UnsubscribePushParams defines parameters for UnsubscribePush.
+type UnsubscribePushParams struct {
+	Endpoint string `form:"endpoint" json:"endpoint"`
+}
+
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
 type GetFamilyReturnParams struct {
 	From string `form:"from" json:"from"`
@@ -3883,6 +3907,9 @@ type StatePurchasesJSONRequestBody = StatePurchasesRequest
 
 // StateWithheldAbroadJSONRequestBody defines body for StateWithheldAbroad for application/json ContentType.
 type StateWithheldAbroadJSONRequestBody = StateWithheldRequest
+
+// SubscribePushJSONRequestBody defines body for SubscribePush for application/json ContentType.
+type SubscribePushJSONRequestBody = PushSubscriptionRequest
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest

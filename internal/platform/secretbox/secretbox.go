@@ -5,7 +5,9 @@ package secretbox
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 )
@@ -38,6 +40,9 @@ func ParseKey(s string) ([]byte, error) {
 // concurrent use: the standard library's GCM keeps no state between calls.
 type Box struct {
 	aead cipher.AEAD
+	// key is kept to derive keys for other uses from (Derive), never to seal
+	// with directly.
+	key []byte
 	// previous open what earlier keys sealed and never seal.
 	previous []cipher.AEAD
 }
@@ -55,7 +60,18 @@ func New(key []byte) (*Box, error) {
 	if err != nil {
 		return nil, fmt.Errorf("secretbox: %w", err)
 	}
-	return &Box{aead: aead}, nil
+	return &Box{aead: aead, key: append([]byte(nil), key...)}, nil
+}
+
+// Derive is a key of n bytes for another use, named by label, worked out from
+// the box's key (HKDF-SHA256): stable while the key is, unrelated to it and to
+// any other label's. Rotating the key changes every derived one.
+func (b *Box) Derive(label string, n int) ([]byte, error) {
+	out, err := hkdf.Key(sha256.New, b.key, nil, "babki.my "+label, n)
+	if err != nil {
+		return nil, fmt.Errorf("secretbox: derive %s: %w", label, err)
+	}
+	return out, nil
 }
 
 // WithPrevious lets the box open what earlier keys sealed, so a key can be

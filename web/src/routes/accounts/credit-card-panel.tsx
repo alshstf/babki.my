@@ -12,6 +12,7 @@ import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { SOON_DAYS, daysUntil } from "@/lib/card-due";
 import { cn } from "@/lib/utils";
+import { PushToggle } from "@/components/push-toggle";
 
 const pct = (s: string) => Number(s).toLocaleString("ru-RU");
 
@@ -125,6 +126,7 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         })}
       </div>
       <p className="text-xs text-muted-foreground">{t("card.hint")}</p>
+      <PushToggle />
       {canEdit && (
         <Button size="sm" variant="outline" className="justify-self-start" onClick={() => setEditing(true)}>
           {t("card.editTerms")}
