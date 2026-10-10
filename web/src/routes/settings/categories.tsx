@@ -41,6 +41,7 @@ import {
   type CategoryNode,
 } from "@/api/categories";
 import { QueryGate } from "@/components/query-notice";
+import { CategoryRules } from "./category-rules";
 import { queryState } from "@/lib/query-state";
 
 const KINDS: CategoryKind[] = ["expense", "income"];
@@ -125,6 +126,7 @@ export function CategoriesPage() {
           ))}
         </div>
       )}
+      {state === "ready" && <CategoryRules categories={list} canEdit={canEdit} />}
       {editing && (
         <CategoryDialog editing={editing} all={list} onClose={() => setEditing(null)} />
       )}

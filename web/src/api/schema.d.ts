@@ -39,6 +39,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/category-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's filing rules in the order they are tried; the first that fits a row wins. */
+        get: operations["listCategoryRules"];
+        put?: never;
+        /** @description Adds a rule after the others: a row whose `field` holds `pattern` — letter case aside, «ё» read as «е» — goes under `category_id`. A rule only files a row of its category's direction (an income category, a deposit or interest; an expense one, a withdrawal, fee or tax), and never into an archived category. */
+        post: operations["createCategoryRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/category-rules/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Puts the rules in the order given; it must name each of the family's rules once, or 400. */
+        put: operations["reorderCategoryRules"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/category-rules/{ruleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteCategoryRule"];
+        options?: never;
+        head?: never;
+        patch: operations["updateCategoryRule"];
+        trace?: never;
+    };
     "/api/v1/categories/{categoryId}": {
         parameters: {
             query?: never;
@@ -773,6 +824,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/file-by-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Files every row that can take a category and has none — of one account, or of the whole family without `account_id` — under the category the first fitting rule names (GET /api/v1/category-rules). Rows no rule fits stay as they are; a filed row is never refiled. Answers how many were filed. */
+        post: operations["fileOperationsByRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operationId}/category": {
         parameters: {
             query?: never;
@@ -1473,6 +1541,8 @@ export interface components {
             manual_prices: components["schemas"]["ExportManualPrice"][];
             /** @description The family's categories of spending and earning, archived ones too, each parent before its children */
             categories: components["schemas"]["ExportCategory"][];
+            /** @description The family's filing rules in the order they are tried */
+            category_rules: components["schemas"]["CategoryRule"][];
         };
         ExportCategory: {
             /** Format: uuid */
@@ -2195,6 +2265,48 @@ export interface components {
              * @description On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it.
              */
             face_before_minor?: number | null;
+        };
+        FileByRulesRequest: {
+            /**
+             * Format: uuid
+             * @description Only this account's rows; absent or null, the whole family's
+             */
+            account_id?: string | null;
+        };
+        FileByRulesResponse: {
+            /** @description Rows filed */
+            filed: number;
+        };
+        /**
+         * @description Where the rule looks: the counterparty, the note, or either
+         * @enum {string}
+         */
+        CategoryRuleField: "counterparty" | "note" | "any";
+        CategoryRule: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            category_id: string;
+            field: components["schemas"]["CategoryRuleField"];
+            /** @description The text looked for */
+            pattern: string;
+            /** @description Its place in the order rules are tried, smallest first */
+            position: number;
+        };
+        CreateCategoryRuleRequest: {
+            /** Format: uuid */
+            category_id: string;
+            field: components["schemas"]["CategoryRuleField"];
+            pattern: string;
+        };
+        UpdateCategoryRuleRequest: {
+            /** Format: uuid */
+            category_id?: string;
+            field?: components["schemas"]["CategoryRuleField"];
+            pattern?: string;
+        };
+        ReorderCategoryRulesRequest: {
+            ids: string[];
         };
         SetCategoryRequest: {
             /**
@@ -2945,6 +3057,132 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    listCategoryRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every rule of the family's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryRule"][];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    createCategoryRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCategoryRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The rule */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryRule"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    reorderCategoryRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReorderCategoryRulesRequest"];
+            };
+        };
+        responses: {
+            /** @description Reordered */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    deleteCategoryRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateCategoryRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCategoryRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The rule as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryRule"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     deleteCategory: {
@@ -4350,6 +4588,33 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    fileOperationsByRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileByRulesRequest"];
+            };
+        };
+        responses: {
+            /** @description How many rows were filed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileByRulesResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     setOperationCategory: {

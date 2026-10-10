@@ -60,6 +60,7 @@ type events interface {
 
 type categories interface {
 	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
+	Rules(ctx context.Context, spaceID uuid.UUID) ([]category.Rule, error)
 }
 
 type prices interface {
@@ -126,6 +127,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		InstrumentEvents: []apitypes.ExportInstrumentEvent{},
 		ManualPrices:     []apitypes.ExportManualPrice{},
 		Categories:       []apitypes.ExportCategory{},
+		CategoryRules:    []apitypes.CategoryRule{},
 	}
 	usernames := make(map[uuid.UUID]string, len(members))
 	for _, m := range members {
@@ -182,6 +184,16 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 			out.ParentId = nullable.NewNullableWithValue(*c.ParentID)
 		}
 		doc.Categories = append(doc.Categories, out)
+	}
+	rules, err := h.categories.Rules(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	for _, r := range rules {
+		doc.CategoryRules = append(doc.CategoryRules, apitypes.CategoryRule{
+			Id: r.ID, CategoryId: r.CategoryID, Field: apitypes.CategoryRuleField(r.Field),
+			Pattern: r.Pattern, Position: r.Position,
+		})
 	}
 	return doc, nil
 }

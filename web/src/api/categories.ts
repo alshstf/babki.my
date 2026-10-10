@@ -80,3 +80,116 @@ export function treeOf(categories: Category[], kind: CategoryKind): CategoryNode
     .sort(byPosition)
     .map((top) => ({ ...top, children: ofKind.filter((c) => c.parent_id === top.id).sort(byPosition) }));
 }
+
+export type CategoryRule = components["schemas"]["CategoryRule"];
+export type CategoryRuleField = components["schemas"]["CategoryRuleField"];
+export type CreateCategoryRuleBody = components["schemas"]["CreateCategoryRuleRequest"];
+export type UpdateCategoryRuleBody = components["schemas"]["UpdateCategoryRuleRequest"];
+
+// The family's filing rules in the order they are tried.
+export function useCategoryRules() {
+  return useQuery({
+    queryKey: ["category-rules"],
+    queryFn: async (): Promise<CategoryRule[]> => {
+      const { data, error, response } = await api.GET("/api/v1/category-rules");
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+function useInvalidateRules() {
+  const queryClient = useQueryClient();
+  return () => void queryClient.invalidateQueries({ queryKey: ["category-rules"] });
+}
+
+export function useCreateCategoryRule() {
+  const invalidate = useInvalidateRules();
+  return useMutation({
+    mutationFn: async (body: CreateCategoryRuleBody): Promise<CategoryRule> => {
+      const { data, error, response } = await api.POST("/api/v1/category-rules", { body });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateCategoryRule() {
+  const invalidate = useInvalidateRules();
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: UpdateCategoryRuleBody }): Promise<CategoryRule> => {
+      const { data, error, response } = await api.PATCH("/api/v1/category-rules/{ruleId}", {
+        params: { path: { ruleId: id } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteCategoryRule() {
+  const invalidate = useInvalidateRules();
+  return useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error, response } = await api.DELETE("/api/v1/category-rules/{ruleId}", {
+        params: { path: { ruleId: id } },
+      });
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useReorderCategoryRules() {
+  const invalidate = useInvalidateRules();
+  return useMutation({
+    mutationFn: async (ids: string[]): Promise<void> => {
+      const { error, response } = await api.PUT("/api/v1/category-rules/order", { body: { ids } });
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// The text as a rule compares it: case aside, «ё» read as «е» — the server's
+// category.fold.
+const fold = (s: string) => s.trim().toLocaleLowerCase("ru").replaceAll("ё", "е");
+
+// matchRule is the category the first fitting rule names among the kind's
+// active ones, as the server's category.Match decides; undefined when none
+// fits. Used to suggest a category while a row is typed in.
+export function matchRule(
+  rules: CategoryRule[],
+  categories: Category[],
+  kind: CategoryKind,
+  text: { counterparty: string; note: string },
+): string | undefined {
+  const counterparty = fold(text.counterparty);
+  const note = fold(text.note);
+  for (const rule of rules) {
+    const category = categories.find((c) => c.id === rule.category_id);
+    if (!category || category.kind !== kind || category.archived) continue;
+    const pattern = fold(rule.pattern);
+    const fits =
+      rule.field === "counterparty"
+        ? counterparty.includes(pattern)
+        : rule.field === "note"
+          ? note.includes(pattern)
+          : counterparty.includes(pattern) || note.includes(pattern);
+    if (fits) return rule.category_id;
+  }
+  return undefined;
+}
+
+// rulePattern is the text a rule remembered from a counterparty looks for:
+// without the trailing words that carry digits — a shop's number, a card's
+// tail — so «ПЯТЕРОЧКА 4411» files every Пятёрочка. The first word stays
+// whatever it holds.
+export function rulePattern(counterparty: string): string {
+  const words = counterparty.trim().split(/\s+/);
+  while (words.length > 1 && /\d/.test(words[words.length - 1])) words.pop();
+  return words.join(" ");
+}

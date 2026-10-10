@@ -74,6 +74,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/operations/money-transfer", edit(h.handleMoneyTransfer))
 	srv.Mount("GET /api/v1/instruments/{instrumentId}/operations", view(h.handleListByInstrument))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
+	srv.Mount("POST /api/v1/operations/file-by-rules", edit(h.handleFileByRules))
 	srv.Mount("PUT /api/v1/operations/{operationId}/category", edit(h.handleSetCategory))
 	srv.Mount("PUT /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleStateWithheld))
 	srv.Mount("DELETE /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleClearWithheld))
@@ -582,6 +583,25 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, toAPI(updated))
+}
+
+func (h *Handler) handleFileByRules(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.FileByRulesRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	var accountID *uuid.UUID
+	if req.AccountId.IsSpecified() && !req.AccountId.IsNull() {
+		v := req.AccountId.MustGet()
+		accountID = &v
+	}
+	filed, err := h.svc.FileByRules(r.Context(), p.SpaceID, accountID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, apitypes.FileByRulesResponse{Filed: filed})
 }
 
 func (h *Handler) handleSetCategory(w http.ResponseWriter, r *http.Request) {

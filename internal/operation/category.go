@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 )
@@ -112,4 +113,68 @@ func (s *Service) SetCategory(ctx context.Context, spaceID, id uuid.UUID, catego
 		return Operation{}, err
 	}
 	return stored, tx.Commit(ctx)
+}
+
+// FileByRules files the rows that can take a category and have none — of one
+// account, or of the whole space when accountID is nil — under what the
+// space's first fitting rule names (category.Match). A broker's account is
+// left alone: an unfiled row there is money between the family and its
+// broker, and a rule written for a card would misread it. It answers how many
+// rows it filed.
+func (s *Service) FileByRules(ctx context.Context, spaceID uuid.UUID, accountID *uuid.UUID) (int, error) {
+	tx, err := s.store.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	cats := category.NewStore(tx)
+	rules, err := cats.Rules(ctx, spaceID)
+	if err != nil || len(rules) == 0 {
+		return 0, err
+	}
+	list, err := cats.List(ctx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	byID := make(map[uuid.UUID]category.Category, len(list))
+	for _, c := range list {
+		byID[c.ID] = c
+	}
+	accounts, err := account.NewStore(tx).ListWithBalance(ctx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	var everyday []uuid.UUID
+	for _, a := range accounts {
+		if a.Type != account.TypeBrokerage && (accountID == nil || a.ID == *accountID) {
+			everyday = append(everyday, a.ID)
+		}
+	}
+	if len(everyday) == 0 {
+		return 0, nil
+	}
+	rows, err := NewStore(tx).list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND account_id = ANY($2)
+			AND category_id IS NULL AND transfer_group_id IS NULL AND type = ANY($3)`,
+		spaceID, everyday, categorizableTypes)
+	if err != nil {
+		return 0, err
+	}
+	var ids, filed []uuid.UUID
+	for _, op := range rows {
+		if c := category.Match(rules, byID, categoryKind(op.Type), category.Text{Counterparty: op.Counterparty, Note: op.Note}); c != nil {
+			ids = append(ids, op.ID)
+			filed = append(filed, *c)
+		}
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	ct, err := tx.Exec(ctx, `UPDATE operations o SET category_id = v.category_id
+		FROM unnest($2::uuid[], $3::uuid[]) AS v(id, category_id)
+		WHERE o.space_id = $1 AND o.id = v.id AND o.category_id IS NULL`, spaceID, ids, filed)
+	if err != nil {
+		return 0, fmt.Errorf("file by rules: %w", err)
+	}
+	return int(ct.RowsAffected()), tx.Commit(ctx)
 }

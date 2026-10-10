@@ -43,6 +43,7 @@ import {
   useOperations,
   useDeleteOperation,
   useSetOperationCategory,
+  useFileByRules,
   editDialogOf,
   OPERATION_TYPES,
   type JournalFilter,
@@ -54,7 +55,7 @@ import {
   type OperationInBaseGap,
 } from "@/api/operations";
 import { useInstrumentIndex, type Instrument } from "@/api/instruments";
-import { treeOf, useCategories, type Category } from "@/api/categories";
+import { rulePattern, treeOf, useCategories, useCreateCategoryRule, type Category } from "@/api/categories";
 import { CategoryChip, categoryKindOf } from "@/components/category-picker";
 import type { CostBasisRules } from "@/api/tax-residencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
@@ -214,6 +215,15 @@ export function OperationsTable({
   const categories = useCategories();
   const categoryList = categories.data ?? [];
   const setCategory = useSetOperationCategory();
+  const createRule = useCreateCategoryRule();
+  const fileByRules = useFileByRules();
+  // A rule remembered from a row files the account's other rows like it at
+  // once.
+  const remember = (pattern: string, categoryId: string) =>
+    createRule.mutate(
+      { category_id: categoryId, field: "counterparty", pattern: rulePattern(pattern) },
+      { onSuccess: () => fileByRules.mutate(accountId) },
+    );
   const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
 
   // The journal reports its currencies to the screen-wide counter that decides
@@ -303,7 +313,21 @@ export function OperationsTable({
   return (
     <div className="grid gap-3">
       {filters}
+      {/* The rows waiting for a category, and the family's rules to file them. */}
+      {canDelete && filter.category === UNFILED && (
+        <FileByRulesBar
+          pending={fileByRules.isPending}
+          filed={fileByRules.isSuccess ? fileByRules.data : undefined}
+          failed={fileByRules.isError}
+          onFile={() => fileByRules.mutate(accountId)}
+        />
+      )}
       <RefreshFailedNotice show={refreshFailed(operations)} />
+      {createRule.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{t("categoryRules.failed")}</AlertDescription>
+        </Alert>
+      )}
       {setCategory.isError && (
         <Alert variant="destructive" data-testid="operation-category-error">
           <AlertDescription>{t("categoryPicker.failed")}</AlertDescription>
@@ -426,6 +450,8 @@ export function OperationsTable({
                         editable={canDelete}
                         pending={setCategory.isPending && setCategory.variables?.operationId === operation.id}
                         onChange={(categoryId) => setCategory.mutate({ operationId: operation.id, categoryId })}
+                        counterparty={operation.counterparty}
+                        onRemember={(categoryId) => remember(operation.counterparty, categoryId)}
                       />
                     </div>
                   )}
@@ -636,6 +662,35 @@ export function OperationsTable({
 
 const ALL = "all";
 const UNFILED = "none";
+
+// FileByRulesBar offers to file the waiting rows by the family's rules and
+// says what came of it.
+export function FileByRulesBar({
+  pending,
+  filed,
+  failed,
+  onFile,
+}: {
+  pending: boolean;
+  filed?: number;
+  failed: boolean;
+  onFile: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="file-by-rules">
+      <Button size="sm" variant="outline" disabled={pending} onClick={onFile}>
+        {t("fileByRules.button")}
+      </Button>
+      {filed !== undefined && (
+        <span className="text-muted-foreground">
+          {filed > 0 ? t("fileByRules.filed", { rows: filed }) : t("fileByRules.none")}
+        </span>
+      )}
+      {failed && <span className="text-destructive">{t("fileByRules.failed")}</span>}
+    </div>
+  );
+}
 
 // The journal's filter: a type, a paper the account has held, a category, a
 // period.

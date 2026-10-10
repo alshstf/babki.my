@@ -82,6 +82,88 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /api/v1/category-rules:
+    get:
+      tags: [categories]
+      operationId: listCategoryRules
+      description: The family's filing rules in the order they are tried; the first that fits a row wins.
+      responses:
+        "200":
+          description: Every rule of the family's
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CategoryRule" }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [categories]
+      operationId: createCategoryRule
+      description: >-
+        Adds a rule after the others: a row whose `field` holds `pattern` — letter case aside,
+        «ё» read as «е» — goes under `category_id`. A rule only files a row of its category's
+        direction (an income category, a deposit or interest; an expense one, a withdrawal, fee
+        or tax), and never into an archived category.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCategoryRuleRequest" }
+      responses:
+        "201":
+          description: The rule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CategoryRule" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/category-rules/order:
+    put:
+      tags: [categories]
+      operationId: reorderCategoryRules
+      description: Puts the rules in the order given; it must name each of the family's rules once, or 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReorderCategoryRulesRequest" }
+      responses:
+        "204": { description: Reordered }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/category-rules/{ruleId}:
+    patch:
+      tags: [categories]
+      operationId: updateCategoryRule
+      parameters:
+        - { name: ruleId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCategoryRuleRequest" }
+      responses:
+        "200":
+          description: The rule as it now stands
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CategoryRule" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [categories]
+      operationId: deleteCategoryRule
+      parameters:
+        - { name: ruleId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/categories/{categoryId}:
     patch:
       tags: [categories]
@@ -1179,6 +1261,29 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/file-by-rules:
+    post:
+      tags: [journal]
+      operationId: fileOperationsByRules
+      description: >-
+        Files every row that can take a category and has none — of one account, or of the whole
+        family without `account_id` — under the category the first fitting rule names
+        (GET /api/v1/category-rules). Rows no rule fits stay as they are; a filed row is never
+        refiled. Answers how many were filed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FileByRulesRequest" }
+      responses:
+        "200":
+          description: How many rows were filed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileByRulesResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}/category:
     put:
       tags: [journal]
@@ -2098,7 +2203,7 @@ components:
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     SpaceExport:
       type: object
-      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories]
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules]
       properties:
         format: { type: string, enum: [babki.my/space-export] }
         version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
@@ -2123,6 +2228,10 @@ components:
           type: array
           description: "The family's categories of spending and earning, archived ones too, each parent before its children"
           items: { $ref: "#/components/schemas/ExportCategory" }
+        category_rules:
+          type: array
+          description: "The family's filing rules in the order they are tried"
+          items: { $ref: "#/components/schemas/CategoryRule" }
     ExportCategory:
       type: object
       required: [id, kind, name, parent_id, archived, position]
@@ -2854,6 +2963,46 @@ components:
           minimum: 1
           maximum: 1000000000000000
           description: "On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it."
+    FileByRulesRequest:
+      type: object
+      properties:
+        account_id: { type: string, format: uuid, nullable: true, description: "Only this account's rows; absent or null, the whole family's" }
+    FileByRulesResponse:
+      type: object
+      required: [filed]
+      properties:
+        filed: { type: integer, description: "Rows filed" }
+    CategoryRuleField:
+      type: string
+      enum: [counterparty, note, any]
+      description: "Where the rule looks: the counterparty, the note, or either"
+    CategoryRule:
+      type: object
+      required: [id, category_id, field, pattern, position]
+      properties:
+        id: { type: string, format: uuid }
+        category_id: { type: string, format: uuid }
+        field: { $ref: "#/components/schemas/CategoryRuleField" }
+        pattern: { type: string, description: "The text looked for" }
+        position: { type: integer, description: "Its place in the order rules are tried, smallest first" }
+    CreateCategoryRuleRequest:
+      type: object
+      required: [category_id, field, pattern]
+      properties:
+        category_id: { type: string, format: uuid }
+        field: { $ref: "#/components/schemas/CategoryRuleField" }
+        pattern: { type: string, minLength: 1, maxLength: 200 }
+    UpdateCategoryRuleRequest:
+      type: object
+      properties:
+        category_id: { type: string, format: uuid }
+        field: { $ref: "#/components/schemas/CategoryRuleField" }
+        pattern: { type: string, minLength: 1, maxLength: 200 }
+    ReorderCategoryRulesRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids: { type: array, items: { type: string, format: uuid } }
     SetCategoryRequest:
       type: object
       required: [category_id]

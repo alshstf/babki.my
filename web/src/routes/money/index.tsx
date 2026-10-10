@@ -21,6 +21,9 @@ import {
 import { useCashflow, type CashflowFlow, type CashflowLine, type CashflowSection } from "@/api/cashflow";
 import { useCategories, type Category } from "@/api/categories";
 import { useMembers } from "@/api/members";
+import { useFileByRules } from "@/api/operations";
+import { useSession } from "@/api/session";
+import { FileByRulesBar } from "@/routes/accounts/operations-table";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 import { formatMinorCompact } from "@/lib/money";
@@ -43,6 +46,9 @@ export function MoneyPage() {
   const report = useCashflow({ ...days, member: member === EVERYONE ? undefined : member });
   const categories = useCategories();
   const members = useMembers();
+  const { data: session } = useSession();
+  const canEdit = session?.role === "owner" || session?.role === "editor";
+  const fileByRules = useFileByRules();
   const state = queryState(report);
   const data = report.data;
 
@@ -102,6 +108,16 @@ export function MoneyPage() {
                 <Link to="/accounts" className="underline">
                   {t("money.unfiledLink")}
                 </Link>
+                {canEdit && (
+                  <div className="mt-2">
+                    <FileByRulesBar
+                      pending={fileByRules.isPending}
+                      filed={fileByRules.isSuccess ? fileByRules.data : undefined}
+                      failed={fileByRules.isError}
+                      onFile={() => fileByRules.mutate(undefined)}
+                    />
+                  </div>
+                )}
               </AlertDescription>
             </Alert>
           )}

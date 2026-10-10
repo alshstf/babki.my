@@ -28,6 +28,7 @@ var owners = map[string]string{
 	"account_balances":            "internal/account",
 	"categories":                  "internal/category",
 	"category_defaults":           "internal/category",
+	"category_rules":              "internal/category",
 	"instruments":                 "internal/instrument",
 	"quotes":                      "internal/marketdata",
 	"fx_rates":                    "internal/marketdata",

@@ -35,6 +35,11 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/categories", edit(h.handleCreate))
 	srv.Mount("PATCH /api/v1/categories/{categoryId}", edit(h.handleUpdate))
 	srv.Mount("DELETE /api/v1/categories/{categoryId}", edit(h.handleDelete))
+	srv.Mount("GET /api/v1/category-rules", view(h.handleListRules))
+	srv.Mount("POST /api/v1/category-rules", edit(h.handleCreateRule))
+	srv.Mount("PUT /api/v1/category-rules/order", edit(h.handleReorderRules))
+	srv.Mount("PATCH /api/v1/category-rules/{ruleId}", edit(h.handleUpdateRule))
+	srv.Mount("DELETE /api/v1/category-rules/{ruleId}", edit(h.handleDeleteRule))
 }
 
 func toAPI(c Category) apitypes.Category {
@@ -125,6 +130,99 @@ func pathID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("categoryId"))
 	if err != nil {
 		httpjson.Error(w, http.StatusBadRequest, "categoryId must be a UUID")
+		return uuid.UUID{}, false
+	}
+	return id, true
+}
+
+func ruleAPI(r Rule) apitypes.CategoryRule {
+	return apitypes.CategoryRule{
+		Id: r.ID, CategoryId: r.CategoryID, Field: apitypes.CategoryRuleField(r.Field),
+		Pattern: r.Pattern, Position: r.Position,
+	}
+}
+
+func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	rules, err := h.store.Rules(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := make([]apitypes.CategoryRule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, ruleAPI(rule))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCreateRule(w http.ResponseWriter, r *http.Request) {
+	var req apitypes.CreateCategoryRuleRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	p, _ := family.PrincipalFromContext(r.Context())
+	rule, err := h.store.CreateRule(r.Context(), p.SpaceID, Rule{CategoryID: req.CategoryId, Field: Field(req.Field), Pattern: req.Pattern})
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusCreated, ruleAPI(rule))
+}
+
+func (h *Handler) handleReorderRules(w http.ResponseWriter, r *http.Request) {
+	var req apitypes.ReorderCategoryRulesRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	p, _ := family.PrincipalFromContext(r.Context())
+	if err := h.store.ReorderRules(r.Context(), p.SpaceID, req.Ids); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathRuleID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.UpdateCategoryRuleRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	upd := RuleUpdate{CategoryID: req.CategoryId, Pattern: req.Pattern}
+	if req.Field != nil {
+		f := Field(*req.Field)
+		upd.Field = &f
+	}
+	p, _ := family.PrincipalFromContext(r.Context())
+	rule, err := h.store.UpdateRule(r.Context(), p.SpaceID, id, upd)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, ruleAPI(rule))
+}
+
+func (h *Handler) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathRuleID(w, r)
+	if !ok {
+		return
+	}
+	p, _ := family.PrincipalFromContext(r.Context())
+	if err := h.store.DeleteRule(r.Context(), p.SpaceID, id); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func pathRuleID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("ruleId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "ruleId must be a UUID")
 		return uuid.UUID{}, false
 	}
 	return id, true

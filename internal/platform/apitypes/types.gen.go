@@ -184,6 +184,27 @@ func (e CategoryKind) Valid() bool {
 	}
 }
 
+// Defines values for CategoryRuleField.
+const (
+	CategoryRuleFieldAny          CategoryRuleField = "any"
+	CategoryRuleFieldCounterparty CategoryRuleField = "counterparty"
+	CategoryRuleFieldNote         CategoryRuleField = "note"
+)
+
+// Valid indicates whether the value is a known member of the CategoryRuleField enum.
+func (e CategoryRuleField) Valid() bool {
+	switch e {
+	case CategoryRuleFieldAny:
+		return true
+	case CategoryRuleFieldCounterparty:
+		return true
+	case CategoryRuleFieldNote:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CostBasisMethod.
 const (
 	CostBasisMethodAverage       CostBasisMethod = "average"
@@ -1358,6 +1379,24 @@ type Category struct {
 // CategoryKind expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)
 type CategoryKind string
 
+// CategoryRule defines model for CategoryRule.
+type CategoryRule struct {
+	CategoryId openapi_types.UUID `json:"category_id"`
+
+	// Field Where the rule looks: the counterparty, the note, or either
+	Field CategoryRuleField  `json:"field"`
+	Id    openapi_types.UUID `json:"id"`
+
+	// Pattern The text looked for
+	Pattern string `json:"pattern"`
+
+	// Position Its place in the order rules are tried, smallest first
+	Position int `json:"position"`
+}
+
+// CategoryRuleField Where the rule looks: the counterparty, the note, or either
+type CategoryRuleField string
+
 // ChangePasswordRequest defines model for ChangePasswordRequest.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
@@ -1433,6 +1472,15 @@ type CreateCategoryRequest struct {
 	Kind     CategoryKind                          `json:"kind"`
 	Name     string                                `json:"name"`
 	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id,omitempty"`
+}
+
+// CreateCategoryRuleRequest defines model for CreateCategoryRuleRequest.
+type CreateCategoryRuleRequest struct {
+	CategoryId openapi_types.UUID `json:"category_id"`
+
+	// Field Where the rule looks: the counterparty, the note, or either
+	Field   CategoryRuleField `json:"field"`
+	Pattern string            `json:"pattern"`
 }
 
 // CreateInstrumentEventRequest A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite.
@@ -1777,6 +1825,18 @@ type FamilyReturn struct {
 	ProfitMinor int64  `json:"profit_minor"`
 	StartMinor  int64  `json:"start_minor"`
 	To          string `json:"to"`
+}
+
+// FileByRulesRequest defines model for FileByRulesRequest.
+type FileByRulesRequest struct {
+	// AccountId Only this account's rows; absent or null, the whole family's
+	AccountId nullable.Nullable[openapi_types.UUID] `json:"account_id,omitempty"`
+}
+
+// FileByRulesResponse defines model for FileByRulesResponse.
+type FileByRulesResponse struct {
+	// Filed Rows filed
+	Filed int `json:"filed"`
 }
 
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
@@ -2391,6 +2451,11 @@ type RealizedTotal struct {
 	UnknownCostPositions int `json:"unknown_cost_positions"`
 }
 
+// ReorderCategoryRulesRequest defines model for ReorderCategoryRulesRequest.
+type ReorderCategoryRulesRequest struct {
+	Ids []openapi_types.UUID `json:"ids"`
+}
+
 // Role defines model for Role.
 type Role string
 
@@ -2458,7 +2523,10 @@ type SpaceExport struct {
 	Accounts []ExportAccount `json:"accounts"`
 
 	// Categories The family's categories of spending and earning, archived ones too, each parent before its children
-	Categories       []ExportCategory        `json:"categories"`
+	Categories []ExportCategory `json:"categories"`
+
+	// CategoryRules The family's filing rules in the order they are tried
+	CategoryRules    []CategoryRule          `json:"category_rules"`
 	ExportedAt       time.Time               `json:"exported_at"`
 	Format           SpaceExportFormat       `json:"format"`
 	InstrumentEvents []ExportInstrumentEvent `json:"instrument_events"`
@@ -2925,6 +2993,15 @@ type UpdateCategoryRequest struct {
 	Position *int                                  `json:"position,omitempty"`
 }
 
+// UpdateCategoryRuleRequest defines model for UpdateCategoryRuleRequest.
+type UpdateCategoryRuleRequest struct {
+	CategoryId *openapi_types.UUID `json:"category_id,omitempty"`
+
+	// Field Where the rule looks: the counterparty, the note, or either
+	Field   *CategoryRuleField `json:"field,omitempty"`
+	Pattern *string            `json:"pattern,omitempty"`
+}
+
 // UpdateInstrumentRequest defines model for UpdateInstrumentRequest.
 type UpdateInstrumentRequest struct {
 	// CoingeckoId See Instrument.coingecko_id. Omitted, it stays as it is; only a cryptocurrency takes one.
@@ -3168,6 +3245,15 @@ type CreateCategoryJSONRequestBody = CreateCategoryRequest
 // UpdateCategoryJSONRequestBody defines body for UpdateCategory for application/json ContentType.
 type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
 
+// CreateCategoryRuleJSONRequestBody defines body for CreateCategoryRule for application/json ContentType.
+type CreateCategoryRuleJSONRequestBody = CreateCategoryRuleRequest
+
+// ReorderCategoryRulesJSONRequestBody defines body for ReorderCategoryRules for application/json ContentType.
+type ReorderCategoryRulesJSONRequestBody = ReorderCategoryRulesRequest
+
+// UpdateCategoryRuleJSONRequestBody defines body for UpdateCategoryRule for application/json ContentType.
+type UpdateCategoryRuleJSONRequestBody = UpdateCategoryRuleRequest
+
 // AddImportPapersJSONRequestBody defines body for AddImportPapers for application/json ContentType.
 type AddImportPapersJSONRequestBody AddImportPapersJSONBody
 
@@ -3194,6 +3280,9 @@ type CreateOperationJSONRequestBody = CreateOperationRequest
 
 // CreateArrivalJSONRequestBody defines body for CreateArrival for application/json ContentType.
 type CreateArrivalJSONRequestBody = CreateArrivalRequest
+
+// FileOperationsByRulesJSONRequestBody defines body for FileOperationsByRules for application/json ContentType.
+type FileOperationsByRulesJSONRequestBody = FileByRulesRequest
 
 // CreateMoneyTransferJSONRequestBody defines body for CreateMoneyTransfer for application/json ContentType.
 type CreateMoneyTransferJSONRequestBody = MoneyTransferRequest

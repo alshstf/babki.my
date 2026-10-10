@@ -215,3 +215,68 @@ func TestACorrectedRecordKeepsItsCategory(t *testing.T) {
 		t.Errorf("a new record took a category: %v", stored[1].CategoryID)
 	}
 }
+
+// Rules file the unfiled rows of everyday accounts and leave a broker's, a
+// filed row and a row no rule fits alone.
+func TestRulesFileTheUnfiledRows(t *testing.T) {
+	url, c := newAPI(t)
+	card := mkAccountOfType(t, url, c, "Карта", "checking")
+	broker := mkAccount(t, url, c, "Брокер", "RUB")
+	cats := categoryIDs(t, url, c)
+	for _, rule := range []string{
+		fmt.Sprintf(`{"category_id":%q,"field":"counterparty","pattern":"пятёрочка"}`, cats["expense/Продукты"]),
+		fmt.Sprintf(`{"category_id":%q,"field":"any","pattern":"пополнение"}`, cats["income/Подарки"]),
+	} {
+		if r := apitest.Do(t, c, "POST", url+"/api/v1/category-rules", rule); r.StatusCode != http.StatusCreated {
+			t.Fatalf("rule %s = %s", rule, status(t, r))
+		}
+	}
+	op := func(acc, body string) string {
+		return mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"occurred_on":"2026-09-01","currency":"RUB",%s}`, acc, body))
+	}
+	op(card, `"type":"deposit","amount_minor":10000000`)
+	shop := op(card, `"type":"withdrawal","amount_minor":-50000,"counterparty":"ПЯТЕРОЧКА 4411"`)
+	kept := op(card, fmt.Sprintf(`"type":"withdrawal","amount_minor":-60000,"counterparty":"Пятёрочка","category_id":%q`, cats["expense/Кафе и рестораны"]))
+	op(card, `"type":"withdrawal","amount_minor":-70000,"counterparty":"Лента"`)
+	brokerDeposit := op(broker, `"type":"deposit","amount_minor":100000,"note":"Пополнение счёта"`)
+
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations/file-by-rules", `{}`)
+	var out struct {
+		Filed int `json:"filed"`
+	}
+	apitest.Decode(t, resp, &out)
+	if out.Filed != 1 {
+		t.Errorf("filed %d rows, want the one at Пятёрочка", out.Filed)
+	}
+	rows := map[string]categorized{}
+	for _, acc := range []string{card, broker} {
+		var page struct {
+			Operations []categorized `json:"operations"`
+		}
+		apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", ""), &page)
+		for _, o := range page.Operations {
+			rows[o.ID] = o
+		}
+	}
+	if r := rows[shop]; r.CategoryID == nil || *r.CategoryID != cats["expense/Продукты"] {
+		t.Errorf("the shop row: %+v", r)
+	}
+	if r := rows[kept]; *r.CategoryID != cats["expense/Кафе и рестораны"] {
+		t.Errorf("a filed row was refiled: %+v", r)
+	}
+	if r := rows[brokerDeposit]; r.CategoryID != nil {
+		t.Errorf("the broker's deposit was filed: %+v", r)
+	}
+}
+
+// mkAccountOfType creates a RUB account of the given type.
+func mkAccountOfType(t *testing.T, url string, c *http.Client, name, typ string) string {
+	t.Helper()
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/accounts", fmt.Sprintf(`{"name":%q,"type":%q,"currency":"RUB"}`, name, typ))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create %s account = %s", typ, status(t, resp))
+	}
+	var a idResp
+	apitest.Decode(t, resp, &a)
+	return a.ID
+}
