@@ -205,3 +205,69 @@ func TestTransferCategoriesHaveNoGrace(t *testing.T) {
 		t.Errorf("a card without transfer categories: non-grace = %d", st.NonGrace)
 	}
 }
+
+// Газпромбанк's tariff besides interest (decision Р-30): cash up to 100 000
+// a period free, past it 5.9% and 590; a transfer 4.9% and 390; 590 a month
+// for the card; 0.1% a day of a payment missed.
+var gpbFees = Fees{
+	Monthly: 590_00, CashFree: 100_000_00, CashPercent: decimal.RequireFromString("5.9"), CashFixed: 590_00,
+	TransferPercent: decimal.RequireFromString("4.9"), TransferFixed: 390_00, PenaltyDaily: decimal.RequireFromString("0.1"),
+}
+
+func TestTheTariffsFeesAreToldAhead(t *testing.T) {
+	if got := gpbFees.Transfer(10_000_00); got != 880_00 {
+		t.Errorf("a transfer of 10 000 costs %d, want 490 + 390", got)
+	}
+	if got := gpbFees.Cash(30_000_00, 60_000_00); got != 0 {
+		t.Errorf("cash within the free part costs %d", got)
+	}
+	if got := gpbFees.Cash(30_000_00, 80_000_00); got != 590_00+590_00 {
+		t.Errorf("cash 10 000 past the free part costs %d, want 590 + 590", got)
+	}
+	if got := (Fees{}).Transfer(10_000_00); got != 0 {
+		t.Errorf("a tariff without fees charges %d", got)
+	}
+
+	gpb := gpb180()
+	gpb.Fees = gpbFees
+	cashOp := spend("2026-09-10", 40_000)
+	cashOp.ID = uuid.New()
+	group := uuid.New()
+	cashOp.TransferGroupID = &group
+	ops := []operation.Operation{spend("2026-07-03", 10_000), repay("2026-08-20", 500), cashOp}
+	st := Work(gpb, ops, "RUB", d("2026-09-12"), Kinds{Cash: map[uuid.UUID]bool{cashOp.ID: true}})
+	if st.CashThisPeriod != 40_000_00 {
+		t.Errorf("cash this period = %d, want 40 000", st.CashThisPeriod)
+	}
+	if st.Penalty != 0 {
+		t.Errorf("penalty = %d before anything is missed", st.Penalty)
+	}
+
+	// August's minimum (500) missed by the 31st: on the 10th of September,
+	// ten days of 0.1% of it; September's own is not due yet. It counts the
+	// August fee the journal does not show: 500 + 590.
+	late := []operation.Operation{spend("2026-07-03", 10_000)}
+	st = Work(gpb, late, "RUB", d("2026-09-10"), Kinds{})
+	if st.Penalty != 5_00 || st.MinimumMissed || st.Minimum != 1_090_00 {
+		t.Errorf("penalty %d, missed %v, minimum %d; want 5, not yet, 1 090", st.Penalty, st.MinimumMissed, st.Minimum)
+	}
+	// Paid, the overdue is gone and so is the penalty to come.
+	st = Work(gpb, append(late, repay("2026-09-12", 500)), "RUB", d("2026-09-14"), Kinds{})
+	if st.Penalty != 0 {
+		t.Errorf("penalty after the overdue is paid = %d", st.Penalty)
+	}
+
+	// With the August fee in the journal, it is not counted again.
+	fees := uuid.New()
+	fee := spend("2026-08-31", 590)
+	fee.CategoryID = &fees
+	st = Work(gpb, []operation.Operation{spend("2026-07-03", 20_000), repay("2026-08-20", 600), fee}, "RUB", d("2026-09-02"),
+		Kinds{Charges: map[uuid.UUID]bool{fees: true}})
+	if st.Minimum != 1_172_00 {
+		t.Errorf("minimum = %d, want 3%% of 19 400 and the 590 recorded = 1 172", st.Minimum)
+	}
+	st = Work(gpb, []operation.Operation{spend("2026-07-03", 20_000), repay("2026-08-20", 600)}, "RUB", d("2026-09-02"), Kinds{})
+	if st.Minimum != 1_172_00 {
+		t.Errorf("minimum = %d, want 3%% of 19 400 and the 590 to come = 1 172", st.Minimum)
+	}
+}

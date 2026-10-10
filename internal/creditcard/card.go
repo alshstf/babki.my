@@ -75,6 +75,44 @@ type Terms struct {
 	// transfers, not purchases — no grace, interest from the day (decision
 	// Р-29); their subcategories with them.
 	TransferCategories []uuid.UUID
+	Fees               Fees
+}
+
+// Fees are what the tariff charges besides interest (decision Р-30), told
+// before they are charged; the journal gets them when the bank takes them.
+// Amounts in minor units, percents of the money moved; PenaltyDaily is a
+// percent of the payment missed, a day.
+type Fees struct {
+	Monthly         int64
+	CashFree        int64
+	CashPercent     decimal.Decimal
+	CashFixed       int64
+	TransferPercent decimal.Decimal
+	TransferFixed   int64
+	PenaltyDaily    decimal.Decimal
+}
+
+// Cash is the fee for taking amount out in cash with already taken out this
+// period: the fixed part and the percent of what goes past the free part.
+func (f Fees) Cash(amount, already int64) int64 {
+	over := amount - max(f.CashFree-already, 0)
+	if over <= 0 || f.CashPercent.IsZero() && f.CashFixed == 0 {
+		return 0
+	}
+	return percentOf(over, f.CashPercent) + f.CashFixed
+}
+
+// Transfer is the fee for moving amount off the card.
+func (f Fees) Transfer(amount int64) int64 {
+	if amount <= 0 || f.TransferPercent.IsZero() && f.TransferFixed == 0 {
+		return 0
+	}
+	return percentOf(amount, f.TransferPercent) + f.TransferFixed
+}
+
+func percentOf(amount int64, pct decimal.Decimal) int64 {
+	v, _ := money.Minor(decimal.NewFromInt(amount).Mul(pct).Div(hundred).Round(0))
+	return v
 }
 
 var hundred, thousand = decimal.NewFromInt(100), decimal.NewFromInt(1000)
@@ -82,6 +120,7 @@ var hundred, thousand = decimal.NewFromInt(100), decimal.NewFromInt(1000)
 // Validate refuses terms no statement can be worked out from.
 func (t Terms) Validate() error {
 	rate := func(r decimal.Decimal) bool { return !r.IsNegative() && r.LessThan(thousand) }
+	share := func(r decimal.Decimal) bool { return !r.IsNegative() && r.LessThan(hundred) }
 	switch {
 	case t.Limit < 0:
 		return fmt.Errorf("%w: the limit cannot be below zero", family.ErrValidation)
@@ -107,6 +146,12 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: the card's rate is from 0 to 999.9999 percent", family.ErrValidation)
 	case t.OwnRate != nil && !rate(*t.OwnRate):
 		return fmt.Errorf("%w: the own money's rate is from 0 to 999.9999 percent", family.ErrValidation)
+	case t.Fees.Monthly < 0 || t.Fees.CashFree < 0 || t.Fees.CashFixed < 0 || t.Fees.TransferFixed < 0:
+		return fmt.Errorf("%w: the tariff's amounts cannot be below zero", family.ErrValidation)
+	case !share(t.Fees.CashPercent) || !share(t.Fees.TransferPercent):
+		return fmt.Errorf("%w: a fee is 0 to 99.999 percent", family.ErrValidation)
+	case t.Fees.PenaltyDaily.IsNegative() || t.Fees.PenaltyDaily.GreaterThanOrEqual(decimal.NewFromInt(10)):
+		return fmt.Errorf("%w: the penalty is 0 to 9.9999 percent a day", family.ErrValidation)
 	}
 	return nil
 }
@@ -232,6 +277,12 @@ type Status struct {
 	GraceOffSince     time.Time
 	GraceOffByMinimum bool
 	ToRestore         int64
+	// CashThisPeriod is the cash taken out since the last statement, against
+	// the tariff's free part (Fees.CashFree).
+	CashThisPeriod int64
+	// Penalty is roughly what the bank charges for the minimum missed so
+	// far, at Fees.PenaltyDaily.
+	Penalty int64
 }
 
 // item is one debit still (partly) owed: a purchase the grace covers, a
@@ -328,9 +379,10 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		}
 	}
 	// The minimum of each statement on the way, and what was paid toward it,
-	// for a minimum missed; the charges the last statement showed, for
-	// ChargesInFull.
-	var charges, minimumDue, paidToward int64
+	// for a minimum missed; what is overdue of the minimums missed, paid
+	// first, and the penalty it runs up while overdue; the charges the last
+	// statement showed, for ChargesInFull.
+	var charges, minimumDue, paidToward, overdue, overdueDays int64
 	var minimumBy time.Time
 	stated := false
 	first := today
@@ -339,9 +391,12 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	}
 	k := 0
 	for day := first; !day.After(today); day = day.AddDate(0, 0, 1) {
-		if t.GraceAllLost && !minimumBy.IsZero() && minimumBy.Before(day) {
+		if !minimumBy.IsZero() && minimumBy.Before(day) {
 			if paidToward < minimumDue {
-				takeOff(minimumBy.AddDate(0, 0, 1), true)
+				overdue += minimumDue - paidToward
+				if t.GraceAllLost {
+					takeOff(minimumBy.AddDate(0, 0, 1), true)
+				}
 			}
 			minimumBy = time.Time{}
 		}
@@ -360,7 +415,9 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			op := rows[k]
 			if op.AmountMinor > 0 {
 				pay(op.AmountMinor)
-				paidToward += op.AmountMinor
+				toOverdue := min(overdue, op.AmountMinor)
+				overdue -= toOverdue
+				paidToward += op.AmountMinor - toOverdue
 				restore := isPurchase
 				if st.GraceOffByMinimum {
 					restore = anything
@@ -383,7 +440,15 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		if restored {
 			off, st.GraceOffSince, st.GraceOffByMinimum = false, time.Time{}, false
 		}
+		// The penalty of the stretch overdue now; one repaid is the bank's
+		// charge by then, in the journal.
+		if overdue > 0 {
+			overdueDays += overdue
+		} else {
+			overdueDays = 0
+		}
 	}
+	st.Penalty = percentOf(overdueDays, t.Fees.PenaltyDaily)
 	if !stated {
 		charges = owedOf(isCharge)
 	}
@@ -453,22 +518,48 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			paidSince += op.AmountMinor
 		}
 	}
+	// The cash out since the statement. The monthly fee is charged at a
+	// period's end: while the journal has no charge of the bank's in the
+	// period before the statement (or in this one, for the next statement),
+	// the fee is taken to be still to come into it.
+	previous := t.statementAfter(st.LastStatement, -1)
+	var chargedBefore, chargedNow bool
+	for _, op := range rows {
+		if op.AmountMinor >= 0 || op.OccurredOn.Before(previous) {
+			continue
+		}
+		now := !op.OccurredOn.Before(st.LastStatement)
+		if now && kinds.Cash[op.ID] {
+			st.CashThisPeriod -= op.AmountMinor
+		}
+		if kinds.charge(op) {
+			chargedBefore, chargedNow = chargedBefore || !now, chargedNow || now
+		}
+	}
+	var fee int64
+	if !chargedBefore && first.Before(st.LastStatement) {
+		fee = t.Fees.Monthly
+	}
 	st.MinimumOn = t.dueOn(st.LastStatement)
-	if minimum := t.minimum(atStatement, charges); minimum > paidSince {
+	if minimum := t.minimum(atStatement+fee, charges+fee); minimum > paidSince {
 		st.Minimum = minimum - paidSince
 		st.MinimumMissed = st.MinimumOn.Before(today)
 	}
 	if st.Minimum == 0 && st.MinimumOn.Before(today) {
-		st.nextMinimum(t, owedOf(isCharge))
+		fee = 0
+		if !chargedNow {
+			fee = t.Fees.Monthly
+		}
+		st.nextMinimum(t, st.Debt+fee, owedOf(isCharge)+fee)
 	}
 	return st
 }
 
-// nextMinimum is the next statement's minimum, from today's debt and the
-// charges in it.
-func (st *Status) nextMinimum(t Terms, charges int64) {
+// nextMinimum is the next statement's minimum, from the debt it will show
+// and the charges in it.
+func (st *Status) nextMinimum(t Terms, debt, charges int64) {
 	st.MinimumOn = t.dueOn(st.NextStatement)
-	st.Minimum = t.minimum(st.Debt, charges)
+	st.Minimum = t.minimum(debt, charges)
 	st.MinimumEstimate = true
 }
 
@@ -501,7 +592,7 @@ func ByBalance(t Terms, balance int64, today time.Time) Status {
 	st.Minimum = t.minimum(st.Debt, 0)
 	st.MinimumEstimate = true
 	if st.MinimumOn.Before(today) {
-		st.nextMinimum(t, 0)
+		st.nextMinimum(t, st.Debt, 0)
 	}
 	return st
 }
@@ -525,11 +616,12 @@ type Benefit struct {
 // Kinds sorts the card's rows: categories that mean cashback, categories
 // that mean a charge (interest on credit, bank fees), and — the card's own —
 // those the bank takes for transfers (Terms.TransferCategories, with their
-// subcategories).
+// subcategories), and the rows that took cash out (moved to a cash account).
 type Kinds struct {
 	Cashback  map[uuid.UUID]bool
 	Charges   map[uuid.UUID]bool
 	Transfers map[uuid.UUID]bool
+	Cash      map[uuid.UUID]bool
 }
 
 func (k Kinds) cashback(op operation.Operation) bool {

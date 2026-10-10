@@ -74,6 +74,11 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
               {st.minimum_missed ? t("card.minimumMissed", { date: formatDate(st.minimum_on) }) : t("card.by", { date: formatDate(st.minimum_on) })}
             </div>
           )}
+          {st.penalty_minor > 0 && (
+            <div className="text-xs text-red-700 dark:text-red-400" data-testid="card-penalty">
+              {t("card.penalty", { amount: formatMinor(st.penalty_minor, c) })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -126,6 +131,15 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
+      {data.terms.fees.cash_free_minor > 0 && (
+        <p className="text-sm text-muted-foreground" data-testid="card-cash">
+          {t("card.cashThisPeriod", {
+            taken: formatMinor(st.cash_this_period_minor, c),
+            free: formatMinor(data.terms.fees.cash_free_minor, c),
+          })}
+        </p>
+      )}
+
       {data.benefit && <BenefitBlock benefit={data.benefit} currency={c} ownRate={data.terms.own_rate} />}
 
       <div className="text-xs text-muted-foreground">
@@ -139,6 +153,7 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
           rate: pct(data.terms.annual_rate),
         })}
         {data.terms.grace_all_lost && " " + t("card.graceAllLostShort")}
+        {feesLine(t, data.terms.fees, c) && " " + feesLine(t, data.terms.fees, c)}
       </div>
       <p className="text-xs text-muted-foreground">{t("card.hint")}</p>
       <PushToggle />
@@ -150,6 +165,21 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       {editing && <TermsDialog account={account} card={data} onClose={() => setEditing(false)} />}
     </div>
   );
+}
+
+// feesLine is the tariff's fees for the line of the card's terms; empty
+// when it has none.
+function feesLine(t: (key: string, values?: Record<string, unknown>) => string, fees: CreditCardTerms["fees"], c: string): string {
+  const parts: string[] = [];
+  if (fees.monthly_minor > 0) parts.push(t("card.feeMonthly", { amount: formatMinor(fees.monthly_minor, c) }));
+  if (Number(fees.cash_percent) > 0 || fees.cash_fixed_minor > 0) {
+    parts.push(t("card.feeCash", { free: formatMinor(fees.cash_free_minor, c), pct: pct(fees.cash_percent), fixed: formatMinor(fees.cash_fixed_minor, c) }));
+  }
+  if (Number(fees.transfer_percent) > 0 || fees.transfer_fixed_minor > 0) {
+    parts.push(t("card.feeTransfer", { pct: pct(fees.transfer_percent), fixed: formatMinor(fees.transfer_fixed_minor, c) }));
+  }
+  if (Number(fees.penalty_daily_percent) > 0) parts.push(t("card.feePenalty", { pct: pct(fees.penalty_daily_percent) }));
+  return parts.length ? t("card.feesLine", { list: parts.join("; ") }) : "";
 }
 
 // graceLine says how the card's grace runs, for the line of its terms.
@@ -213,6 +243,7 @@ const PRESETS: Record<string, Partial<Form>> = {
   gpb180: {
     kind: "windows", windowMonths: "2", graceMonths: "6", statementDay: "1", minPercent: "3", minFloor: "500",
     rate: "59.99", graceAllLost: true, payByPeriodEnd: true, chargesInFull: true,
+    cashFree: "100000", cashPercent: "5.9", cashFixed: "590", transferPercent: "4.9", transferFixed: "390", penaltyDaily: "0.1",
   },
 };
 
@@ -233,6 +264,13 @@ interface Form {
   payByPeriodEnd: boolean;
   chargesInFull: boolean;
   transferCategories: string[];
+  monthlyFee: string;
+  cashFree: string;
+  cashPercent: string;
+  cashFixed: string;
+  transferPercent: string;
+  transferFixed: string;
+  penaltyDaily: string;
 }
 
 function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
@@ -256,6 +294,13 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     payByPeriodEnd: terms?.pay_by_period_end ?? false,
     chargesInFull: terms?.charges_in_full ?? false,
     transferCategories: terms?.transfer_categories ?? [],
+    monthlyFee: terms ? minorToInput(terms.fees.monthly_minor) : "0",
+    cashFree: terms ? minorToInput(terms.fees.cash_free_minor) : "0",
+    cashPercent: terms?.fees.cash_percent ?? "0",
+    cashFixed: terms ? minorToInput(terms.fees.cash_fixed_minor) : "0",
+    transferPercent: terms?.fees.transfer_percent ?? "0",
+    transferFixed: terms ? minorToInput(terms.fees.transfer_fixed_minor) : "0",
+    penaltyDaily: terms?.fees.penalty_daily_percent ?? "0",
   });
   const categories = useCategories();
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
@@ -264,13 +309,24 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
   const limit = parseToMinor(f.limit);
   const floor = parseToMinor(f.minFloor || "0");
   const decimalOk = (s: string, hi: number) => s.trim() !== "" && !Number.isNaN(num(s)) && num(s) >= 0 && num(s) < hi;
+  const money = (s: string) => parseToMinor(s.trim() === "" ? "0" : s);
+  const fees = {
+    monthly_minor: money(f.monthlyFee),
+    cash_free_minor: money(f.cashFree),
+    cash_fixed_minor: money(f.cashFixed),
+    transfer_fixed_minor: money(f.transferFixed),
+  };
+  const feesValid =
+    Object.values(fees).every((v) => v !== null && v >= 0) &&
+    decimalOk(f.cashPercent || "0", 100) && decimalOk(f.transferPercent || "0", 100) && decimalOk(f.penaltyDaily || "0", 10);
   const valid =
     limit !== null && limit >= 0 && floor !== null && floor >= 0 &&
     int(f.statementDay, 1, 31) && (f.payByPeriodEnd || int(f.paymentDays, 0, 60)) &&
     (f.kind !== "long" || int(f.graceDays, 1, 1100)) &&
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
-    decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000));
+    decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000)) &&
+    feesValid;
 
   const submit = () => {
     if (!valid || limit === null || floor === null) return;
@@ -288,6 +344,15 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
         pay_by_period_end: f.payByPeriodEnd,
         charges_in_full: f.chargesInFull,
         transfer_categories: f.transferCategories,
+        fees: {
+          monthly_minor: fees.monthly_minor ?? 0,
+          cash_free_minor: fees.cash_free_minor ?? 0,
+          cash_percent: String(num(f.cashPercent || "0")),
+          cash_fixed_minor: fees.cash_fixed_minor ?? 0,
+          transfer_percent: String(num(f.transferPercent || "0")),
+          transfer_fixed_minor: fees.transfer_fixed_minor ?? 0,
+          penalty_daily_percent: String(num(f.penaltyDaily || "0")),
+        },
         min_percent: String(num(f.minPercent)),
         min_floor_minor: floor,
         annual_rate: String(num(f.rate)),
@@ -402,6 +467,21 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
             />
             <p className="text-xs text-muted-foreground">{t("card.transferCategoriesHint")}</p>
           </div>
+          <fieldset className="grid gap-2 rounded-md border p-3" data-testid="card-fees">
+            <legend className="px-1 text-sm font-medium">{t("card.feesTitle")}</legend>
+            <p className="text-xs text-muted-foreground">{t("card.feesHint")}</p>
+            {field("monthlyFee", t("card.monthlyFee", { currency: account.currency }), t("card.monthlyFeeHint"))}
+            {field("cashFree", t("card.cashFree", { currency: account.currency }))}
+            <div className="grid grid-cols-2 gap-2">
+              {field("cashPercent", t("card.cashPercent"))}
+              {field("cashFixed", t("card.feeFixed", { currency: account.currency }))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {field("transferPercent", t("card.transferPercent"))}
+              {field("transferFixed", t("card.feeFixedTransfer", { currency: account.currency }))}
+            </div>
+            {field("penaltyDaily", t("card.penaltyDaily"))}
+          </fieldset>
           {field("rate", t("card.rate"))}
           {field("ownRate", t("card.ownRate"), t("card.ownRateHint"))}
           {save.isError && (

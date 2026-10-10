@@ -111,3 +111,41 @@ describe("MoneyTransferDialog", () => {
     expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
   });
 });
+
+// Off a credit card, money moved has no grace and the tariff's fee (decision
+// Р-30): cash past what is left free this month, a transfer always.
+describe("MoneyTransferDialog off a credit card", () => {
+  const card: AccountWithBalance = { ...source, id: "card-1", name: "Кредитка", type: "credit_card" };
+  const cash: AccountWithBalance = { ...source, id: "cash-1", name: "Кошелёк", type: "cash" };
+  const fees = {
+    monthly_minor: 0, cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00,
+    transfer_percent: "4.9", transfer_fixed_minor: 390_00, penalty_daily_percent: "0.1",
+  };
+
+  it("tells the fee before the money leaves", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const path = new URL(url, "http://localhost").pathname;
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (path.endsWith("/api/v1/accounts")) return json([card, cash, source]);
+      if (path.endsWith("/card-1/credit-card")) return json({ terms: { fees }, status: { cash_this_period_minor: 80_000_00 } });
+      return new Response("null", { status: 404 });
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MoneyTransferDialog open onOpenChange={vi.fn()} account={card} />
+      </QueryClientProvider>,
+    );
+    await pick("Кошелёк");
+    fireEvent.change(screen.getByLabelText("Сумма, RUB"), { target: { value: "30000" } });
+    const norm = (s: string | null) => (s ?? "").replace(/\s/g, " ");
+    await waitFor(() => expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("ещё 20 000,00 ₽"));
+    // 10 000 past the free part: 590 and 590.
+    expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("≈ 1 180,00 ₽");
+
+    await pick("Т-Банк");
+    await waitFor(() => expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("≈ 1 860,00 ₽"));
+    expect(screen.getByTestId("card-transfer-warning").textContent).toContain("льготы нет");
+  });
+});

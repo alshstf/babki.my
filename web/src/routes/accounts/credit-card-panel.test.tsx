@@ -37,19 +37,24 @@ const account: AccountWithBalance = {
   counted_by: "journal", balance: { as_of: "2026-07-20", amount_minor: 0 },
 };
 
+const noFees = {
+  monthly_minor: 0, cash_free_minor: 0, cash_percent: "0", cash_fixed_minor: 0,
+  transfer_percent: "0", transfer_fixed_minor: 0, penalty_daily_percent: "0",
+};
+
 const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   debt_minor: 57_300_00, available_minor: 92_700_00, last_statement: inDays(-9), next_statement: inDays(22),
   minimum_minor: 1_569_00, minimum_on: inDays(11), minimum_missed: false, minimum_estimate: false,
   grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
-  grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, ...over,
+  grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
   terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
-    transfer_categories: [] },
+    transfer_categories: [], fees: noFees },
   status: status(over), by_journal: byJournal, benefit,
 });
 
@@ -97,7 +102,7 @@ describe("CreditCardPanel", () => {
       limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
-      transfer_categories: [],
+      transfer_categories: [], fees: noFees,
     });
   });
 
@@ -117,6 +122,10 @@ describe("CreditCardPanel", () => {
       statement_day: 1, grace_kind: "windows", grace_days: 0, window_months: 2, grace_months: 6, opened_on: "2026-07-10",
       grace_all_lost: true, pay_by_period_end: true, charges_in_full: true, min_percent: "3", min_floor_minor: 500_00,
       annual_rate: "59.99",
+      fees: {
+        monthly_minor: 0, cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00,
+        transfer_percent: "4.9", transfer_fixed_minor: 390_00, penalty_daily_percent: "0.1",
+      },
     });
   });
 

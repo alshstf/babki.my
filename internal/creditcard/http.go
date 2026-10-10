@@ -1,6 +1,7 @@
 package creditcard
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -96,6 +97,10 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "annual_rate must be a decimal")
 		return
 	}
+	if t.Fees, err = feesFromAPI(req.Fees); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.OwnRate.IsSpecified() && !req.OwnRate.IsNull() {
 		own, err := decimal.NewFromString(req.OwnRate.MustGet())
 		if err != nil {
@@ -148,6 +153,30 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 
 func date(t time.Time) string { return t.Format(time.DateOnly) }
 
+// feesFromAPI reads the tariff's fees; an empty percent is none.
+func feesFromAPI(in apitypes.CreditCardFees) (Fees, error) {
+	f := Fees{Monthly: in.MonthlyMinor, CashFree: in.CashFreeMinor, CashFixed: in.CashFixedMinor, TransferFixed: in.TransferFixedMinor}
+	for _, p := range []struct {
+		name string
+		in   string
+		out  *decimal.Decimal
+	}{
+		{"cash_percent", in.CashPercent, &f.CashPercent},
+		{"transfer_percent", in.TransferPercent, &f.TransferPercent},
+		{"penalty_daily_percent", in.PenaltyDailyPercent, &f.PenaltyDaily},
+	} {
+		if p.in == "" {
+			continue
+		}
+		v, err := decimal.NewFromString(p.in)
+		if err != nil {
+			return Fees{}, fmt.Errorf("fees.%s must be a decimal", p.name)
+		}
+		*p.out = v
+	}
+	return f, nil
+}
+
 // TermsAPI is the terms as the API and the export write them.
 func TermsAPI(t Terms) apitypes.CreditCardTerms {
 	own := nullable.NewNullNullable[string]()
@@ -166,6 +195,11 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		WindowMonths: t.WindowMonths, GraceMonths: t.GraceMonths, OpenedOn: opened,
 		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
 		TransferCategories: t.TransferCategories,
+		Fees: apitypes.CreditCardFees{
+			MonthlyMinor: t.Fees.Monthly, CashFreeMinor: t.Fees.CashFree, CashPercent: t.Fees.CashPercent.String(),
+			CashFixedMinor: t.Fees.CashFixed, TransferPercent: t.Fees.TransferPercent.String(),
+			TransferFixedMinor: t.Fees.TransferFixed, PenaltyDailyPercent: t.Fees.PenaltyDaily.String(),
+		},
 	}
 	if out.TransferCategories == nil {
 		out.TransferCategories = []uuid.UUID{}
@@ -195,6 +229,7 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		MinimumEstimate: st.MinimumEstimate, NonGraceMinor: st.NonGrace, NonGraceInterestMinor: st.NonGraceInterest,
 		Grace: make([]apitypes.CreditCardDue, 0, len(st.Grace)), Lost: make([]apitypes.CreditCardLost, 0, len(st.Lost)),
 		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
+		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty,
 	}
 	if !st.GraceOffSince.IsZero() {
 		out.GraceOffSince = nullable.NewNullableWithValue(date(st.GraceOffSince))

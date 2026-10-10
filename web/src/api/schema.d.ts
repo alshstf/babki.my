@@ -2286,6 +2286,7 @@ export interface components {
             charges_in_full: boolean;
             /** @description The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family */
             transfer_categories: string[];
+            fees: components["schemas"]["CreditCardFees"];
             /** @description The minimum payment, percent of the debt the statement shows (decimal) */
             min_percent: string;
             /**
@@ -2297,6 +2298,32 @@ export interface components {
             annual_rate: string;
             /** @description Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named */
             own_rate: string | null;
+        };
+        /** @description What the tariff charges besides interest, told before it is charged (decision Р-30); the journal gets the bank's charges as they happen. All zero when the tariff has none. */
+        CreditCardFees: {
+            /**
+             * Format: int64
+             * @description The monthly fee, charged at a period's end; 0 when there is none or it is waived
+             */
+            monthly_minor: number;
+            /**
+             * Format: int64
+             * @description Cash a statement period takes out without a fee
+             */
+            cash_free_minor: number;
+            /** @description The fee for cash past the free part: percent of it (decimal, 0 to 99.999) */
+            cash_percent: string;
+            /**
+             * Format: int64
+             * @description …and a fixed part for each withdrawal past it
+             */
+            cash_fixed_minor: number;
+            /** @description The fee for money moved off the card, percent of it (decimal) */
+            transfer_percent: string;
+            /** Format: int64 */
+            transfer_fixed_minor: number;
+            /** @description The penalty for a payment missed: percent of it a day (decimal, 0 to 9.9999) */
+            penalty_daily_percent: string;
         };
         CreditCardDue: {
             /** @description Date YYYY-MM-DD */
@@ -2366,6 +2393,16 @@ export interface components {
              * @description While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise
              */
             to_restore_minor: number;
+            /**
+             * Format: int64
+             * @description Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor
+             */
+            cash_this_period_minor: number;
+            /**
+             * Format: int64
+             * @description Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed
+             */
+            penalty_minor: number;
         };
         CreditCardBenefit: {
             /** @description A year before today, or the card's first row when later */
