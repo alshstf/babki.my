@@ -14,7 +14,30 @@ tags:
   - { name: service, description: "The whole space's export and the state of background data sources." }
   - { name: categories, description: "A family's categories of money going out and coming in (internal/category)." }
   - { name: cashflow, description: "The family's money over a period: income and spending by category and month (internal/cashflow)." }
+  - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
 paths:
+  /api/v1/payouts:
+    get:
+      tags: [payouts]
+      operationId: getPayouts
+      description: >-
+        What the papers the journals hold today will pay from today to the end of the month
+        `months` ahead: bond coupons, partial repayments, redemptions and offers from the
+        exchange's schedules, and the dividends issuers declared (by their payment day, else
+        their record day). Today's holdings carried forward — a sale or a purchase before the day
+        changes it. Amounts are before tax; a floating coupon not yet set, and an offer, have no
+        amount. The base currency figures are at today's rate.
+      parameters:
+        - { name: months, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 24, default: 12 } }
+        - { name: account_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Only this account's; absent, every active account of the family" }
+      responses:
+        "200":
+          description: The forecast
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PayoutsForecast" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/cashflow:
     get:
       tags: [cashflow]
@@ -2408,6 +2431,32 @@ components:
       type: string
       enum: [expense, income]
       description: "expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)"
+    Payout:
+      type: object
+      required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, in_base_minor]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD the money is due" }
+        record_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the record day, when the source gives one" }
+        kind: { type: string, enum: [coupon, amortization, redemption, offer, dividend] }
+        instrument_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        quantity: { type: string, description: "Decimal as string: what the account holds today" }
+        per_unit: { type: string, nullable: true, description: "Decimal as string, per paper in `currency`; null for a floating coupon not yet set and for an offer" }
+        amount_minor: { type: integer, format: int64, nullable: true, description: "per_unit × quantity in minor units of `currency`, before tax" }
+        currency: { type: string }
+        in_base_minor: { type: integer, format: int64, nullable: true, description: "amount_minor in the base currency at today's rate; null without an amount or a rate" }
+    PayoutsForecast:
+      type: object
+      required: [base_currency, from, to, months, by_month, total_minor, payouts, missing_rates]
+      properties:
+        base_currency: { type: string }
+        from: { type: string, description: "Date YYYY-MM-DD, today" }
+        to: { type: string, description: "Date YYYY-MM-DD, the last day of the last month" }
+        months: { type: array, items: { type: string }, description: "YYYY-MM, this month first" }
+        by_month: { type: array, items: { type: integer, format: int64 }, description: "What each month's payouts come to in the base currency" }
+        total_minor: { type: integer, format: int64 }
+        payouts: { type: array, items: { $ref: "#/components/schemas/Payout" }, description: "Earliest first" }
+        missing_rates: { type: array, items: { type: string }, description: "Currencies left out of the base figures for want of today's rate" }
     CashflowFlow:
       type: object
       required: [total_minor, by_month]

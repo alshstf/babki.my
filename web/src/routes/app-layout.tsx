@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { KeyRound, LogOut, PiggyBank, Settings, Users, Wallet } from "lucide-react";
+import { CalendarDays, KeyRound, LogOut, PiggyBank, Settings, Users, Wallet } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ function NavLink({
   icon,
   label,
 }: {
-  to: "/accounts" | "/money" | "/family" | "/settings";
+  to: "/accounts" | "/money" | "/payouts" | "/family" | "/settings";
   icon: ReactNode;
   label: string;
 }) {
@@ -66,6 +66,7 @@ export function AppLayout() {
           <nav className="flex flex-1 gap-1 px-2 md:grid md:content-start">
             <NavLink to="/accounts" icon={<Wallet className="size-4" />} label={t("nav.accounts")} />
             <NavLink to="/money" icon={<PiggyBank className="size-4" />} label={t("nav.money")} />
+            <NavLink to="/payouts" icon={<CalendarDays className="size-4" />} label={t("nav.payouts")} />
             <NavLink to="/family" icon={<Users className="size-4" />} label={t("nav.family")} />
             {session?.role === "owner" && (
               <NavLink to="/settings" icon={<Settings className="size-4" />} label={t("nav.settings")} />

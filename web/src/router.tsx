@@ -54,6 +54,7 @@ const InstrumentsPage = lazyRouteComponent(
   "InstrumentsPage",
 );
 const MoneyPage = lazyRouteComponent(() => import("@/routes/money"), "MoneyPage");
+const PayoutsPage = lazyRouteComponent(() => import("@/routes/payouts"), "PayoutsPage");
 const CategoriesPage = lazyRouteComponent(
   () => import("@/routes/settings/categories"),
   "CategoriesPage",
@@ -224,6 +225,13 @@ const moneyRoute = createRoute({
   component: MoneyPage,
 });
 
+// What the papers will pay (#399).
+const payoutsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/payouts",
+  component: PayoutsPage,
+});
+
 const accountsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/accounts",
@@ -310,6 +318,7 @@ export const routeTree = rootRoute.addChildren([
     instrumentsRoute,
     categoriesRoute,
     moneyRoute,
+    payoutsRoute,
     connectWizardRoute,
     connectionDetailRoute,
   ]),

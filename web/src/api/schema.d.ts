@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/payouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What the papers the journals hold today will pay from today to the end of the month `months` ahead: bond coupons, partial repayments, redemptions and offers from the exchange's schedules, and the dividends issuers declared (by their payment day, else their record day). Today's holdings carried forward — a sale or a purchase before the day changes it. Amounts are before tax; a floating coupon not yet set, and an offer, have no amount. The base currency figures are at today's rate. */
+        get: operations["getPayouts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cashflow": {
         parameters: {
             query?: never;
@@ -1729,6 +1746,50 @@ export interface components {
          * @enum {string}
          */
         CategoryKind: "expense" | "income";
+        Payout: {
+            /** @description Date YYYY-MM-DD the money is due */
+            on: string;
+            /** @description Date YYYY-MM-DD of the record day, when the source gives one */
+            record_on: string | null;
+            /** @enum {string} */
+            kind: "coupon" | "amortization" | "redemption" | "offer" | "dividend";
+            /** Format: uuid */
+            instrument_id: string;
+            /** Format: uuid */
+            account_id: string;
+            /** @description Decimal as string: what the account holds today */
+            quantity: string;
+            /** @description Decimal as string, per paper in `currency`; null for a floating coupon not yet set and for an offer */
+            per_unit: string | null;
+            /**
+             * Format: int64
+             * @description per_unit × quantity in minor units of `currency`, before tax
+             */
+            amount_minor: number | null;
+            currency: string;
+            /**
+             * Format: int64
+             * @description amount_minor in the base currency at today's rate; null without an amount or a rate
+             */
+            in_base_minor: number | null;
+        };
+        PayoutsForecast: {
+            base_currency: string;
+            /** @description Date YYYY-MM-DD, today */
+            from: string;
+            /** @description Date YYYY-MM-DD, the last day of the last month */
+            to: string;
+            /** @description YYYY-MM, this month first */
+            months: string[];
+            /** @description What each month's payouts come to in the base currency */
+            by_month: number[];
+            /** Format: int64 */
+            total_minor: number;
+            /** @description Earliest first */
+            payouts: components["schemas"]["Payout"][];
+            /** @description Currencies left out of the base figures for want of today's rate */
+            missing_rates: string[];
+        };
         CashflowFlow: {
             /**
              * Format: int64
@@ -3032,6 +3093,32 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getPayouts: {
+        parameters: {
+            query?: {
+                months?: number;
+                /** @description Only this account's; absent, every active account of the family */
+                account_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The forecast */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayoutsForecast"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
     getCashflow: {
         parameters: {
             query: {

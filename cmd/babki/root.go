@@ -34,6 +34,7 @@ import (
 	"babki.my/babki/internal/marketdata/tcapital"
 	"babki.my/babki/internal/marketdata/yahoo"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/payouts"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/jobs"
@@ -111,6 +112,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	}
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
+	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)), instStore, famAuth, famSM).Mount(srv)
 
