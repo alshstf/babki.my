@@ -21,6 +21,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/loan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A loan account's terms and the schedule worked out from them: each month's payment, the interest in it and the debt it repays, the first a month after the loan was issued; and, as of today, the debt the schedule leaves and the next payment due. 404 until terms are stated. */
+        get: operations["getLoan"];
+        /** @description States or restates a loan account's terms; anything other than a loan account is a 400. */
+        put: operations["setLoanTerms"];
+        post?: never;
+        /** @description Forgets the terms; the journal keeps what was paid. */
+        delete: operations["deleteLoanTerms"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/loan/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records a payment on the loan from another account of the same currency, the way decision Р-24 counts it: the interest is a spending from the paying account (under «Проценты по кредитам» when the family has that category), the rest a transfer to the loan's account, which brings the debt down. Should the transfer be refused, the interest is taken back. */
+        post: operations["recordLoanPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/payouts": {
         parameters: {
             query?: never;
@@ -1884,6 +1920,64 @@ export interface components {
             /** @description Currencies left out for want of today's rate */
             missing_rates: string[];
         };
+        LoanTerms: {
+            /**
+             * Format: int64
+             * @description What was borrowed, in minor units of the account's currency
+             */
+            principal_minor: number;
+            /** @description Decimal as string: the yearly rate in percent, 0 to 999.9999 */
+            annual_rate: string;
+            term_months: number;
+            /** @description Date YYYY-MM-DD the loan was issued; the first payment is a month later */
+            issued_on: string;
+            /**
+             * @description Equal payments, or an equal part of the debt plus the interest on what is left
+             * @enum {string}
+             */
+            kind: "annuity" | "differentiated";
+        };
+        LoanRow: {
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** Format: int64 */
+            payment_minor: number;
+            /** Format: int64 */
+            interest_minor: number;
+            /** Format: int64 */
+            principal_minor: number;
+            /**
+             * Format: int64
+             * @description The debt after this payment
+             */
+            left_minor: number;
+        };
+        Loan: {
+            terms: components["schemas"]["LoanTerms"];
+            schedule: components["schemas"]["LoanRow"][];
+            /**
+             * Format: int64
+             * @description The debt the schedule leaves today
+             */
+            left_by_schedule_minor: number;
+            /** @description The first payment due today or later; null once the schedule is through */
+            next: components["schemas"]["LoanRow"] | null;
+            /**
+             * Format: int64
+             * @description All the interest the schedule charges
+             */
+            total_interest_minor: number;
+        };
+        LoanPaymentRequest: {
+            /** Format: uuid */
+            from_account_id: string;
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            /** Format: int64 */
+            principal_minor: number;
+            /** Format: int64 */
+            interest_minor: number;
+        };
         CashflowFlow: {
             /**
              * Format: int64
@@ -3210,6 +3304,113 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The loan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setLoanTerms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanTerms"];
+            };
+        };
+        responses: {
+            /** @description The loan with its schedule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteLoanTerms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    recordLoanPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanPaymentRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     getPayouts: {
