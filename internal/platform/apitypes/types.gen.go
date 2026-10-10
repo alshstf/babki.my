@@ -799,6 +799,24 @@ func (e SpaceExportFormat) Valid() bool {
 	}
 }
 
+// Defines values for StructureValuation.
+const (
+	StructureValuationFull   StructureValuation = "full"
+	StructureValuationLiquid StructureValuation = "liquid"
+)
+
+// Valid indicates whether the value is a known member of the StructureValuation enum.
+func (e StructureValuation) Valid() bool {
+	switch e {
+	case StructureValuationFull:
+		return true
+	case StructureValuationLiquid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TinvestConnectionStatus.
 const (
 	TinvestConnectionStatusActive       TinvestConnectionStatus = "active"
@@ -1066,6 +1084,24 @@ func (e GetCapitalParamsStep) Valid() bool {
 	case Month:
 		return true
 	case Week:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetStructureParamsValuation.
+const (
+	GetStructureParamsValuationFull   GetStructureParamsValuation = "full"
+	GetStructureParamsValuationLiquid GetStructureParamsValuation = "liquid"
+)
+
+// Valid indicates whether the value is a known member of the GetStructureParamsValuation enum.
+func (e GetStructureParamsValuation) Valid() bool {
+	switch e {
+	case GetStructureParamsValuationFull:
+		return true
+	case GetStructureParamsValuationLiquid:
 		return true
 	default:
 		return false
@@ -2737,6 +2773,40 @@ type StatedPurchase struct {
 	Quantity string `json:"quantity"`
 }
 
+// Structure defines model for Structure.
+type Structure struct {
+	AssetsMinor  int64            `json:"assets_minor"`
+	BaseCurrency string           `json:"base_currency"`
+	ByAccount    []StructureSlice `json:"by_account"`
+
+	// ByClass Largest first
+	ByClass    []StructureSlice `json:"by_class"`
+	ByCountry  []StructureSlice `json:"by_country"`
+	ByCurrency []StructureSlice `json:"by_currency"`
+
+	// DebtsMinor Negative or zero
+	DebtsMinor int64 `json:"debts_minor"`
+
+	// MissingRates Currencies left out for want of today's rate
+	MissingRates []string `json:"missing_rates"`
+
+	// Unpriced Papers left out for want of a price
+	Unpriced  int                `json:"unpriced"`
+	Valuation StructureValuation `json:"valuation"`
+}
+
+// StructureValuation defines model for Structure.Valuation.
+type StructureValuation string
+
+// StructureSlice defines model for StructureSlice.
+type StructureSlice struct {
+	// Key The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN
+	Key string `json:"key"`
+
+	// Minor In minor units of the base currency
+	Minor int64 `json:"minor"`
+}
+
 // Summary defines model for Summary.
 type Summary struct {
 	// BaseCurrency ISO-4217, from the space; e.g. RUB
@@ -3384,6 +3454,15 @@ type GetFamilyReturnParams struct {
 	From string `form:"from" json:"from"`
 	To   string `form:"to" json:"to"`
 }
+
+// GetStructureParams defines parameters for GetStructure.
+type GetStructureParams struct {
+	// Valuation Papers at the liquid (when absent) or the full valuation (decision Р-11)
+	Valuation *GetStructureParamsValuation `form:"valuation,omitempty" json:"valuation,omitempty"`
+}
+
+// GetStructureParamsValuation defines parameters for GetStructure.
+type GetStructureParamsValuation string
 
 // ListTinvestSyncRunsParams defines parameters for ListTinvestSyncRuns.
 type ListTinvestSyncRunsParams struct {
