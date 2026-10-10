@@ -210,6 +210,9 @@ func validate(o Operation) error {
 	if err := checkNote(o.Note); err != nil {
 		return err
 	}
+	if err := checkCounterparty(o.Counterparty); err != nil {
+		return err
+	}
 	if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
 		// Hand entry writes a transfer through the endpoint that records both
 		// legs at once. The import path admits a lone leg (see validateImported),
@@ -672,6 +675,9 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 	var created Operation
 	err := s.store.WithOpenAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
 		if err := st.checkKind(ctx, op); err != nil {
+			return err
+		}
+		if err := st.checkCategory(ctx, spaceID, op, nil); err != nil {
 			return err
 		}
 		removeIDs, accounts, err := replacedRows(ctx, st, spaceID, replace)

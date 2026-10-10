@@ -65,7 +65,10 @@ describe("CashDialog: a sum too large to record", () => {
     expect(saveButton()).toBeDisabled();
     expect(screen.getByText(/Слишком большая сумма/)).toBeTruthy();
     expect(screen.queryByText(/Введите положительную сумму/)).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Only the categories are read; nothing is written.
+    expect(
+      fetchMock.mock.calls.filter(([input]) => input instanceof Request && input.method !== "GET"),
+    ).toHaveLength(0);
   });
 
   it("names the largest sum it would take, in the account's currency", () => {

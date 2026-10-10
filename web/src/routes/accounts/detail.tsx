@@ -9,6 +9,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSession } from "@/api/session";
@@ -39,7 +40,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 
 // undefined = no dialog open; otherwise the action picked from the
 // "+ Add operation" menu, each mapping to one dialog below.
-type AddAction = "buy" | "sell" | "cash" | "money" | "income" | "transfer" | "arrival";
+type AddAction = "buy" | "sell" | "cash" | "money" | "income" | "transfer" | "arrival" | "spent" | "earned";
 
 export function AccountDetailPage() {
   const { t } = useTranslation();
@@ -153,6 +154,19 @@ export function AccountDetailPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
+                {/* A card, a deposit or cash is where a family spends and earns:
+                   those two come first there. */}
+                {account.type !== "brokerage" && (
+                  <>
+                    <DropdownMenuItem onSelect={() => setAction("spent")}>
+                      {t("cash.presetMenu.expense")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setAction("earned")}>
+                      {t("cash.presetMenu.income")}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem onSelect={() => setAction("buy")}>
                   {t("trade.buyTitle")}
                 </DropdownMenuItem>
@@ -259,11 +273,12 @@ export function AccountDetailPage() {
           side={action}
         />
       )}
-      {action === "cash" && (
+      {(action === "cash" || action === "spent" || action === "earned") && (
         <CashDialog
           open
           onOpenChange={(open) => !open && closeAction()}
           account={account}
+          preset={action === "spent" ? "expense" : action === "earned" ? "income" : undefined}
         />
       )}
       {action === "money" && (

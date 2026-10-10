@@ -84,6 +84,24 @@ func (s *Store) ensureDefaults(ctx context.Context, spaceID uuid.UUID) error {
 	return tx.Commit(ctx)
 }
 
+// WithChildren is the category and the ones under it: a journal narrowed to
+// «Транспорт» shows the taxis too. ErrNotFound when the space has no such
+// category.
+func (s *Store) WithChildren(ctx context.Context, spaceID, id uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.Query(ctx, `SELECT id FROM categories WHERE space_id = $1 AND (id = $2 OR parent_id = $2)`, spaceID, id)
+	if err != nil {
+		return nil, fmt.Errorf("category: with children: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, fmt.Errorf("category: with children: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, ErrNotFound
+	}
+	return ids, nil
+}
+
 // Get is one of the space's categories, ErrNotFound for any other.
 func (s *Store) Get(ctx context.Context, spaceID, id uuid.UUID) (Category, error) {
 	c, err := scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM categories WHERE space_id = $1 AND id = $2`, spaceID, id))

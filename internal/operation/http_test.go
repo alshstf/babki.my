@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
@@ -49,6 +50,7 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv marketdata.RateSource) (str
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(mdStore), nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
+	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).WithDividendCalendar(mdStore, instStore).Mount(srv)
 	// Positions use a real converter, so a journal row and its position can be
 	// compared on one running stack (http_transfer_in_base_test.go).

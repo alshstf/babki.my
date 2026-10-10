@@ -97,14 +97,15 @@ func (s *Store) withAccountsLocked(ctx context.Context, spaceID uuid.UUID, accou
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
 	trading_mode, transfer_group_id, split_ratio, source, external_id, created_at,
-	occurred_at, face_before_minor`
+	occurred_at, face_before_minor, category_id, counterparty`
 
 func scan(row pgx.Row) (Operation, error) {
 	var o Operation
 	err := row.Scan(&o.ID, &o.SpaceID, &o.AccountID, &o.InstrumentID, &o.Type,
 		&o.OccurredOn, &o.SettledOn, &o.Quantity, &o.Price, &o.AmountMinor,
 		&o.Currency, &o.FeeMinor, &o.Note, &o.TradingMode, &o.TransferGroupID,
-		&o.SplitRatio, &o.Source, &o.ExternalID, &o.CreatedAt, &o.OccurredAt, &o.FaceBeforeMinor)
+		&o.SplitRatio, &o.Source, &o.ExternalID, &o.CreatedAt, &o.OccurredAt, &o.FaceBeforeMinor,
+		&o.CategoryID, &o.Counterparty)
 	return o, err
 }
 
@@ -120,9 +121,9 @@ const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
 		fee_minor, note, trading_mode, transfer_group_id, split_ratio, source,
-		external_id, created_at, occurred_at, face_before_minor)
+		external_id, created_at, occurred_at, face_before_minor, category_id, counterparty)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19, $20
+		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19, $20, $21, $22
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
@@ -134,6 +135,7 @@ func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
 		op.FeeMinor, op.Note, op.TradingMode, op.TransferGroupID, op.SplitRatio,
 		op.Source, op.ExternalID, createdAt, op.OccurredAt, op.FaceBeforeMinor,
+		op.CategoryID, op.Counterparty,
 	}
 }
 
@@ -362,6 +364,9 @@ func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operati
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if len(removeIDs) > 0 {
+		if add, err = keepCategories(ctx, tx, spaceID, add, removeIDs); err != nil {
+			return nil, err
+		}
 		ct, err := tx.Exec(ctx, `DELETE FROM operations WHERE space_id = $1 AND id = ANY($2)`, spaceID, removeIDs)
 		if err != nil {
 			return nil, fmt.Errorf("apply delta: %w", err)
@@ -385,6 +390,48 @@ func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operati
 		}
 	}
 	return stored, tx.Commit(ctx)
+}
+
+// keepCategories hands a corrected broker record the category the family gave
+// the record it replaces: the same account, external id and type. Without it a
+// correction would quietly take a filed spending out of the family's report.
+func keepCategories(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Operation, removeIDs []uuid.UUID) ([]Operation, error) {
+	rows, err := tx.Query(ctx, `SELECT account_id, external_id, type, category_id FROM operations
+		WHERE space_id = $1 AND id = ANY($2) AND external_id IS NOT NULL AND category_id IS NOT NULL`, spaceID, removeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("apply delta: categories of replaced rows: %w", err)
+	}
+	type key struct {
+		account    uuid.UUID
+		externalID string
+		typ        Type
+	}
+	filed := map[key]uuid.UUID{}
+	for rows.Next() {
+		var k key
+		var categoryID uuid.UUID
+		if err := rows.Scan(&k.account, &k.externalID, &k.typ, &categoryID); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("apply delta: categories of replaced rows: %w", err)
+		}
+		filed[k] = categoryID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("apply delta: categories of replaced rows: %w", err)
+	}
+	if len(filed) == 0 {
+		return add, nil
+	}
+	out := slices.Clone(add)
+	for i, op := range out {
+		if op.CategoryID != nil || op.ExternalID == nil || !Categorizable(op) {
+			continue
+		}
+		if categoryID, ok := filed[key{op.AccountID, *op.ExternalID, op.Type}]; ok {
+			out[i].CategoryID = &categoryID
+		}
+	}
+	return out, nil
 }
 
 // insertBatch writes a delta's operations as one batch and returns the stored
@@ -482,6 +529,10 @@ type JournalFilter struct {
 	Types        []Type
 	InstrumentID *uuid.UUID
 	From, To     *time.Time
+	// CategoryIDs keeps the rows filed under any of them; Uncategorized the
+	// categorizable rows filed under none.
+	CategoryIDs   []uuid.UUID
+	Uncategorized bool
 }
 
 // ListByAccount returns one page of the account's journal, newest first, with
@@ -516,8 +567,11 @@ func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *u
 			AND ($6::uuid IS NULL OR instrument_id = $6)
 			AND ($7::date IS NULL OR occurred_on >= $7)
 			AND ($8::date IS NULL OR occurred_on <= $8)
+			AND ($9::uuid[] IS NULL OR category_id = ANY($9))
+			AND (NOT $10::boolean OR (category_id IS NULL AND transfer_group_id IS NULL AND type = ANY($11)))
 		`+listingOrder+` LIMIT $3 OFFSET $4`,
-		spaceID, accountID, limit+1, offset, types, f.InstrumentID, f.From, f.To)
+		spaceID, accountID, limit+1, offset, types, f.InstrumentID, f.From, f.To,
+		f.CategoryIDs, f.Uncategorized, categorizableTypes)
 	if err != nil {
 		return nil, false, err
 	}

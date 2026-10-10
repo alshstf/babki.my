@@ -99,7 +99,7 @@ describe("editing a recorded operation", () => {
     expect((screen.getByLabelText(/Комментарий|Заметка|Примечание/) as HTMLInputElement).value).toBe(
       "на отпуск",
     );
-    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Тип операции" })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/Сумма/), { target: { value: "12000" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));

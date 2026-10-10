@@ -756,6 +756,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/{operationId}/category": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Files a row under a category, or takes it out of one (null). Any row that can take a category (Operation.categorizable), a broker's included: the category is the family's reading of the row, and an import keeps it — a row it leaves alone keeps its category, and a corrected record (same account, external id and type) takes over the category of the one it replaces. A deposit or interest takes an income category, a withdrawal, fee or tax an expense one; an archived category only where the row already has it. Anything else is a 400. Nothing the figures are computed from changes. */
+        put: operations["setOperationCategory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operationId}/withheld-abroad": {
         parameters: {
             query?: never;
@@ -1437,6 +1454,19 @@ export interface components {
             instruments: components["schemas"]["ExportInstrument"][];
             instrument_events: components["schemas"]["ExportInstrumentEvent"][];
             manual_prices: components["schemas"]["ExportManualPrice"][];
+            /** @description The family's categories of spending and earning, archived ones too, each parent before its children */
+            categories: components["schemas"]["ExportCategory"][];
+        };
+        ExportCategory: {
+            /** Format: uuid */
+            id: string;
+            /** @description expense or income */
+            kind: string;
+            name: string;
+            /** Format: uuid */
+            parent_id: string | null;
+            archived: boolean;
+            position: number;
         };
         ExportSpace: {
             /** Format: uuid */
@@ -1513,6 +1543,12 @@ export interface components {
             external_id: string | null;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description One of the document's categories
+             */
+            category_id: string | null;
+            counterparty: string;
             /** @description The purchases a move carried — quantity, cost and day bought — when it carried any */
             lots: components["schemas"]["ExportLot"][];
         };
@@ -1895,6 +1931,15 @@ export interface components {
             id: string;
             /** Format: uuid */
             account_id: string;
+            /** @description Whether the row can take a category: a deposit, withdrawal, interest, fee or tax that is not half of a transfer between the family's accounts */
+            categorizable: boolean;
+            /**
+             * Format: uuid
+             * @description The family's category the row is filed under (GET /api/v1/categories); null when none
+             */
+            category_id?: string | null;
+            /** @description Who the money came from or went to, as typed or as the source named them; empty when unknown */
+            counterparty: string;
             /** Format: uuid */
             instrument_id?: string | null;
             type: components["schemas"]["OperationType"];
@@ -2057,6 +2102,13 @@ export interface components {
              */
             fee_minor?: number;
             note?: string;
+            /**
+             * Format: uuid
+             * @description A category of the family's, on a row that can take one (Operation.categorizable): an income category on a deposit or interest, an expense one on a withdrawal, fee or tax; not an archived one unless the row already has it. On an update, omitting it takes the row out of its category.
+             */
+            category_id?: string | null;
+            /** @description Who the money came from or went to. On an update, omitting it clears it. */
+            counterparty?: string;
             /** @description Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow. */
             split_ratio?: string | null;
             /**
@@ -2064,6 +2116,13 @@ export interface components {
              * @description On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it.
              */
             face_before_minor?: number | null;
+        };
+        SetCategoryRequest: {
+            /**
+             * Format: uuid
+             * @description The category to file the row under; null takes it out of its category
+             */
+            category_id: string | null;
         };
         TransferRequest: {
             /** Format: uuid */
@@ -3933,6 +3992,8 @@ export interface operations {
                 from?: string;
                 /** @description Only operations on or before this date, YYYY-MM-DD */
                 to?: string;
+                /** @description A category's id: only rows filed under it or under a category inside it; 400 when the family has no such category. `none`: only the rows that can take a category (Operation.categorizable) and have none. */
+                category?: string;
             };
             header?: never;
             path: {
@@ -4181,6 +4242,36 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    setOperationCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description The row as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     stateWithheldAbroad: {

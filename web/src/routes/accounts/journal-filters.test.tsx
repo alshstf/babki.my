@@ -22,7 +22,9 @@ fetchMock.mockImplementation(async (input: Request) => {
   if (url.pathname.endsWith("/operations")) asked.push(url);
   const body = url.pathname.endsWith("/operations")
     ? { operations: [], has_more: false }
-    : { instruments: [], has_more: false };
+    : url.pathname.endsWith("/categories")
+      ? []
+      : { instruments: [], has_more: false };
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 });
 

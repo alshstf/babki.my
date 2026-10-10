@@ -31,6 +31,8 @@ import {
   type OperationType,
 } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
+import { useCategories } from "@/api/categories";
+import { CategorySelect, categoryKindOf } from "@/components/category-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 import { useOnOpen } from "@/lib/use-on-open";
@@ -42,34 +44,53 @@ import { useOnOpen } from "@/lib/use-on-open";
 // types a positive number and this dialog applies the correct sign.
 const CASH_TYPES: OperationType[] = ["deposit", "withdrawal", "fee", "tax", "interest"];
 const CREDIT_TYPES = new Set<OperationType>(["deposit", "interest"]);
+const MAX_COUNTERPARTY = 200;
+
+// A spending and an earning are a withdrawal and a deposit with a category;
+// the dialog opened as one of them starts there and says so in its title.
+export type CashPreset = "expense" | "income";
+const PRESET_TYPE: Record<CashPreset, OperationType> = { expense: "withdrawal", income: "deposit" };
 
 export function CashDialog({
   open,
   onOpenChange,
   account,
   editing,
+  preset,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: AccountWithBalance;
   // The recorded operation this dialog was opened on, to be corrected in place.
   editing?: Operation;
+  preset?: CashPreset;
 }) {
   const { t } = useTranslation();
   const createOperation = useSaveOperation(editing?.id);
+  const categories = useCategories();
 
   const [type, setType] = useState<OperationType>("deposit");
   const [amount, setAmount] = useState("");
   const [occurredOn, setOccurredOn] = useState(localToday());
   const [note, setNote] = useState("");
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [counterparty, setCounterparty] = useState("");
 
   useOnOpen(open, () => {
-    setType(editing?.type ?? "deposit");
+    setType(editing?.type ?? (preset ? PRESET_TYPE[preset] : "deposit"));
     setAmount(editing ? minorToInput(editing.amount_minor) : "");
     setOccurredOn(editing?.occurred_on ?? localToday());
     setNote(editing?.note ?? "");
+    setCategoryId(editing?.category_id ?? null);
+    setCounterparty(editing?.counterparty ?? "");
     createOperation.reset();
   });
+
+  // A category of the other direction does not survive a change of type.
+  const changeType = (next: OperationType) => {
+    if (categoryKindOf(next) !== categoryKindOf(type)) setCategoryId(null);
+    setType(next);
+  };
 
   const isCredit = CREDIT_TYPES.has(type);
   const parsed = parseToMinor(amount);
@@ -86,6 +107,8 @@ export function CashDialog({
         amount_minor: isCredit ? parsed : -parsed,
         currency: account.currency,
         note,
+        category_id: categoryId,
+        counterparty: counterparty.trim(),
       },
       { onSuccess: () => onOpenChange(false) },
     );
@@ -95,14 +118,16 @@ export function CashDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(submit, valid && !createOperation.isPending)}>
         <DialogHeader>
-          <DialogTitle>{editing ? t("operations.editTitle") : t("cash.title")}</DialogTitle>
+          <DialogTitle>
+            {editing ? t("operations.editTitle") : preset ? t(`cash.presetTitle.${preset}`) : t("cash.title")}
+          </DialogTitle>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="cash-type">{t("cash.type")}</Label>
             <Select
               value={type}
-              onValueChange={(v) => setType(v as OperationType)}
+              onValueChange={(v) => changeType(v as OperationType)}
               disabled={editing !== undefined}
             >
               <SelectTrigger id="cash-type"><SelectValue /></SelectTrigger>
@@ -130,6 +155,27 @@ export function CashDialog({
             }
           />
           <OperationDateField id="cash-date" label={t("cash.date")} value={occurredOn} onChange={setOccurredOn} />
+          <div className="grid gap-2">
+            <Label htmlFor="cash-category">{t("cash.category")}</Label>
+            <CategorySelect
+              id="cash-category"
+              categories={categories.data ?? []}
+              kind={categoryKindOf(type)}
+              value={categoryId}
+              onChange={setCategoryId}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="cash-counterparty">
+              {categoryKindOf(type) === "income" ? t("cash.counterpartyFrom") : t("cash.counterpartyTo")}
+            </Label>
+            <Input
+              id="cash-counterparty"
+              maxLength={MAX_COUNTERPARTY}
+              value={counterparty}
+              onChange={(e) => setCounterparty(e.target.value)}
+            />
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="cash-note">{t("cash.note")}</Label>
             <Input id="cash-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />

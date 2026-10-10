@@ -52,6 +52,9 @@ export type JournalFilter = {
   instrumentId?: string;
   from?: string;
   to?: string;
+  // A category's id (with the ones inside it), or "none" for the rows still
+  // waiting for one.
+  category?: string;
 };
 
 // The operation types, in the order a journal's filter offers them.
@@ -81,6 +84,7 @@ export function useOperations(accountId: string, pageSize = JOURNAL_PAGE_SIZE, f
               instrument_id: filter.instrumentId,
               from: filter.from,
               to: filter.to,
+              category: filter.category,
             },
           },
         },
@@ -128,6 +132,23 @@ export function useCreateOperation() {
       return data;
     },
     onSuccess: (data) => invalidate([data.account_id]),
+  });
+}
+
+// Files a row under a category or takes it out (null). Only the journal shows
+// it, so only the journal is read again.
+export function useSetOperationCategory() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ operationId, categoryId }: { operationId: string; categoryId: string | null }): Promise<Operation> => {
+      const { data, error, response } = await api.PUT("/api/v1/operations/{operationId}/category", {
+        params: { path: { operationId } },
+        body: { category_id: categoryId },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (data) => void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] }),
   });
 }
 

@@ -149,7 +149,12 @@ type Operation struct {
 	// then retires basis in proportion (НК РФ ст. 214.1 п. 13, decision Р-4).
 	// Without it the old rule applies. Nil on other types.
 	FaceBeforeMinor *int64
-	Source          string
-	ExternalID      *string
-	CreatedAt       time.Time
+	// CategoryID and Counterparty say what money that came or went was for and
+	// with whom (household stage 1): a spending is a withdrawal with a spending
+	// category. The engine never reads them.
+	CategoryID   *uuid.UUID
+	Counterparty string
+	Source       string
+	ExternalID   *string
+	CreatedAt    time.Time
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
@@ -73,6 +74,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/operations/money-transfer", edit(h.handleMoneyTransfer))
 	srv.Mount("GET /api/v1/instruments/{instrumentId}/operations", view(h.handleListByInstrument))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
+	srv.Mount("PUT /api/v1/operations/{operationId}/category", edit(h.handleSetCategory))
 	srv.Mount("PUT /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleStateWithheld))
 	srv.Mount("DELETE /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleClearWithheld))
 	srv.Mount("POST /api/v1/operations/arrivals", edit(h.handleCreateArrival))
@@ -139,6 +141,11 @@ func toAPI(o Operation) apitypes.Operation {
 		CreatedAt:         o.CreatedAt,
 		HasUndatedLots:    hasUndatedLots(o),
 		AssembledFromLots: assembledFromLots(o),
+		Categorizable:     Categorizable(o),
+		Counterparty:      o.Counterparty,
+	}
+	if o.CategoryID != nil {
+		out.CategoryId = nullable.NewNullableWithValue(*o.CategoryID)
 	}
 	// The mode and its kind are set together and are both absent when
 	// nobody said where the operation happened.
@@ -477,6 +484,19 @@ func parseJournalFilter(w http.ResponseWriter, r *http.Request) (JournalFilter, 
 		}
 		f.Types = append(f.Types, t)
 	}
+	switch raw := q.Get("category"); raw {
+	case "":
+	case "none":
+		f.Uncategorized = true
+	default:
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, "category must be a category's id or none")
+			return JournalFilter{}, false
+		}
+		// Resolved by the handler, which knows the space: see categoryFilter.
+		f.CategoryIDs = []uuid.UUID{id}
+	}
 	if raw := q.Get("instrument_id"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
@@ -564,6 +584,33 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, toAPI(updated))
 }
 
+func (h *Handler) handleSetCategory(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathOperationID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.SetCategoryRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	if !req.CategoryId.IsSpecified() {
+		httpjson.Error(w, http.StatusBadRequest, "category_id is required; null takes the row out of its category")
+		return
+	}
+	var categoryID *uuid.UUID
+	if !req.CategoryId.IsNull() {
+		v := req.CategoryId.MustGet()
+		categoryID = &v
+	}
+	updated, err := h.svc.SetCategory(r.Context(), p.SpaceID, id, categoryID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(updated))
+}
+
 func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	accountID, ok := pathAccountID(w, r)
@@ -581,6 +628,20 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 	filter, ok := parseJournalFilter(w, r)
 	if !ok {
 		return
+	}
+	// A category stands for itself and the ones inside it, which only the
+	// space's categories can say.
+	if len(filter.CategoryIDs) == 1 {
+		ids, err := category.NewStore(h.store.db).WithChildren(r.Context(), p.SpaceID, filter.CategoryIDs[0])
+		if errors.Is(err, category.ErrNotFound) {
+			httpjson.Error(w, http.StatusBadRequest, "category is not one of this family's categories")
+			return
+		}
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		filter.CategoryIDs = ids
 	}
 	ops, hasMore, err := h.store.ListByAccount(r.Context(), p.SpaceID, accountID, limit, offset, filter)
 	if err != nil {

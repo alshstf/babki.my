@@ -1406,6 +1406,12 @@ type CreateOperationRequest struct {
 	// AmountMinor The operation's amount in `currency`, sign preserved. May be omitted on a buy or a sell that gives both quantity and price: the server then records quantity × price rounded half away from zero, negative for a buy. Given, it is taken as is (a total with accrued interest stays). The sign the type requires — negative for a buy and a withdrawal, positive for a deposit and a dividend, 0 for a split, either way for a conversion — and |amount| at most 10^15 are enforced with a 400.
 	AmountMinor *int64 `json:"amount_minor,omitempty"`
 
+	// CategoryId A category of the family's, on a row that can take one (Operation.categorizable): an income category on a deposit or interest, an expense one on a withdrawal, fee or tax; not an archived one unless the row already has it. On an update, omitting it takes the row out of its category.
+	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id,omitempty"`
+
+	// Counterparty Who the money came from or went to. On an update, omitting it clears it.
+	Counterparty *string `json:"counterparty,omitempty"`
+
 	// Currency ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400.
 	Currency string `json:"currency"`
 
@@ -1530,6 +1536,18 @@ type ExportBalance struct {
 	AsOf string `json:"as_of"`
 }
 
+// ExportCategory defines model for ExportCategory.
+type ExportCategory struct {
+	Archived bool               `json:"archived"`
+	Id       openapi_types.UUID `json:"id"`
+
+	// Kind expense or income
+	Kind     string                                `json:"kind"`
+	Name     string                                `json:"name"`
+	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id"`
+	Position int                                   `json:"position"`
+}
+
 // ExportInstrument defines model for ExportInstrument.
 type ExportInstrument struct {
 	Currency       string                    `json:"currency"`
@@ -1588,10 +1606,14 @@ type ExportMember struct {
 
 // ExportOperation defines model for ExportOperation.
 type ExportOperation struct {
-	AmountMinor int64                     `json:"amount_minor"`
-	CreatedAt   time.Time                 `json:"created_at"`
-	Currency    string                    `json:"currency"`
-	ExternalId  nullable.Nullable[string] `json:"external_id"`
+	AmountMinor int64 `json:"amount_minor"`
+
+	// CategoryId One of the document's categories
+	CategoryId   nullable.Nullable[openapi_types.UUID] `json:"category_id"`
+	Counterparty string                                `json:"counterparty"`
+	CreatedAt    time.Time                             `json:"created_at"`
+	Currency     string                                `json:"currency"`
+	ExternalId   nullable.Nullable[string]             `json:"external_id"`
 
 	// FaceBeforeMinor On an amortization: the outstanding face value per unit before it, in minor units
 	FaceBeforeMinor nullable.Nullable[int64]              `json:"face_before_minor"`
@@ -1968,10 +1990,19 @@ type Operation struct {
 	// AssembledFromLots True when amount_minor is a cost basis assembled from the purchases behind it (a transfer with a stored per-lot breakdown), each on its own day, rather than money that moved on occurred_on. The same on both legs; false for ordinary operations and for a transfer with a hand-typed basis. OperationInBase.rate_on reads it.
 	AssembledFromLots bool `json:"assembled_from_lots"`
 
+	// Categorizable Whether the row can take a category: a deposit, withdrawal, interest, fee or tax that is not half of a transfer between the family's accounts
+	Categorizable bool `json:"categorizable"`
+
+	// CategoryId The family's category the row is filed under (GET /api/v1/categories); null when none
+	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id,omitempty"`
+
 	// CounterpartAccountId On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal.
 	CounterpartAccountId nullable.Nullable[openapi_types.UUID] `json:"counterpart_account_id,omitempty"`
-	CreatedAt            time.Time                             `json:"created_at"`
-	Currency             string                                `json:"currency"`
+
+	// Counterparty Who the money came from or went to, as typed or as the source named them; empty when unknown
+	Counterparty string    `json:"counterparty"`
+	CreatedAt    time.Time `json:"created_at"`
+	Currency     string    `json:"currency"`
 
 	// FaceBeforeMinor On an amortization: the bond's outstanding face value per unit just before the repayment, in minor units of `currency`, when it is known (see CreateOperationRequest.face_before_minor). Null on every other row.
 	FaceBeforeMinor nullable.Nullable[int64] `json:"face_before_minor,omitempty"`
@@ -2297,6 +2328,12 @@ type SetBalanceRequest struct {
 	AsOf string `json:"as_of"`
 }
 
+// SetCategoryRequest defines model for SetCategoryRequest.
+type SetCategoryRequest struct {
+	// CategoryId The category to file the row under; null takes it out of its category
+	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id"`
+}
+
 // SetupRequest Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400.
 type SetupRequest struct {
 	// DisplayName What to call the person. Same rule and same reasoning as space_name above: refused empty or past 100 characters, not trimmed, no shape.
@@ -2324,7 +2361,10 @@ type SetupStatus struct {
 
 // SpaceExport defines model for SpaceExport.
 type SpaceExport struct {
-	Accounts         []ExportAccount         `json:"accounts"`
+	Accounts []ExportAccount `json:"accounts"`
+
+	// Categories The family's categories of spending and earning, archived ones too, each parent before its children
+	Categories       []ExportCategory        `json:"categories"`
 	ExportedAt       time.Time               `json:"exported_at"`
 	Format           SpaceExportFormat       `json:"format"`
 	InstrumentEvents []ExportInstrumentEvent `json:"instrument_events"`
@@ -2909,6 +2949,9 @@ type ListAccountOperationsParams struct {
 
 	// To Only operations on or before this date, YYYY-MM-DD
 	To *string `form:"to,omitempty" json:"to,omitempty"`
+
+	// Category A category's id: only rows filed under it or under a category inside it; 400 when the family has no such category. `none`: only the rows that can take a category (Operation.categorizable) and have none.
+	Category *string `form:"category,omitempty" json:"category,omitempty"`
 }
 
 // GetAccountReturnParams defines parameters for GetAccountReturn.
@@ -3054,6 +3097,9 @@ type CreateTransferJSONRequestBody = TransferRequest
 
 // UpdateOperationJSONRequestBody defines body for UpdateOperation for application/json ContentType.
 type UpdateOperationJSONRequestBody = CreateOperationRequest
+
+// SetOperationCategoryJSONRequestBody defines body for SetOperationCategory for application/json ContentType.
+type SetOperationCategoryJSONRequestBody = SetCategoryRequest
 
 // StatePurchasesJSONRequestBody defines body for StatePurchases for application/json ContentType.
 type StatePurchasesJSONRequestBody = StatePurchasesRequest

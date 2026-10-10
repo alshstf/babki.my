@@ -5,7 +5,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -40,6 +42,7 @@ import { unnameableGap } from "@/lib/unnameable-gap";
 import {
   useOperations,
   useDeleteOperation,
+  useSetOperationCategory,
   editDialogOf,
   OPERATION_TYPES,
   type JournalFilter,
@@ -51,6 +54,8 @@ import {
   type OperationInBaseGap,
 } from "@/api/operations";
 import { useInstrumentIndex, type Instrument } from "@/api/instruments";
+import { treeOf, useCategories, type Category } from "@/api/categories";
+import { CategoryChip, categoryKindOf } from "@/components/category-picker";
 import type { CostBasisRules } from "@/api/tax-residencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
@@ -204,6 +209,11 @@ export function OperationsTable({
   const instruments = useInstrumentIndex();
   const deleteOperation = useDeleteOperation();
   const [deleteTarget, setDeleteTarget] = useState<Operation | null>(null);
+  // The family's categories name the rows' ones; a journal still reads
+  // without them.
+  const categories = useCategories();
+  const categoryList = categories.data ?? [];
+  const setCategory = useSetOperationCategory();
   const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
 
   // The journal reports its currencies to the screen-wide counter that decides
@@ -267,7 +277,13 @@ export function OperationsTable({
   if (state !== "ready") return <QueryGate state={state} />;
 
   const filters = (
-    <JournalFilters filter={filter} onChange={setFilter} papers={papers} active={filtered} />
+    <JournalFilters
+      filter={filter}
+      onChange={setFilter}
+      papers={papers}
+      categories={categoryList}
+      active={filtered}
+    />
   );
   if (list.length === 0) {
     return (
@@ -288,6 +304,11 @@ export function OperationsTable({
     <div className="grid gap-3">
       {filters}
       <RefreshFailedNotice show={refreshFailed(operations)} />
+      {setCategory.isError && (
+        <Alert variant="destructive" data-testid="operation-category-error">
+          <AlertDescription>{t("categoryPicker.failed")}</AlertDescription>
+        </Alert>
+      )}
       <Table>
         <TableHeader>
           <TableRow>
@@ -394,6 +415,25 @@ export function OperationsTable({
                     </div>
                   )}
                   {operation.withheld_abroad && <WithheldAbroadNote operation={operation} editable={canDelete} />}
+                  {/* What the money was for and with whom; anyone who may write
+                     files the row from here, a broker's row included. */}
+                  {operation.categorizable && (
+                    <div className="mt-1">
+                      <CategoryChip
+                        categories={categoryList}
+                        kind={categoryKindOf(operation.type)}
+                        value={operation.category_id ?? null}
+                        editable={canDelete}
+                        pending={setCategory.isPending && setCategory.variables?.operationId === operation.id}
+                        onChange={(categoryId) => setCategory.mutate({ operationId: operation.id, categoryId })}
+                      />
+                    </div>
+                  )}
+                  {operation.counterparty && (
+                    <div className="text-xs text-muted-foreground" data-testid="operation-counterparty">
+                      {operation.counterparty}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   {instrumentLinks && operation.instrument_id ? (
@@ -595,20 +635,36 @@ export function OperationsTable({
 }
 
 const ALL = "all";
+const UNFILED = "none";
 
-// The journal's filter: a type, a paper the account has held, a period.
+// The journal's filter: a type, a paper the account has held, a category, a
+// period.
 function JournalFilters({
   filter,
   onChange,
   papers,
+  categories,
   active,
 }: {
   filter: JournalFilter;
   onChange: (filter: JournalFilter) => void;
   papers: { id: string; name: string }[];
+  categories: Category[];
   active: boolean;
 }) {
   const { t } = useTranslation();
+  // Spending first, then earning, each child under its parent; archived ones
+  // too, since rows keep them.
+  // «Подарки» may be spent and received, so each kind is a group of its own.
+  const categoryGroups = (["expense", "income"] as const)
+    .map((kind) => ({
+      kind,
+      options: treeOf(categories, kind).flatMap((top) => [
+        { category: top as Category, child: false },
+        ...top.children.map((child) => ({ category: child, child: true })),
+      ]),
+    }))
+    .filter((group) => group.options.length > 0);
   return (
     <div className="flex flex-wrap items-end gap-2 text-sm" data-testid="journal-filters">
       <div className="grid gap-1">
@@ -646,6 +702,35 @@ function JournalFilters({
                 <SelectItem key={paper.id} value={paper.id}>
                   {paper.name}
                 </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      {categoryGroups.length > 0 && (
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">{t("operations.filter.category")}</Label>
+          <Select
+            value={filter.category ?? ALL}
+            onValueChange={(v) => onChange({ ...filter, category: v === ALL ? undefined : v })}
+          >
+            <SelectTrigger className="h-8 w-52" aria-label={t("operations.filter.category")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="max-h-80">
+              <SelectItem value={ALL}>{t("operations.filter.allCategories")}</SelectItem>
+              <SelectItem value={UNFILED}>{t("operations.filter.unfiled")}</SelectItem>
+              {categoryGroups.map((group) => (
+                <SelectGroup key={group.kind}>
+                  <SelectLabel>{t(`categories.kinds.${group.kind}`)}</SelectLabel>
+                  {group.options.map(({ category, child }) => (
+                    <SelectItem key={category.id} value={category.id} className={child ? "pl-6" : undefined}>
+                      {category.archived
+                        ? t("operations.filter.archivedCategory", { name: category.name })
+                        : category.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectContent>
           </Select>
