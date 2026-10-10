@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -95,18 +96,28 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
-      {st.lost.map((l) => (
-        <Alert key={l.from} variant="destructive" data-testid="card-lost">
+      {st.grace_off_since && (
+        <Alert variant="destructive" data-testid="card-grace-off">
           <AlertDescription>
-            {t("card.lost", {
-              from: formatDate(l.from),
-              to: formatDate(l.to),
-              amount: formatMinor(l.amount_minor, c),
-              interest: formatMinor(l.interest_minor, c),
-            })}
+            {(st.grace_off_by_minimum ? t("card.graceOffByMinimum", { date: formatDate(st.grace_off_since) }) : t("card.graceOff", { date: formatDate(st.grace_off_since) })) +
+              " " +
+              t("card.graceOffRestore", { amount: formatMinor(st.to_restore_minor, c) })}
           </AlertDescription>
         </Alert>
-      ))}
+      )}
+      {st.lost.map((l) => {
+        const values = {
+          from: formatDate(l.from),
+          to: formatDate(l.to),
+          amount: formatMinor(l.amount_minor, c),
+          interest: formatMinor(l.interest_minor, c),
+        };
+        return (
+          <Alert key={l.from} variant="destructive" data-testid="card-lost">
+            <AlertDescription>{l.early ? t("card.lostEarly", values) : t("card.lost", values)}</AlertDescription>
+          </Alert>
+        );
+      })}
       {st.non_grace_minor > 0 && (
         <p className="text-sm text-amber-700 dark:text-amber-400" data-testid="card-non-grace">
           {t("card.nonGrace", { amount: formatMinor(st.non_grace_minor, c), interest: formatMinor(st.non_grace_interest_minor, c) })}
@@ -118,12 +129,14 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       <div className="text-xs text-muted-foreground">
         {t("card.termsLine", {
           day: data.terms.statement_day,
-          days: data.terms.payment_days,
-          grace: data.terms.grace_kind === "long" ? t("card.graceLong", { days: data.terms.grace_days }) : t("card.graceStatement"),
+          pay: data.terms.pay_by_period_end ? t("card.payByPeriodEndShort") : t("card.payDays", { days: data.terms.payment_days }),
+          grace: graceLine(t, data.terms),
           min: pct(data.terms.min_percent),
           floor: formatMinor(data.terms.min_floor_minor, c),
+          charges: data.terms.charges_in_full ? t("card.chargesInFullShort") : "",
           rate: pct(data.terms.annual_rate),
         })}
+        {data.terms.grace_all_lost && " " + t("card.graceAllLostShort")}
       </div>
       <p className="text-xs text-muted-foreground">{t("card.hint")}</p>
       <PushToggle />
@@ -135,6 +148,18 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       {editing && <TermsDialog account={account} card={data} onClose={() => setEditing(false)} />}
     </div>
   );
+}
+
+// graceLine says how the card's grace runs, for the line of its terms.
+function graceLine(t: (key: string, values?: Record<string, unknown>) => string, terms: CreditCardTerms): string {
+  switch (terms.grace_kind) {
+    case "long":
+      return t("card.graceLong", { days: terms.grace_days });
+    case "windows":
+      return t("card.graceWindows", { window: terms.window_months, months: terms.grace_months });
+    default:
+      return t("card.graceStatement");
+  }
 }
 
 // BenefitBlock weighs the card against the family's own money over the last
@@ -176,10 +201,17 @@ function BenefitBlock({ benefit, currency, ownRate }: { benefit: NonNullable<Cre
 }
 
 // Typical terms to start from; the bank's statement has the real ones.
+const LENIENT = { graceAllLost: false, payByPeriodEnd: false, chargesInFull: false };
 const PRESETS: Record<string, Partial<Form>> = {
-  statement55: { kind: "statement", paymentDays: "25", minPercent: "8" },
-  sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3" },
-  year: { kind: "long", graceDays: "365", paymentDays: "20", minPercent: "3" },
+  statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT },
+  sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3", ...LENIENT, chargesInFull: true },
+  year: { kind: "long", graceDays: "365", paymentDays: "20", minPercent: "3", ...LENIENT },
+  // Газпромбанк «180 дней» (decision Р-28): two months of purchases, paid by
+  // the end of the sixth; the minimum by the end of the next month.
+  gpb180: {
+    kind: "windows", windowMonths: "2", graceMonths: "6", statementDay: "1", minPercent: "3", minFloor: "500",
+    rate: "59.99", graceAllLost: true, payByPeriodEnd: true, chargesInFull: true,
+  },
 };
 
 interface Form {
@@ -188,10 +220,16 @@ interface Form {
   paymentDays: string;
   kind: CreditCardTerms["grace_kind"];
   graceDays: string;
+  windowMonths: string;
+  graceMonths: string;
+  openedOn: string;
   minPercent: string;
   minFloor: string;
   rate: string;
   ownRate: string;
+  graceAllLost: boolean;
+  payByPeriodEnd: boolean;
+  chargesInFull: boolean;
 }
 
 function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
@@ -204,10 +242,16 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     paymentDays: terms ? String(terms.payment_days) : "25",
     kind: terms?.grace_kind ?? "statement",
     graceDays: terms && terms.grace_kind === "long" ? String(terms.grace_days) : "120",
+    windowMonths: terms && terms.grace_kind === "windows" ? String(terms.window_months) : "2",
+    graceMonths: terms && terms.grace_kind === "windows" ? String(terms.grace_months) : "6",
+    openedOn: terms?.opened_on ?? "",
     minPercent: terms?.min_percent ?? "3",
     minFloor: terms ? minorToInput(terms.min_floor_minor) : "300",
     rate: terms?.annual_rate ?? "",
     ownRate: terms?.own_rate ?? "",
+    graceAllLost: terms?.grace_all_lost ?? false,
+    payByPeriodEnd: terms?.pay_by_period_end ?? false,
+    chargesInFull: terms?.charges_in_full ?? false,
   });
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const num = (s: string) => Number(s.replace(",", "."));
@@ -217,8 +261,10 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
   const decimalOk = (s: string, hi: number) => s.trim() !== "" && !Number.isNaN(num(s)) && num(s) >= 0 && num(s) < hi;
   const valid =
     limit !== null && limit >= 0 && floor !== null && floor >= 0 &&
-    int(f.statementDay, 1, 31) && int(f.paymentDays, 0, 60) &&
-    (f.kind === "statement" || int(f.graceDays, 1, 1100)) &&
+    int(f.statementDay, 1, 31) && (f.payByPeriodEnd || int(f.paymentDays, 0, 60)) &&
+    (f.kind !== "long" || int(f.graceDays, 1, 1100)) &&
+    (f.kind !== "windows" ||
+      (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
     decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000));
 
   const submit = () => {
@@ -227,9 +273,15 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {
         limit_minor: limit,
         statement_day: Number(f.statementDay),
-        payment_days: Number(f.paymentDays),
+        payment_days: int(f.paymentDays, 0, 60) ? Number(f.paymentDays) : 0,
         grace_kind: f.kind,
         grace_days: f.kind === "long" ? Number(f.graceDays) : 0,
+        window_months: f.kind === "windows" ? Number(f.windowMonths) : 0,
+        grace_months: f.kind === "windows" ? Number(f.graceMonths) : 0,
+        opened_on: f.kind === "windows" ? f.openedOn : null,
+        grace_all_lost: f.graceAllLost,
+        pay_by_period_end: f.payByPeriodEnd,
+        charges_in_full: f.chargesInFull,
         min_percent: String(num(f.minPercent)),
         min_floor_minor: floor,
         annual_rate: String(num(f.rate)),
@@ -238,13 +290,38 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       { onSuccess: onClose },
     );
   };
-  const field = (id: keyof Form, label: string, hint?: string) => (
+  type TextField = { [K in keyof Form]: Form[K] extends string ? K : never }[keyof Form];
+  const field = (id: TextField, label: string, hint?: string, type = "text") => (
     <div className="grid gap-1">
       <Label htmlFor={`card-${id}`}>{label}</Label>
-      <Input id={`card-${id}`} inputMode="decimal" value={f[id]} onChange={(e) => set({ [id]: e.target.value } as Partial<Form>)} />
+      <Input
+        id={`card-${id}`}
+        type={type}
+        inputMode={type === "text" ? "decimal" : undefined}
+        value={f[id]}
+        onChange={(e) => set({ [id]: e.target.value } as Partial<Form>)}
+      />
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
+  type Switch = "graceAllLost" | "payByPeriodEnd" | "chargesInFull";
+  const toggle = (id: Switch, label: string, hint: string) => (
+    <div className="flex items-start gap-2">
+      <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
+      <div className="grid gap-0.5">
+        <Label htmlFor={`card-${id}`} className="font-normal">
+          {label}
+        </Label>
+        <p className="text-xs text-muted-foreground">{hint}</p>
+      </div>
+    </div>
+  );
+  const presetName: Record<string, string> = {
+    statement55: t("card.presets.statement55"),
+    sber120: t("card.presets.sber120"),
+    year: t("card.presets.year"),
+    gpb180: t("card.presets.gpb180"),
+  };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md" data-testid="card-terms-dialog">
@@ -257,7 +334,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
             <div className="flex flex-wrap gap-2">
               {Object.entries(PRESETS).map(([key, p]) => (
                 <Button key={key} type="button" size="sm" variant="outline" onClick={() => set(p)}>
-                  {key === "statement55" ? t("card.presets.statement55") : key === "sber120" ? t("card.presets.sber120") : t("card.presets.year")}
+                  {presetName[key]}
                 </Button>
               ))}
             </div>
@@ -265,7 +342,8 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           </div>
           {field("limit", t("card.limit", { currency: account.currency }))}
           {field("statementDay", t("card.statementDay"), t("card.statementDayHint"))}
-          {field("paymentDays", t("card.paymentDays"), t("card.paymentDaysHint"))}
+          {toggle("payByPeriodEnd", t("card.payByPeriodEnd"), t("card.payByPeriodEndHint"))}
+          {!f.payByPeriodEnd && field("paymentDays", t("card.paymentDays"), t("card.paymentDaysHint"))}
           <div className="grid gap-1">
             <Label>{t("card.graceKind")}</Label>
             <Select value={f.kind} onValueChange={(v) => set({ kind: v as Form["kind"] })}>
@@ -275,12 +353,22 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
               <SelectContent>
                 <SelectItem value="statement">{t("card.kindStatement")}</SelectItem>
                 <SelectItem value="long">{t("card.kindLong")}</SelectItem>
+                <SelectItem value="windows">{t("card.kindWindows")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           {f.kind === "long" && field("graceDays", t("card.graceDays"))}
+          {f.kind === "windows" && (
+            <>
+              {field("windowMonths", t("card.windowMonths"))}
+              {field("graceMonths", t("card.graceMonths"), t("card.graceMonthsHint"))}
+              {field("openedOn", t("card.openedOn"), t("card.openedOnHint"), "date")}
+            </>
+          )}
+          {toggle("graceAllLost", t("card.graceAllLost"), t("card.graceAllLostHint"))}
           {field("minPercent", t("card.minPercent"))}
           {field("minFloor", t("card.minFloor", { currency: account.currency }))}
+          {toggle("chargesInFull", t("card.chargesInFull"), t("card.chargesInFullHint"))}
           {field("rate", t("card.rate"))}
           {field("ownRate", t("card.ownRate"), t("card.ownRateHint"))}
           {save.isError && (

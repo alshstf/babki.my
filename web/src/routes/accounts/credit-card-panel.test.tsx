@@ -41,12 +41,14 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   debt_minor: 57_300_00, available_minor: 92_700_00, last_statement: inDays(-9), next_statement: inDays(22),
   minimum_minor: 1_569_00, minimum_on: inDays(11), minimum_missed: false, minimum_estimate: false,
   grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
-  lost: [], non_grace_minor: 0, non_grace_interest_minor: 0, ...over,
+  lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
+  grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
   terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
-    min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null },
+    min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
+    window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false },
   status: status(over), by_journal: byJournal, benefit,
 });
 
@@ -93,7 +95,44 @@ describe("CreditCardPanel", () => {
     expect(await put.json()).toEqual({
       limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
+      window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
     });
+  });
+
+  it("states Газпромбанк's windows from its preset, with the contract's day", async () => {
+    answer({});
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Указать условия карты" }));
+    fireEvent.click(await screen.findByRole("button", { name: "180 дней (Газпромбанк)" }));
+    expect(screen.queryByLabelText("Дней на оплату после выписки")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Кредитный лимит/), { target: { value: "300000" } });
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Дата договора"), { target: { value: "2026-07-10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({
+      statement_day: 1, grace_kind: "windows", grace_days: 0, window_months: 2, grace_months: 6, opened_on: "2026-07-10",
+      grace_all_lost: true, pay_by_period_end: true, charges_in_full: true, min_percent: "3", min_floor_minor: 500_00,
+      annual_rate: "59.99",
+    });
+  });
+
+  it("says when the grace is off the whole debt, and what brings it back", async () => {
+    answer({ "/credit-card": card({
+      grace: [], grace_off_since: "2027-01-01", to_restore_minor: 22_385_00,
+      lost: [
+        { from: "2026-07-01", to: "2026-08-31", deadline: "2026-12-31", amount_minor: 6_385_00, interest_minor: 400_00, early: false },
+        { from: "2026-09-01", to: "2026-10-31", deadline: "2027-02-28", amount_minor: 15_000_00, interest_minor: 900_00, early: true },
+      ],
+    }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    const off = norm((await screen.findByTestId("card-grace-off")).textContent ?? "");
+    expect(off).toContain("С 01.01.2027 льгота снята со всего долга");
+    expect(off).toContain("погасите 22 385,00 ₽");
+    const lost = screen.getAllByTestId("card-lost").map((e) => norm(e.textContent ?? ""));
+    expect(lost[0]).toContain("сгорела");
+    expect(lost[1]).toContain("льгота снята досрочно");
   });
 
   it("says what to pay by when to keep the grace, and the minimum", async () => {
@@ -108,7 +147,7 @@ describe("CreditCardPanel", () => {
   });
 
   it("warns of a grace lost, and says what a card kept by its balance cannot tell", async () => {
-    answer({ "/credit-card": card({ grace: [], lost: [{ from: "2026-09-01", to: "2026-09-30", deadline: "2026-10-21", amount_minor: 42_300_00, interest_minor: 1_400_00 }] }) });
+    answer({ "/credit-card": card({ grace: [], lost: [{ from: "2026-09-01", to: "2026-09-30", deadline: "2026-10-21", amount_minor: 42_300_00, interest_minor: 1_400_00, early: false }] }) });
     show(<CreditCardPanel account={account} canEdit />);
     expect(norm((await screen.findByTestId("card-lost")).textContent ?? "")).toMatch(/01\.09\.2026–30\.09\.2026 сгорела: осталось 42 300,00 ₽, проценты уже ≈ 1 400,00 ₽/);
     cleanup();

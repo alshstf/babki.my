@@ -48,7 +48,7 @@ func dues(st Status) map[string]int64 {
 func TestPurchasesStayFreeUntilTheirStatementIsPaid(t *testing.T) {
 	ops := []operation.Operation{spend("2026-09-03", 30_000), spend("2026-09-20", 22_300), spend("2026-10-05", 5_000)}
 
-	st := Work(alfa, ops, "RUB", d("2026-10-07"))
+	st := Work(alfa, ops, "RUB", d("2026-10-07"), Kinds{})
 	if st.Debt != 57_300_00 || st.Available != 92_700_00 {
 		t.Errorf("debt %d available %d, want 57 300 and 92 700", st.Debt, st.Available)
 	}
@@ -59,7 +59,7 @@ func TestPurchasesStayFreeUntilTheirStatementIsPaid(t *testing.T) {
 		t.Errorf("minimum = %d by %s (missed %v, estimate %v), want 1 569 by 21.10", st.Minimum, st.MinimumOn.Format(time.DateOnly), st.MinimumMissed, st.MinimumEstimate)
 	}
 
-	st = Work(alfa, append(ops, repay("2026-10-08", 10_000)), "RUB", d("2026-10-10"))
+	st = Work(alfa, append(ops, repay("2026-10-08", 10_000)), "RUB", d("2026-10-10"), Kinds{})
 	if got := dues(st); got["2026-10-21"] != 42_300_00 || got["2026-11-21"] != 5_000_00 {
 		t.Errorf("after paying 10 000, grace = %v", got)
 	}
@@ -77,7 +77,7 @@ func TestAMissedDeadlineLosesTheGrace(t *testing.T) {
 		spend("2026-09-03", 30_000), spend("2026-09-20", 22_300), repay("2026-10-08", 10_000),
 		{Type: operation.TypeWithdrawal, OccurredOn: d("2026-10-02"), AmountMinor: -1_000_00, Currency: "RUB", TransferGroupID: &moved},
 	}
-	st := Work(alfa, ops, "RUB", d("2026-10-25"))
+	st := Work(alfa, ops, "RUB", d("2026-10-25"), Kinds{})
 	if len(st.Lost) != 1 || st.Lost[0].Amount != 42_300_00 || st.Lost[0].From.Format(time.DateOnly) != "2026-09-01" ||
 		st.Lost[0].To.Format(time.DateOnly) != "2026-09-30" {
 		t.Fatalf("lost = %+v", st.Lost)
@@ -103,7 +103,7 @@ func TestAMissedDeadlineLosesTheGrace(t *testing.T) {
 func TestALongGraceRunsFromThePeriodsStart(t *testing.T) {
 	sber := alfa
 	sber.GraceKind, sber.GraceDays = Long, 120
-	st := Work(sber, []operation.Operation{spend("2026-09-03", 1_000)}, "RUB", d("2026-10-10"))
+	st := Work(sber, []operation.Operation{spend("2026-09-03", 1_000)}, "RUB", d("2026-10-10"), Kinds{})
 	if got := dues(st); got["2026-12-29"] != 1_000_00 {
 		t.Errorf("grace = %v", got)
 	}
@@ -117,7 +117,7 @@ func TestALongGraceRunsFromThePeriodsStart(t *testing.T) {
 // More paid in than owed is the family's own money on the card: the next
 // purchase uses it first.
 func TestAnOverpaymentCoversTheNextPurchase(t *testing.T) {
-	st := Work(alfa, []operation.Operation{repay("2026-09-01", 5_000), spend("2026-09-10", 3_000)}, "RUB", d("2026-09-15"))
+	st := Work(alfa, []operation.Operation{repay("2026-09-01", 5_000), spend("2026-09-10", 3_000)}, "RUB", d("2026-09-15"), Kinds{})
 	if st.Debt != -2_000_00 || st.Available != 150_000_00 || len(st.Grace) != 0 || st.Minimum != 0 {
 		t.Errorf("status = %+v", st)
 	}

@@ -76,8 +76,18 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 	t := Terms{
 		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
 		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
+		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
+		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull,
 	}
 	var err error
+	if req.OpenedOn.IsSpecified() && !req.OpenedOn.IsNull() {
+		on, err := time.Parse(time.DateOnly, req.OpenedOn.MustGet())
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, "opened_on must be a date YYYY-MM-DD")
+			return
+		}
+		t.OpenedOn = &on
+	}
 	if t.MinPercent, err = decimal.NewFromString(req.MinPercent); err != nil {
 		httpjson.Error(w, http.StatusBadRequest, "min_percent must be a decimal")
 		return
@@ -144,11 +154,17 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 	if t.OwnRate != nil {
 		own = nullable.NewNullableWithValue(t.OwnRate.String())
 	}
+	opened := nullable.NewNullNullable[string]()
+	if t.OpenedOn != nil {
+		opened = nullable.NewNullableWithValue(date(*t.OpenedOn))
+	}
 	return apitypes.CreditCardTerms{
 		LimitMinor: t.Limit, StatementDay: t.StatementDay, PaymentDays: t.PaymentDays,
 		GraceKind: apitypes.CreditCardTermsGraceKind(t.GraceKind), GraceDays: t.GraceDays,
 		MinPercent: t.MinPercent.String(), MinFloorMinor: t.MinFloor,
 		AnnualRate: t.AnnualRate.String(), OwnRate: own,
+		WindowMonths: t.WindowMonths, GraceMonths: t.GraceMonths, OpenedOn: opened,
+		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
 	}
 }
 
@@ -173,6 +189,10 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		MinimumMinor: st.Minimum, MinimumOn: date(st.MinimumOn), MinimumMissed: st.MinimumMissed,
 		MinimumEstimate: st.MinimumEstimate, NonGraceMinor: st.NonGrace, NonGraceInterestMinor: st.NonGraceInterest,
 		Grace: make([]apitypes.CreditCardDue, 0, len(st.Grace)), Lost: make([]apitypes.CreditCardLost, 0, len(st.Lost)),
+		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
+	}
+	if !st.GraceOffSince.IsZero() {
+		out.GraceOffSince = nullable.NewNullableWithValue(date(st.GraceOffSince))
 	}
 	for _, g := range st.Grace {
 		out.Grace = append(out.Grace, apitypes.CreditCardDue{On: date(g.On), AmountMinor: g.Amount})
@@ -180,6 +200,7 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 	for _, l := range st.Lost {
 		out.Lost = append(out.Lost, apitypes.CreditCardLost{
 			From: date(l.From), To: date(l.To), Deadline: date(l.Deadline), AmountMinor: l.Amount, InterestMinor: l.Interest,
+			Early: l.Early,
 		})
 	}
 	return out

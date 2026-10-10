@@ -71,13 +71,15 @@ func (s *Service) kinds(ctx context.Context, spaceID uuid.UUID) (Kinds, error) {
 }
 
 const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, grace_days,
-	min_percent, min_floor_minor, annual_rate, own_rate`
+	min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on,
+	grace_all_lost, pay_by_period_end, charges_in_full`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
 	var own decimal.NullDecimal
 	err := row.Scan(&t.AccountID, &t.Limit, &t.StatementDay, &t.PaymentDays, &t.GraceKind, &t.GraceDays,
-		&t.MinPercent, &t.MinFloor, &t.AnnualRate, &own)
+		&t.MinPercent, &t.MinFloor, &t.AnnualRate, &own, &t.WindowMonths, &t.GraceMonths, &t.OpenedOn,
+		&t.GraceAllLost, &t.PayByPeriodEnd, &t.ChargesInFull)
 	if own.Valid {
 		t.OwnRate = &own.Decimal
 	}
@@ -108,8 +110,12 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 	if a.Type != account.TypeCreditCard {
 		return Terms{}, fmt.Errorf("%w: a limit and a grace period are a credit card's", family.ErrValidation)
 	}
-	if t.GraceKind == FromStatement {
+	// Only the grace's own kind keeps its numbers.
+	if t.GraceKind != Long {
 		t.GraceDays = 0
+	}
+	if t.GraceKind != Windows {
+		t.WindowMonths, t.GraceMonths, t.OpenedOn = 0, 0, nil
 	}
 	var own decimal.NullDecimal
 	if t.OwnRate != nil {
@@ -117,15 +123,20 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 	}
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO credit_cards (account_id, space_id, limit_minor, statement_day, payment_days, grace_kind,
-			grace_days, min_percent, min_floor_minor, annual_rate, own_rate)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months,
+			opened_on, grace_all_lost, pay_by_period_end, charges_in_full)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
 			min_floor_minor = EXCLUDED.min_floor_minor, annual_rate = EXCLUDED.annual_rate,
-			own_rate = EXCLUDED.own_rate, updated_at = now()`,
+			own_rate = EXCLUDED.own_rate, window_months = EXCLUDED.window_months,
+			grace_months = EXCLUDED.grace_months, opened_on = EXCLUDED.opened_on,
+			grace_all_lost = EXCLUDED.grace_all_lost, pay_by_period_end = EXCLUDED.pay_by_period_end,
+			charges_in_full = EXCLUDED.charges_in_full, updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
-		t.MinPercent, t.MinFloor, t.AnnualRate, own)
+		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
+		t.GraceAllLost, t.PayByPeriodEnd, t.ChargesInFull)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}
@@ -166,13 +177,13 @@ func (s *Service) Card(ctx context.Context, spaceID, accountID uuid.UUID) (Card,
 	if err != nil {
 		return Card{}, err
 	}
-	c, ops, err := s.card(ctx, spaceID, a, t)
-	if err != nil || !c.ByJournal {
-		return c, err
-	}
 	k, err := s.kinds(ctx, spaceID)
 	if err != nil {
 		return Card{}, err
+	}
+	c, ops, err := s.card(ctx, spaceID, a, t, k)
+	if err != nil || !c.ByJournal {
+		return c, err
 	}
 	b := Weigh(t, ops, a.Currency, s.today(), k)
 	// What the bank will charge for the grace lost is a cost too, though not
@@ -193,7 +204,7 @@ func (s *Service) today() time.Time {
 
 // card is the card today, with the journal it was worked out from (none when
 // counted by its balance).
-func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, t Terms) (Card, []operation.Operation, error) {
+func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, t Terms, k Kinds) (Card, []operation.Operation, error) {
 	today := s.today()
 	if !account.CountedByJournal(a.Account) {
 		var balance int64
@@ -206,7 +217,7 @@ func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBal
 	if err != nil {
 		return Card{}, nil, err
 	}
-	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today), ByJournal: true}, ops, nil
+	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today, k), ByJournal: true}, ops, nil
 }
 
 // AllTerms is every card's terms in the space.
@@ -244,13 +255,17 @@ func (s *Service) All(ctx context.Context, spaceID uuid.UUID) ([]Card, error) {
 	if err != nil {
 		return nil, err
 	}
+	k, err := s.kinds(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	out := []Card{}
 	for _, a := range list {
 		t, ok := terms[a.ID]
 		if !ok || a.Status != account.StatusActive {
 			continue
 		}
-		c, _, err := s.card(ctx, spaceID, a, t)
+		c, _, err := s.card(ctx, spaceID, a, t, k)
 		if err != nil {
 			return nil, err
 		}

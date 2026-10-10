@@ -2263,12 +2263,27 @@ export interface components {
             limit_minor: number;
             /** @description The day of the month the bank closes a statement period; a short month's last day stands for a later one */
             statement_day: number;
-            /** @description Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement) */
+            /** @description Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end */
             payment_days: number;
-            /** @enum {string} */
-            grace_kind: "statement" | "long";
+            /**
+             * @description statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6).
+             * @enum {string}
+             */
+            grace_kind: "statement" | "long" | "windows";
             /** @description For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise */
             grace_days: number;
+            /** @description For grace_kind windows: the periods of purchases in a window; 0 otherwise */
+            window_months: number;
+            /** @description For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise */
+            grace_months: number;
+            /** @description For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise */
+            opened_on: string | null;
+            /** @description A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is */
+            grace_all_lost: boolean;
+            /** @description The minimum is due by the last day of the period after the statement, not payment_days after it */
+            pay_by_period_end: boolean;
+            /** @description The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full */
+            charges_in_full: boolean;
             /** @description The minimum payment, percent of the debt the statement shows (decimal) */
             min_percent: string;
             /**
@@ -2304,6 +2319,8 @@ export interface components {
              * @description Roughly the interest on it so far, at annual_rate from each purchase's day; the bank counts by its own rules
              */
             interest_minor: number;
+            /** @description The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost) */
+            early: boolean;
         };
         CreditCardStatus: {
             /**
@@ -2339,6 +2356,14 @@ export interface components {
             non_grace_minor: number;
             /** Format: int64 */
             non_grace_interest_minor: number;
+            /** @description The day a missed deadline (or, grace_off_by_minimum, a missed minimum) took the grace off the whole debt (grace_all_lost); null while the grace holds */
+            grace_off_since: string | null;
+            grace_off_by_minimum: boolean;
+            /**
+             * Format: int64
+             * @description While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise
+             */
+            to_restore_minor: number;
         };
         CreditCardBenefit: {
             /** @description A year before today, or the card's first row when later */
