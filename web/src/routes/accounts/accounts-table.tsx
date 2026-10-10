@@ -18,6 +18,7 @@ import { MoneyCell } from "@/components/money-cell";
 import { formatMinor, signClass } from "@/lib/money";
 import type { AccountWithBalance } from "@/api/accounts";
 import { JournalNotes } from "./journal-notes";
+import { useNarrow } from "@/lib/use-narrow";
 
 export function AccountsTable({
   accounts,
@@ -43,13 +44,14 @@ export function AccountsTable({
   switching?: string;
 }) {
   const { t } = useTranslation();
+  const narrow = useNarrow();
   return (
     <Table>
       <TableHeader>
         <TableRow>
           <TableHead>{t("accounts.columns.name")}</TableHead>
-          <TableHead>{t("accounts.columns.type")}</TableHead>
-          <TableHead>{t("accounts.columns.owner")}</TableHead>
+          {!narrow && <TableHead>{t("accounts.columns.type")}</TableHead>}
+          {!narrow && <TableHead>{t("accounts.columns.owner")}</TableHead>}
           <TableHead className="text-right">{t("accounts.columns.balance")}</TableHead>
           {onRowAction && <TableHead className="w-10" />}
         </TableRow>
@@ -59,7 +61,7 @@ export function AccountsTable({
           const archived = account.status === "archived";
           return (
             <TableRow key={account.id} className={cn(archived && "opacity-50")}>
-              <TableCell>
+              <TableCell className={narrow ? "whitespace-normal" : undefined}>
                 <div className="font-medium">
                   <Link
                     to="/accounts/$accountId"
@@ -89,21 +91,32 @@ export function AccountsTable({
                     {account.institution}
                   </div>
                 )}
-              </TableCell>
-              <TableCell>
-                <Badge variant="secondary">
-                  {t(`accountTypes.${account.type}`)}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                {account.owner_user_id ? (
-                  <Badge variant="outline">{t("accounts.personal")}</Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground">
-                    {t("accounts.shared")}
-                  </span>
+                {/* On a phone the kind and whose it is fold under the name. */}
+                {narrow && (
+                  <div className="text-xs text-muted-foreground">
+                    {t(`accountTypes.${account.type}`)} ·{" "}
+                    {account.owner_user_id ? t("accounts.personal") : t("accounts.shared")}
+                  </div>
                 )}
               </TableCell>
+              {!narrow && (
+                <TableCell>
+                  <Badge variant="secondary">
+                    {t(`accountTypes.${account.type}`)}
+                  </Badge>
+                </TableCell>
+              )}
+              {!narrow && (
+                <TableCell>
+                  {account.owner_user_id ? (
+                    <Badge variant="outline">{t("accounts.personal")}</Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {t("accounts.shared")}
+                    </span>
+                  )}
+                </TableCell>
+              )}
               <TableCell className="text-right">
                 {account.journal && account.counted_by === "journal" ? (
                   // Counted by its journal: the figure is already in the base

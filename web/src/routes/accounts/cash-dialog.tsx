@@ -59,6 +59,8 @@ export function CashDialog({
   account,
   editing,
   preset,
+  accounts,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -66,6 +68,10 @@ export function CashDialog({
   // The recorded operation this dialog was opened on, to be corrected in place.
   editing?: Operation;
   preset?: CashPreset;
+  // The accounts the row may go to instead, for the quick add: the dialog
+  // opens on account and offers these in a list above the rest.
+  accounts?: AccountWithBalance[];
+  onSaved?: (op: Operation) => void;
 }) {
   const { t } = useTranslation();
   const createOperation = useSaveOperation(editing?.id);
@@ -85,6 +91,8 @@ export function CashDialog({
   // rules suggest one from the counterparty.
   const [chosen, setChosen] = useState(false);
   const [memberId, setMemberId] = useState<string | null>(null);
+  const [pickedId, setPickedId] = useState(account.id);
+  const target = accounts?.find((a) => a.id === pickedId) ?? account;
 
   useOnOpen(open, () => {
     setType(editing?.type ?? (preset ? PRESET_TYPE[preset] : "deposit"));
@@ -95,6 +103,7 @@ export function CashDialog({
     setCounterparty(editing?.counterparty ?? "");
     setChosen(editing?.category_id != null);
     setMemberId(editing?.member_id ?? null);
+    setPickedId(account.id);
     createOperation.reset();
   });
 
@@ -121,29 +130,59 @@ export function CashDialog({
     if (!amountValid || parsed === null) return;
     createOperation.mutate(
       {
-        account_id: account.id,
+        account_id: target.id,
         type,
         occurred_on: occurredOn,
         amount_minor: isCredit ? parsed : -parsed,
-        currency: account.currency,
+        currency: target.currency,
         note,
         category_id: categoryId,
         counterparty: counterparty.trim(),
         member_id: memberId,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: (op) => {
+          onSaved?.(op);
+          onOpenChange(false);
+        },
+      },
     );
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(submit, valid && !createOperation.isPending)}>
+      <DialogContent
+        className="sm:max-w-sm"
+        onKeyDown={submitOnEnter(submit, valid && !createOperation.isPending)}
+        // The quick add starts at the amount: on a phone the keyboard opens
+        // at once, the account and the date being already the likely ones.
+        onOpenAutoFocus={(e) => {
+          if (!accounts) return;
+          e.preventDefault();
+          document.getElementById("cash-amount")?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>
             {editing ? t("operations.editTitle") : preset ? t(`cash.presetTitle.${preset}`) : t("cash.title")}
           </DialogTitle>
         </DialogHeader>
         <div className="grid gap-4">
+          {accounts && (
+            <div className="grid gap-2">
+              <Label htmlFor="cash-account">{t("cash.account")}</Label>
+              <Select value={target.id} onValueChange={setPickedId}>
+                <SelectTrigger id="cash-account"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {accounts.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name} · {a.currency}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="cash-type">{t("cash.type")}</Label>
             <Select
@@ -163,10 +202,10 @@ export function CashDialog({
           </div>
           <AmountField
             id="cash-amount"
-            label={t("cash.amount", { currency: account.currency })}
+            label={t("cash.amount", { currency: target.currency })}
             value={amount}
             onChange={setAmount}
-            currency={account.currency}
+            currency={target.currency}
             accepted={amountValid}
             badNumber={t("cash.badNumber")}
             hint={
@@ -208,7 +247,7 @@ export function CashDialog({
                 members={family}
                 value={memberId}
                 onChange={setMemberId}
-                shared={account.owner_user_id == null}
+                shared={target.owner_user_id == null}
               />
             </div>
           )}
