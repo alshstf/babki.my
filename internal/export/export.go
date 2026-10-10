@@ -19,6 +19,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
@@ -74,6 +75,10 @@ type cards interface {
 	Installments(ctx context.Context, spaceID, accountID uuid.UUID) (map[uuid.UUID]creditcard.Plan, error)
 }
 
+type budgets interface {
+	Limits(ctx context.Context, spaceID uuid.UUID) ([]budget.Limit, error)
+}
+
 type prices interface {
 	PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]marketdata.Quote, error)
 }
@@ -89,17 +94,18 @@ type Handler struct {
 	categories  categories
 	loans       loans
 	cards       cards
+	budgets     budgets
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
 }
 
 func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events, pr prices, cats categories,
-	l loans, cc cards, auth *family.Auth, sm *scs.SessionManager,
+	l loans, cc cards, b budgets, auth *family.Auth, sm *scs.SessionManager,
 ) *Handler {
 	return &Handler{
 		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
-		loans: l, cards: cc, auth: auth, sm: sm, now: time.Now,
+		loans: l, cards: cc, budgets: b, auth: auth, sm: sm, now: time.Now,
 	}
 }
 
@@ -141,6 +147,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		ManualPrices:     []apitypes.ExportManualPrice{},
 		Categories:       []apitypes.ExportCategory{},
 		CategoryRules:    []apitypes.CategoryRule{},
+		BudgetLimits:     []apitypes.BudgetLimit{},
 	}
 	usernames := make(map[uuid.UUID]string, len(members))
 	for _, m := range members {
@@ -239,6 +246,13 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 			Id: r.ID, CategoryId: r.CategoryID, Field: apitypes.CategoryRuleField(r.Field),
 			Pattern: r.Pattern, Position: r.Position,
 		})
+	}
+	limits, err := h.budgets.Limits(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	for _, l := range limits {
+		doc.BudgetLimits = append(doc.BudgetLimits, budget.LimitAPI(l))
 	}
 	return doc, nil
 }

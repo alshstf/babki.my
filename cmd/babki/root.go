@@ -19,6 +19,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/benchmark"
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
@@ -137,7 +138,10 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		pushKeys, pushSender = &keys, notify.NewWebPush(keys)
 	}
 	notify.NewHandler(notify.NewStore(r.pool), pushKeys, pushSender, famAuth, famSM, r.log).Mount(srv)
-	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
+	cashflowSvc := cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter)
+	cashflow.NewHandler(cashflowSvc, famAuth, famSM).Mount(srv)
+	budgetSvc := budget.NewService(r.pool, cashflowSvc, category.NewStore(r.pool))
+	budget.NewHandler(budgetSvc, famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurringHidden := recurring.NewHidden(r.pool)
 	recurringSvc := recurring.NewService(opStore, accStore, recurringHidden)
@@ -165,7 +169,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
 	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, category.NewStore(r.pool),
-		loanSvc, cardSvc, famAuth, famSM).Mount(srv)
+		loanSvc, cardSvc, budgetSvc, famAuth, famSM).Mount(srv)
 	// A hand entry is followed by the registry at once (a purchase before a
 	// known split must not wait for the sweep); opSvc is the one service every
 	// hand-entry door writes through.
