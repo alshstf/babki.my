@@ -21,8 +21,10 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/apitypes"
@@ -63,6 +65,14 @@ type categories interface {
 	Rules(ctx context.Context, spaceID uuid.UUID) ([]category.Rule, error)
 }
 
+type loans interface {
+	All(ctx context.Context, spaceID uuid.UUID) ([]loan.Terms, error)
+}
+
+type cards interface {
+	AllTerms(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Terms, error)
+}
+
 type prices interface {
 	PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]marketdata.Quote, error)
 }
@@ -76,17 +86,19 @@ type Handler struct {
 	events      events
 	prices      prices
 	categories  categories
+	loans       loans
+	cards       cards
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
 }
 
 func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events, pr prices, cats categories,
-	auth *family.Auth, sm *scs.SessionManager,
+	l loans, cc cards, auth *family.Auth, sm *scs.SessionManager,
 ) *Handler {
 	return &Handler{
 		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
-		auth: auth, sm: sm, now: time.Now,
+		loans: l, cards: cc, auth: auth, sm: sm, now: time.Now,
 	}
 }
 
@@ -145,6 +157,23 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	if err != nil {
 		return apitypes.SpaceExport{}, err
 	}
+	// A loan's and a card's terms ride on their account.
+	loanTerms, err := h.loans.All(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	cardTerms, err := h.cards.AllTerms(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	loanOf := map[uuid.UUID]loan.Terms{}
+	for _, t := range loanTerms {
+		loanOf[t.AccountID] = t
+	}
+	cardOf := map[uuid.UUID]creditcard.Terms{}
+	for _, t := range cardTerms {
+		cardOf[t.AccountID] = t
+	}
 	papers := map[uuid.UUID]bool{}
 	for _, a := range list {
 		ops, err := h.journals.ListForEngine(ctx, spaceID, a.ID)
@@ -155,7 +184,14 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		if err != nil {
 			return apitypes.SpaceExport{}, err
 		}
-		doc.Accounts = append(doc.Accounts, exportAccount(a, history[a.ID], ops, stated, usernames))
+		out := exportAccount(a, history[a.ID], ops, stated, usernames)
+		if t, ok := loanOf[a.ID]; ok {
+			out.Loan = nullable.NewNullableWithValue(loan.TermsAPI(t))
+		}
+		if t, ok := cardOf[a.ID]; ok {
+			out.CreditCard = nullable.NewNullableWithValue(creditcard.TermsAPI(t))
+		}
+		doc.Accounts = append(doc.Accounts, out)
 		for _, o := range ops {
 			if o.InstrumentID != nil {
 				papers[*o.InstrumentID] = true
@@ -254,6 +290,8 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		KeptByOperations: a.KeptByOperations,
 		CreatedAt:        a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
 		WithheldStated: []apitypes.ExportWithheldStated{},
+		Loan:           nullable.NewNullNullable[apitypes.LoanTerms](),
+		CreditCard:     nullable.NewNullNullable[apitypes.CreditCardTerms](),
 	}
 	for _, w := range stated {
 		out.WithheldStated = append(out.WithheldStated, apitypes.ExportWithheldStated{

@@ -149,10 +149,7 @@ func (h *Handler) writeLoan(w http.ResponseWriter, status int, t Terms) {
 	now := h.now().UTC()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	out := apitypes.Loan{
-		Terms: apitypes.LoanTerms{
-			PrincipalMinor: t.Principal, AnnualRate: t.AnnualRate.String(), TermMonths: t.TermMonths,
-			IssuedOn: t.IssuedOn.Format(time.DateOnly), Kind: apitypes.LoanTermsKind(t.Kind),
-		},
+		Terms:               TermsAPI(t),
 		Schedule:            make([]apitypes.LoanRow, 0, len(rows)),
 		LeftByScheduleMinor: t.Principal,
 		Next:                nullable.NewNullNullable[apitypes.LoanRow](),
@@ -171,4 +168,12 @@ func (h *Handler) writeLoan(w http.ResponseWriter, status int, t Terms) {
 		}
 	}
 	httpjson.Write(w, status, out)
+}
+
+// TermsAPI is the terms as the API and the export write them.
+func TermsAPI(t Terms) apitypes.LoanTerms {
+	return apitypes.LoanTerms{
+		PrincipalMinor: t.Principal, AnnualRate: t.AnnualRate.String(), TermMonths: t.TermMonths,
+		IssuedOn: t.IssuedOn.Format(time.DateOnly), Kind: apitypes.LoanTermsKind(t.Kind),
+	}
 }

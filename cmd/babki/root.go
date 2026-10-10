@@ -117,14 +117,16 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	}
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	structure.NewHandler(structure.NewService(accStore, positions, famStore, converter), famAuth, famSM).Mount(srv)
-	loan.NewHandler(loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool)), famAuth, famSM).Mount(srv)
-	creditcard.NewHandler(creditcard.NewService(r.pool, accStore, opStore), famAuth, famSM).Mount(srv)
+	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
+	cardSvc := creditcard.NewService(r.pool, accStore, opStore)
+	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)
+	creditcard.NewHandler(cardSvc, famAuth, famSM).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurringSvc := recurring.NewService(opStore, accStore)
 	recurring.NewHandler(recurringSvc, famAuth, famSM).Mount(srv)
 	forecast.NewHandler(forecast.NewService(accStore, positions, famStore, recurringSvc,
-		loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool)), converter), famAuth, famSM).Mount(srv)
+		loanSvc, converter), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)), instStore, famAuth, famSM).Mount(srv)
 
@@ -145,7 +147,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	caMaterializer := corporateaction.NewMaterializer(caStore, opSvc, instStore,
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
 	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
-	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, category.NewStore(r.pool), famAuth, famSM).Mount(srv)
+	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, category.NewStore(r.pool),
+		loanSvc, cardSvc, famAuth, famSM).Mount(srv)
 	// A hand entry is followed by the registry at once (a purchase before a
 	// known split must not wait for the sweep); opSvc is the one service every
 	// hand-entry door writes through.

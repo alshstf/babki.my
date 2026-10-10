@@ -154,27 +154,36 @@ func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBal
 	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today), ByJournal: true}, nil
 }
 
-// All is every active card with terms in the space, for the reminders.
-func (s *Service) All(ctx context.Context, spaceID uuid.UUID) ([]Card, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+cols+` FROM credit_cards WHERE space_id = $1`, spaceID)
+// AllTerms is every card's terms in the space.
+func (s *Service) AllTerms(ctx context.Context, spaceID uuid.UUID) ([]Terms, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+cols+` FROM credit_cards WHERE space_id = $1 ORDER BY account_id`, spaceID)
 	if err != nil {
 		return nil, fmt.Errorf("credit card: all: %w", err)
 	}
-	terms := map[uuid.UUID]Terms{}
+	defer rows.Close()
+	var out []Terms
 	for rows.Next() {
 		t, err := scan(rows)
 		if err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("credit card: all: %w", err)
 		}
-		terms[t.AccountID] = t
+		out = append(out, t)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("credit card: all: %w", err)
+	return out, rows.Err()
+}
+
+// All is every active card with terms in the space, for the reminders.
+func (s *Service) All(ctx context.Context, spaceID uuid.UUID) ([]Card, error) {
+	all, err := s.AllTerms(ctx, spaceID)
+	if err != nil {
+		return nil, err
 	}
-	if len(terms) == 0 {
+	if len(all) == 0 {
 		return []Card{}, nil
+	}
+	terms := map[uuid.UUID]Terms{}
+	for _, t := range all {
+		terms[t.AccountID] = t
 	}
 	list, err := s.accounts.ListWithBalance(ctx, spaceID)
 	if err != nil {

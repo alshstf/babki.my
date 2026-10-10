@@ -1905,13 +1905,19 @@ type ErrorResponse struct {
 // ExportAccount defines model for ExportAccount.
 type ExportAccount struct {
 	// Balances Balance marks, oldest first
-	Balances         []ExportBalance    `json:"balances"`
-	CreatedAt        time.Time          `json:"created_at"`
-	Currency         string             `json:"currency"`
-	Id               openapi_types.UUID `json:"id"`
-	Institution      string             `json:"institution"`
-	KeptByOperations bool               `json:"kept_by_operations"`
-	Name             string             `json:"name"`
+	Balances  []ExportBalance `json:"balances"`
+	CreatedAt time.Time       `json:"created_at"`
+
+	// CreditCard A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account
+	CreditCard       nullable.Nullable[CreditCardTerms] `json:"credit_card"`
+	Currency         string                             `json:"currency"`
+	Id               openapi_types.UUID                 `json:"id"`
+	Institution      string                             `json:"institution"`
+	KeptByOperations bool                               `json:"kept_by_operations"`
+
+	// Loan A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account
+	Loan nullable.Nullable[LoanTerms] `json:"loan"`
+	Name string                       `json:"name"`
 
 	// Operations The journal as stored, in the order it is folded
 	Operations []ExportOperation `json:"operations"`

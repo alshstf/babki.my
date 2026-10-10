@@ -2535,7 +2535,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated, loan, credit_card]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -2560,6 +2560,16 @@ components:
           type: array
           description: "Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first"
           items: { $ref: "#/components/schemas/ExportWithheldStated" }
+        loan:
+          nullable: true
+          description: "A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account"
+          allOf:
+            - $ref: "#/components/schemas/LoanTerms"
+        credit_card:
+          nullable: true
+          description: "A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardTerms"
     ExportOperation:
       type: object
       required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty, member_username]
