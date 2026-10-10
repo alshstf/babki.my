@@ -3008,7 +3008,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3028,6 +3028,10 @@ components:
         grace_all_lost: { type: boolean, description: "A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is" }
         pay_by_period_end: { type: boolean, description: "The minimum is due by the last day of the period after the statement, not payment_days after it" }
         charges_in_full: { type: boolean, description: "The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full" }
+        transfer_categories:
+          type: array
+          items: { type: string, format: uuid }
+          description: "The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family"
         min_percent: { type: string, description: "The minimum payment, percent of the debt the statement shows (decimal)" }
         min_floor_minor: { type: integer, format: int64, minimum: 0, description: "The smallest minimum payment" }
         annual_rate: { type: string, description: "Percent a year charged once the grace is lost (decimal)" }

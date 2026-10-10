@@ -178,3 +178,30 @@ func TestWindowsCountFromTheContractsMonth(t *testing.T) {
 		t.Error("a deadline inside the window was accepted")
 	}
 }
+
+// Spending of a category the bank takes for transfers — and of the ones under
+// it — has no grace on this card: interest from its day (decision Р-29).
+func TestTransferCategoriesHaveNoGrace(t *testing.T) {
+	wallets, bets, food := uuid.New(), uuid.New(), uuid.New()
+	set := categorySet{kinds: Kinds{}, parent: map[uuid.UUID]uuid.UUID{bets: wallets}}
+	terms := alfa
+	terms.TransferCategories = []uuid.UUID{wallets}
+	kinds := set.of(terms)
+	in := func(op operation.Operation, cat uuid.UUID) operation.Operation {
+		op.CategoryID = &cat
+		return op
+	}
+	ops := []operation.Operation{
+		in(spend("2026-09-03", 1_000), food), in(spend("2026-09-04", 2_000), wallets), in(spend("2026-09-05", 300), bets),
+	}
+	st := Work(terms, ops, "RUB", d("2026-09-10"), kinds)
+	if got := dues(st); len(got) != 1 || got["2026-10-21"] != 1_000_00 {
+		t.Errorf("grace = %v, want the food only", got)
+	}
+	if st.NonGrace != 2_300_00 || st.NonGraceInterest <= 0 {
+		t.Errorf("non-grace = %d (interest %d), want the wallet and the bet", st.NonGrace, st.NonGraceInterest)
+	}
+	if st := Work(alfa, ops, "RUB", d("2026-09-10"), set.of(alfa)); st.NonGrace != 0 {
+		t.Errorf("a card without transfer categories: non-grace = %d", st.NonGrace)
+	}
+}

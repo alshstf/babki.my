@@ -33,6 +33,7 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
 	account.NewHandler(accStore, famStore, conv, nil, auth, sm).Mount(srv)
 	operation.NewHandler(operation.NewService(opStore), opStore, famStore, conv, auth, sm).Mount(srv)
+	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
 	creditcard.NewHandler(creditcard.NewService(pool, accStore, opStore, category.NewStore(pool)), auth, sm).Mount(srv)
 	url, c := apitest.Serve(t, srv.Handler())
 
@@ -109,6 +110,34 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		opened != "2026-07-10" || !got.Terms.GraceAllLost || !got.Terms.PayByPeriodEnd || !got.Terms.ChargesInFull ||
 		len(got.Status.Grace) != 1 || !got.Status.GraceOffSince.IsNull() {
 		t.Errorf("windows card = %+v", got)
+	}
+
+	// A transfer category is one of the family's spending categories.
+	var cats []apitypes.Category
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/categories", ""), &cats)
+	spending, earning := "", ""
+	for _, ct := range cats {
+		switch {
+		case ct.Kind == "expense" && spending == "":
+			spending = ct.Id.String()
+		case ct.Kind == "income" && earning == "":
+			earning = ct.Id.String()
+		}
+	}
+	withCats := func(ids string) string {
+		return fmt.Sprintf(`{"limit_minor":15000000,"statement_day":1,"payment_days":20,"grace_kind":"statement","grace_days":0,
+			"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":null,"transfer_categories":[%s]}`, ids)
+	}
+	if r := apitest.Do(t, c, "PUT", path, withCats(fmt.Sprintf("%q", earning))); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("an income category as a transfer one = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path, withCats(fmt.Sprintf("%q,%q", spending, spending)))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("transfer categories = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if len(got.Terms.TransferCategories) != 1 || got.Terms.TransferCategories[0].String() != spending {
+		t.Errorf("transfer categories = %v, want the spending one once", got.Terms.TransferCategories)
 	}
 
 	if r := apitest.Do(t, c, "DELETE", path, ""); r.StatusCode != http.StatusNoContent {

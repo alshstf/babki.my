@@ -71,6 +71,10 @@ type Terms struct {
 	// cash and transfers (not less than MinFloor) plus the interest and fees
 	// charged, in full.
 	ChargesInFull bool
+	// TransferCategories are the spending categories the bank takes for
+	// transfers, not purchases — no grace, interest from the day (decision
+	// Р-29); their subcategories with them.
+	TransferCategories []uuid.UUID
 }
 
 var hundred, thousand = decimal.NewFromInt(100), decimal.NewFromInt(1000)
@@ -245,10 +249,11 @@ type item struct {
 
 // purchase says whether a journal row is spending the grace covers: a
 // withdrawal that is not one half of a move to the family's own account, nor
-// a charge of the bank's. Fees, interest charged and money moved off the card
-// are owed from day one.
+// a charge of the bank's, nor of a category the bank takes for transfers.
+// Fees, interest charged and money moved off the card are owed from day one.
 func purchase(op operation.Operation, kinds Kinds) bool {
-	return op.Type == operation.TypeWithdrawal && op.TransferGroupID == nil && !kinds.charge(op)
+	return op.Type == operation.TypeWithdrawal && op.TransferGroupID == nil && !kinds.charge(op) &&
+		(op.CategoryID == nil || !kinds.Transfers[*op.CategoryID])
 }
 
 // Work works out the card's status on today from its journal, rows in the
@@ -517,11 +522,14 @@ type Benefit struct {
 	Total        int64
 }
 
-// Kinds sorts the card's rows for Weigh: categories that mean cashback, and
-// categories that mean a charge (interest on credit, bank fees).
+// Kinds sorts the card's rows: categories that mean cashback, categories
+// that mean a charge (interest on credit, bank fees), and — the card's own —
+// those the bank takes for transfers (Terms.TransferCategories, with their
+// subcategories).
 type Kinds struct {
-	Cashback map[uuid.UUID]bool
-	Charges  map[uuid.UUID]bool
+	Cashback  map[uuid.UUID]bool
+	Charges   map[uuid.UUID]bool
+	Transfers map[uuid.UUID]bool
 }
 
 func (k Kinds) cashback(op operation.Operation) bool {

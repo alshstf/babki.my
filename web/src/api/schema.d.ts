@@ -2284,6 +2284,8 @@ export interface components {
             pay_by_period_end: boolean;
             /** @description The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full */
             charges_in_full: boolean;
+            /** @description The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family */
+            transfer_categories: string[];
             /** @description The minimum payment, percent of the debt the statement shows (decimal) */
             min_percent: string;
             /**
