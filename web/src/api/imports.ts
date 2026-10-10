@@ -9,12 +9,17 @@ export type ImportRow = components["schemas"]["ImportRow"];
 export type ImportField = components["schemas"]["ImportField"];
 export type TableImport = components["schemas"]["TableImport"];
 export type ImportTableResult = components["schemas"]["ImportTableResult"];
+export type ImportFileFormat = components["schemas"]["ImportFileFormat"];
 
 // What importing a table would do, row by row. Nothing is written; without a
 // mapping the server guesses one from the header and returns it.
 export function usePreviewImport(accountId: string) {
   return useMutation({
-    mutationFn: async (body: { content: string; mapping?: ImportMapping }): Promise<ImportPreview> => {
+    mutationFn: async (body: {
+      content: string;
+      format: ImportFileFormat;
+      mapping?: ImportMapping;
+    }): Promise<ImportPreview> => {
       const { data, error, response } = await api.POST(
         "/api/v1/accounts/{accountId}/imports/preview",
         { params: { path: { accountId } }, body },
@@ -67,6 +72,7 @@ export function useImportTable(accountId: string) {
   return useMutation({
     mutationFn: async (body: {
       content: string;
+      format: ImportFileFormat;
       mapping: ImportMapping;
       file_name: string;
     }): Promise<ImportTableResult> => {

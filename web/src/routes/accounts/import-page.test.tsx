@@ -13,7 +13,34 @@ import "@/i18n";
 import { TableImport } from "./import-page";
 
 const sent = vi.hoisted(() => [] as { method: string; path: string; body: unknown }[]);
-const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false, statement: false }));
+const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false, statement: false, intelinvest: false }));
+
+// Intelinvest's export as the server rearranges it: a trade, and the money it
+// moved as a row of its own, shown and not imported.
+const intelinvest = () => ({
+  mapping: { has_header: true, columns: { date: 0, type: 1, instrument: 2, quantity: 3, price: 4, amount: 5 }, types: { stockbuy: "buy" } },
+  header: ["Дата", "Тип", "Бумага", "Количество", "Цена", "Сумма"],
+  tracker: "intelinvest",
+  rows: [
+    {
+      line: 7,
+      cells: ["12.01.2026 11:00:00", "STOCKBUY", "GAZP", "100", "150.5", ""],
+      verdict: "new",
+      reason: null,
+      operation: {
+        type: "buy", occurred_on: "2026-01-12", instrument_id: "i-gazp", quantity: "100", price: "150.5",
+        amount_minor: -1_505_000, currency: "RUB", fee_minor: 0, note: "", counterparty: "", category_id: null,
+      },
+    },
+    {
+      line: 8,
+      cells: ["12.01.2026 11:00:00", "MONEYWITHDRAW", "", "", "", "15050"],
+      verdict: "unparsed",
+      reason: { code: "paired", field: null, value: "7" },
+      operation: null,
+    },
+  ],
+});
 
 // A bank's statement as the server reads it: no type column, the sign decides,
 // and each row says what it will be filed under.
@@ -80,6 +107,7 @@ fetchMock.mockImplementation(async (input: Request) => {
     return json([{ id: "c-food", kind: "expense", name: "Продукты", parent_id: null, archived: false, position: 1 }]);
   }
   if (path.endsWith("/imports/preview") && state.statement) return json(statement());
+  if (path.endsWith("/imports/preview") && state.intelinvest) return json(intelinvest());
   if (path.endsWith("/imports/preview")) {
     const mapping = (body as { mapping?: { has_header: boolean } }).mapping;
     const answer = preview(mapping ? mapping.has_header : true);
@@ -131,6 +159,7 @@ afterEach(() => {
   state.imports = [];
   state.missing = false;
   state.statement = false;
+  state.intelinvest = false;
 });
 
 function wrap(ui: ReactElement) {
@@ -183,6 +212,32 @@ describe("importing a table", () => {
     expect(sent.some((s) => s.method === "DELETE")).toBe(false);
     fireEvent.click(within(confirm).getByRole("button", { name: "Откатить" }));
     await waitFor(() => expect(sent.some((s) => s.method === "DELETE" && s.path === "/api/v1/imports/imp-1")).toBe(true));
+  });
+
+  it("sends an Excel workbook as it is, and turns the old .xls away", async () => {
+    wrap(<TableImport accountId="acc-1" />);
+    const old = new File(["\xd0\xcf"], "old.xls");
+    fireEvent.change(await screen.findByLabelText("Файл"), { target: { files: [old] } });
+    expect(await screen.findByText(/Старый формат Excel/)).toBeTruthy();
+    expect(sent).toHaveLength(0);
+
+    const workbook = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff])], "alfa.xlsx");
+    fireEvent.change(screen.getByLabelText("Файл"), { target: { files: [workbook] } });
+    await screen.findByText("будет записано: 1");
+    expect(sent[0].body).toEqual({ content: "UEsDBP8=", format: "xlsx" });
+    expect(screen.queryByText(/Старый формат Excel/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Excel" }).getAttribute("href")).toBe("/api/v1/imports/template?format=xlsx");
+  });
+
+  it("says when the file is another tracker's export, and why its money rows stay out", async () => {
+    state.intelinvest = true;
+    wrap(<TableImport accountId="acc-1" />);
+    const file = new File(["#CsvFormatVersion:v1\nSTOCKBUY;12.01.2026 11:00:00;GAZP;100;150.5;;;;RUB;;;L1;\n"], "intelinvest.csv");
+    fireEvent.change(await screen.findByLabelText("Файл"), { target: { files: [file] } });
+
+    expect((await screen.findByTestId("import-tracker")).textContent).toContain("выгрузка Intelinvest");
+    expect(sent[0].body).toMatchObject({ format: "text" });
+    expect(screen.getByTestId("import-row-8").textContent).toContain("Деньги по операции из строки 7 — отдельно не загружаются");
   });
 
   it("reads a bank's statement by the sign and shows what each row is filed under", async () => {

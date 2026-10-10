@@ -135,6 +135,8 @@ func Guess(t Table) Mapping {
 			key := typeKey(line.Cells[col])
 			if typ, known := typeWords[key]; known {
 				m.Types[key] = typ
+			} else if typ, known := t.words[key]; known {
+				m.Types[key] = typ
 			}
 		}
 	}

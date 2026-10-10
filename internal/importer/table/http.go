@@ -40,6 +40,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/accounts/{accountId}/imports", view(h.handleList))
 	srv.Mount("DELETE /api/v1/imports/{importId}", edit(h.handleRollBack))
 	srv.Mount("POST /api/v1/imports/papers", edit(h.handleAddPapers))
+	srv.Mount("GET /api/v1/imports/template", view(h.handleTemplate))
 	srv.Mount("GET /api/v1/accounts/{accountId}/journal.csv", view(h.handleExport))
 }
 
@@ -101,7 +102,7 @@ func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req apitypes.ImportTableRequest
-	if httpjson.Decode(w, r, &req) != nil {
+	if httpjson.DecodeLimit(w, r, &req, maxFile) != nil {
 		return
 	}
 	fileName := ""
@@ -109,7 +110,7 @@ func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 		fileName = *req.FileName
 	}
 	imp, preview, err := h.svc.Import(r.Context(), p.SpaceID, p.UserID, accountID, req.Content,
-		mappingFromAPI(req.Mapping), fileName)
+		formatFromAPI(req.Format), mappingFromAPI(req.Mapping), fileName)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -184,7 +185,7 @@ func (h *Handler) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req apitypes.ImportPreviewRequest
-	if httpjson.Decode(w, r, &req) != nil {
+	if httpjson.DecodeLimit(w, r, &req, maxFile) != nil {
 		return
 	}
 	var mapping *Mapping
@@ -192,12 +193,43 @@ func (h *Handler) handlePreview(w http.ResponseWriter, r *http.Request) {
 		m := mappingFromAPI(*req.Mapping)
 		mapping = &m
 	}
-	preview, err := h.svc.Preview(r.Context(), p.SpaceID, accountID, req.Content, mapping)
+	preview, err := h.svc.Preview(r.Context(), p.SpaceID, accountID, req.Content, formatFromAPI(req.Format), mapping)
 	if err != nil {
 		family.WriteError(w, err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, previewToAPI(preview))
+}
+
+// maxFile is the most a preview or an import request may carry: 5000 rows of
+// CSV are well under a megabyte, an Excel workbook in base64 a few.
+const maxFile = 8 << 20
+
+func formatFromAPI(f *apitypes.ImportFileFormat) Format {
+	if f == nil {
+		return FormatText
+	}
+	return Format(*f)
+}
+
+func (h *Handler) handleTemplate(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Query().Get("format") {
+	case "csv":
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="babki-template.csv"`)
+		_, _ = w.Write(TemplateCSV())
+	case "xlsx":
+		body, err := TemplateXLSX()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", `attachment; filename="babki-template.xlsx"`)
+		_, _ = w.Write(body)
+	default:
+		httpjson.Error(w, http.StatusBadRequest, "format is csv or xlsx")
+	}
 }
 
 func mappingFromAPI(in apitypes.ImportMapping) Mapping {
@@ -231,6 +263,10 @@ func previewToAPI(p Preview) apitypes.ImportPreview {
 		Mapping: mappingToAPI(p.Mapping),
 		Header:  p.Header,
 		Rows:    make([]apitypes.ImportRow, 0, len(p.Rows)),
+		Tracker: nullable.NewNullNullable[apitypes.ImportTracker](),
+	}
+	if p.Tracker != "" {
+		out.Tracker = nullable.NewNullableWithValue(apitypes.ImportTracker(p.Tracker))
 	}
 	if out.Header == nil {
 		out.Header = []string{}

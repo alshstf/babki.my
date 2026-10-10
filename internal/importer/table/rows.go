@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -47,6 +48,9 @@ const (
 	ReasonBadNumber     Reason = "bad_number"
 	ReasonTooPrecise    Reason = "too_precise"
 	ReasonTooLarge      Reason = "too_large"
+	// ReasonPaired is a row of money an operation in the file moves itself;
+	// Value is that operation's line.
+	ReasonPaired Reason = "paired"
 	// ReasonEngineRefused is the journal's refusal; Value carries its words.
 	ReasonEngineRefused Reason = "engine_refused"
 )
@@ -92,6 +96,9 @@ func (r *reader) cell(line Line, f Field) string {
 // read turns one row into an operation, or says why it cannot.
 func (r *reader) read(ctx context.Context, line Line) (operation.Operation, error) {
 	op := operation.Operation{AccountID: r.accountID, Source: Source}
+	if line.PairedWith != 0 {
+		return op, unreadable(ReasonPaired, "", strconv.Itoa(line.PairedWith))
+	}
 
 	typ, err := r.rowType(line)
 	if err != nil {
@@ -284,7 +291,7 @@ func (r *reader) amount(line Line, typ operation.Type, op operation.Operation) (
 }
 
 // instrument finds the paper a cell names: by ISIN when the cell is one, by
-// ticker otherwise. Nil, nil for an empty cell. Each cell is looked up once.
+// ticker otherwise or when no ISIN fits. Nil, nil for an empty cell. Each cell is looked up once.
 func (r *reader) instrument(ctx context.Context, cell string) (*instrument.Instrument, error) {
 	cell = strings.TrimSpace(cell)
 	if cell == "" {
@@ -300,10 +307,14 @@ func (r *reader) instrument(ctx context.Context, cell string) (*instrument.Instr
 		found instrument.Instrument
 		err   error
 	)
-	if code := strings.ToUpper(cell); isinPattern.MatchString(code) {
+	code := strings.ToUpper(cell)
+	if isinPattern.MatchString(code) {
 		found, err = r.papers.ByISIN(ctx, code)
-	} else {
-		found, err = r.papers.ByTickerTradable(ctx, strings.ToUpper(cell))
+	}
+	// A code shaped as an ISIN may still be the exchange's: an OFZ trades
+	// as SU26238RMFS4, its ISIN being RU000A1038V6.
+	if !isinPattern.MatchString(code) || errors.Is(err, pgx.ErrNoRows) {
+		found, err = r.papers.ByTickerTradable(ctx, code)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		r.known[cell] = nil

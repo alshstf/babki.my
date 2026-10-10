@@ -24,7 +24,13 @@ func Error(w http.ResponseWriter, status int, msg string) {
 // Decode reads the request body into dst (max 1MB, unknown fields rejected).
 // On failure it writes a 400 response and returns the error.
 func Decode(w http.ResponseWriter, r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	return DecodeLimit(w, r, dst, 1<<20)
+}
+
+// DecodeLimit is Decode with a limit of its own, for a body that carries a
+// file.
+func DecodeLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {

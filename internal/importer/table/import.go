@@ -16,8 +16,8 @@ import (
 // imported are skipped; the rest of the verdicts are the journal's at the
 // moment of writing, which may differ from a preview made earlier. A load that
 // writes nothing is not recorded: the Import comes back with no id.
-func (s *Service) Import(ctx context.Context, spaceID, userID, accountID uuid.UUID, content string, mapping Mapping, fileName string) (Import, Preview, error) {
-	p, err := s.Preview(ctx, spaceID, accountID, content, &mapping)
+func (s *Service) Import(ctx context.Context, spaceID, userID, accountID uuid.UUID, content string, format Format, mapping Mapping, fileName string) (Import, Preview, error) {
+	p, err := s.Preview(ctx, spaceID, accountID, content, format, &mapping)
 	if err != nil {
 		return Import{}, Preview{}, err
 	}
