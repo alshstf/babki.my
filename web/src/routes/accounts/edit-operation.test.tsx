@@ -17,6 +17,9 @@ const fetchMock = vi.hoisted(() => {
   return fn;
 });
 fetchMock.mockImplementation(async (input: Request) => {
+  if (input.method === "GET" && new URL(input.url).pathname.endsWith("/categories")) {
+    return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   if (input.method === "GET") {
     // The instrument picker's catalog: nothing to list.
     return new Response(JSON.stringify({ instruments: [], has_more: false }), {
