@@ -20,3 +20,19 @@ export function usePayouts(months: number, accountId?: string, instrumentId?: st
     },
   });
 }
+
+export type PayoutCheck = components["schemas"]["PayoutCheck"];
+
+// Whether the payouts due lately came (GET /api/v1/payouts/received).
+export function usePayoutsReceived(days: number, accountId?: string) {
+  return useQuery({
+    queryKey: ["payouts-received", days, accountId ?? null],
+    queryFn: async (): Promise<PayoutCheck[]> => {
+      const { data, error, response } = await api.GET("/api/v1/payouts/received", {
+        params: { query: { days, account_id: accountId } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}

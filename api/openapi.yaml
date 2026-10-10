@@ -181,6 +181,29 @@ paths:
               schema: { $ref: "#/components/schemas/PayoutsForecast" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/payouts/received:
+    get:
+      tags: [payouts]
+      operationId: getPayoutsReceived
+      description: >-
+        Whether the payouts due in the last `days` came (#424): each coupon, partial repayment, redemption
+        and declared dividend of a paper an account held at the end of the day before its record day (the
+        day before the payment, when the source gives none), against the journal's rows of its kind for
+        that paper from 5 days before its day to 10 days after (45 for a dividend), each row counted once.
+        `received`; `short` — it came, but less than two thirds of the gross due, more than tax would take;
+        `missing` — nothing, and the window has passed; `awaited` — nothing yet. Most recent first.
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 366 }, description: "How far back; 90 when absent" }
+        - { name: account_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: instrument_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The payouts due and what came
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PayoutCheck" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/credit-card:
     get:
       tags: [credit-cards]
@@ -2813,6 +2836,23 @@ components:
         amount_minor: { type: integer, format: int64, nullable: true, description: "per_unit × quantity in minor units of `currency`, before tax" }
         currency: { type: string }
         in_base_minor: { type: integer, format: int64, nullable: true, description: "amount_minor in the base currency at today's rate; null without an amount or a rate" }
+    PayoutCheck:
+      type: object
+      required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, status, got_minor, got_currency, got_on]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD the money was due" }
+        record_on: { type: string, description: "The record day held against" }
+        kind: { type: string, enum: [coupon, amortization, redemption, dividend] }
+        instrument_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        quantity: { type: string, description: "Decimal as string: what the account held the day before the record day" }
+        per_unit: { type: string, nullable: true }
+        amount_minor: { type: integer, format: int64, nullable: true, description: "What was due, gross, in currency; null for a floating coupon the source has no value for" }
+        currency: { type: string }
+        status: { type: string, enum: [received, short, missing, awaited] }
+        got_minor: { type: integer, format: int64, description: "What the journal's rows come to, in got_currency; 0 when none" }
+        got_currency: { type: string, nullable: true }
+        got_on: { type: string, nullable: true, description: "The first row's day" }
     PayoutsForecast:
       type: object
       required: [base_currency, from, to, months, by_month, total_minor, payouts, missing_rates]

@@ -108,6 +108,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/payouts/received": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Whether the payouts due in the last `days` came (#424): each coupon, partial repayment, redemption and declared dividend of a paper an account held at the end of the day before its record day (the day before the payment, when the source gives none), against the journal's rows of its kind for that paper from 5 days before its day to 10 days after (45 for a dividend), each row counted once. `received`; `short` — it came, but less than two thirds of the gross due, more than tax would take; `missing` — nothing, and the window has passed; `awaited` — nothing yet. Most recent first. */
+        get: operations["getPayoutsReceived"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/credit-card": {
         parameters: {
             query?: never;
@@ -2023,6 +2040,37 @@ export interface components {
              */
             in_base_minor: number | null;
         };
+        PayoutCheck: {
+            /** @description Date YYYY-MM-DD the money was due */
+            on: string;
+            /** @description The record day held against */
+            record_on: string;
+            /** @enum {string} */
+            kind: "coupon" | "amortization" | "redemption" | "dividend";
+            /** Format: uuid */
+            instrument_id: string;
+            /** Format: uuid */
+            account_id: string;
+            /** @description Decimal as string: what the account held the day before the record day */
+            quantity: string;
+            per_unit: string | null;
+            /**
+             * Format: int64
+             * @description What was due, gross, in currency; null for a floating coupon the source has no value for
+             */
+            amount_minor: number | null;
+            currency: string;
+            /** @enum {string} */
+            status: "received" | "short" | "missing" | "awaited";
+            /**
+             * Format: int64
+             * @description What the journal's rows come to, in got_currency; 0 when none
+             */
+            got_minor: number;
+            got_currency: string | null;
+            /** @description The first row's day */
+            got_on: string | null;
+        };
         PayoutsForecast: {
             base_currency: string;
             /** @description Date YYYY-MM-DD, today */
@@ -3916,6 +3964,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PayoutsForecast"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getPayoutsReceived: {
+        parameters: {
+            query?: {
+                /** @description How far back; 90 when absent */
+                days?: number;
+                account_id?: string;
+                instrument_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The payouts due and what came */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayoutCheck"][];
                 };
             };
             400: components["responses"]["Error"];

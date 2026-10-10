@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { usePayouts, type Payout } from "@/api/payouts";
+import { PayoutsReceived } from "./received";
 import { useAccounts } from "@/api/accounts";
 import { useInstrumentIndex } from "@/api/instruments";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
@@ -210,6 +211,11 @@ export function PayoutsPage() {
           )}
         </>
       )}
+      <PayoutsReceived
+        accountId={accountId === EVERY ? undefined : accountId}
+        paperName={paperName}
+        accountName={accountName}
+      />
     </div>
   );
 }
