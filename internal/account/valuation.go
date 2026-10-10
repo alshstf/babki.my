@@ -90,10 +90,11 @@ type valuation struct {
 	everyday bool
 }
 
-// countedByJournal is whether the total counts a's journal rather than its
+// CountedByJournal is whether the total counts a's journal rather than its
 // balance: a broker's account unless pinned to its balance, an everyday one
-// only when the family keeps it by its operations.
-func countedByJournal(a Account) bool {
+// only when the family keeps it by its operations. An account with no
+// operations is counted by its balance whatever this says.
+func CountedByJournal(a Account) bool {
 	if a.Type == TypeBrokerage {
 		return !a.ValuedByBalance
 	}
@@ -123,7 +124,7 @@ func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []
 			return nil, err
 		}
 		out[a.ID] = valuation{
-			journal: &v, byJournal: countedByJournal(a.Account), reconciliation: rec,
+			journal: &v, byJournal: CountedByJournal(a.Account), reconciliation: rec,
 			everyday: a.Type != TypeBrokerage,
 		}
 	}

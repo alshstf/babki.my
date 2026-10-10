@@ -14,9 +14,31 @@ tags:
   - { name: service, description: "The whole space's export and the state of background data sources." }
   - { name: categories, description: "A family's categories of money going out and coming in (internal/category)." }
   - { name: cashflow, description: "The family's money over a period: income and spending by category and month (internal/cashflow)." }
+  - { name: structure, description: "The family's worth taken apart by kind of asset, currency, account and country (internal/structure)." }
   - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
   - { name: recurring, description: "The family's regular payments found in the journal (internal/recurring)." }
 paths:
+  /api/v1/structure:
+    get:
+      tags: [structure]
+      operationId: getStructure
+      description: >-
+        The family total of GET /summary taken apart, in the base currency at today's rates: by kind
+        of asset, by currency, by account and by the country a paper was issued in (its ISIN's
+        prefix; a depositary receipt is the depositary's country). Each account is counted the way
+        the total counts it — by its journal (papers at the chosen valuation and the money its
+        operations leave) or by its last balance, which is then one piece of its account's kind.
+        Each breakdown adds up to `assets_minor`; anything below zero is a debt, in `debts_minor`.
+      parameters:
+        - { name: valuation, in: query, required: false, schema: { type: string, enum: [liquid, full] }, description: "Papers at the liquid (when absent) or the full valuation (decision Р-11)" }
+      responses:
+        "200":
+          description: The structure
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Structure" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/payouts:
     get:
       tags: [payouts]
@@ -2493,6 +2515,26 @@ components:
         next_on: { type: string, description: "Date YYYY-MM-DD the next one is due" }
         count: { type: integer, description: "How many payments the pattern rests on" }
         overdue: { type: boolean, description: "Its day has passed without it — late, or not entered yet" }
+    StructureSlice:
+      type: object
+      required: [key, minor]
+      properties:
+        key: { type: string, description: "The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN" }
+        minor: { type: integer, format: int64, description: "In minor units of the base currency" }
+    Structure:
+      type: object
+      required: [base_currency, valuation, assets_minor, debts_minor, by_class, by_currency, by_account, by_country, unpriced, missing_rates]
+      properties:
+        base_currency: { type: string }
+        valuation: { type: string, enum: [liquid, full] }
+        assets_minor: { type: integer, format: int64 }
+        debts_minor: { type: integer, format: int64, description: "Negative or zero" }
+        by_class: { type: array, items: { $ref: "#/components/schemas/StructureSlice" }, description: "Largest first" }
+        by_currency: { type: array, items: { $ref: "#/components/schemas/StructureSlice" } }
+        by_account: { type: array, items: { $ref: "#/components/schemas/StructureSlice" } }
+        by_country: { type: array, items: { $ref: "#/components/schemas/StructureSlice" } }
+        unpriced: { type: integer, description: "Papers left out for want of a price" }
+        missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
     CashflowFlow:
       type: object
       required: [total_minor, by_month]

@@ -42,6 +42,7 @@ import (
 	"babki.my/babki/internal/platform/version"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/recurring"
+	"babki.my/babki/internal/structure"
 	"babki.my/babki/web"
 )
 
@@ -112,6 +113,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		srv.Mount("GET /metrics", metrics.Handler())
 	}
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
+	structure.NewHandler(structure.NewService(accStore, positions, famStore, converter), famAuth, famSM).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurring.NewHandler(recurring.NewService(opStore, accStore), famAuth, famSM).Mount(srv)

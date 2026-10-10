@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/structure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family total of GET /summary taken apart, in the base currency at today's rates: by kind of asset, by currency, by account and by the country a paper was issued in (its ISIN's prefix; a depositary receipt is the depositary's country). Each account is counted the way the total counts it — by its journal (papers at the chosen valuation and the money its operations leave) or by its last balance, which is then one piece of its account's kind. Each breakdown adds up to `assets_minor`; anything below zero is a debt, in `debts_minor`. */
+        get: operations["getStructure"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/payouts": {
         parameters: {
             query?: never;
@@ -1837,6 +1854,36 @@ export interface components {
             /** @description Its day has passed without it — late, or not entered yet */
             overdue: boolean;
         };
+        StructureSlice: {
+            /** @description The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN */
+            key: string;
+            /**
+             * Format: int64
+             * @description In minor units of the base currency
+             */
+            minor: number;
+        };
+        Structure: {
+            base_currency: string;
+            /** @enum {string} */
+            valuation: "liquid" | "full";
+            /** Format: int64 */
+            assets_minor: number;
+            /**
+             * Format: int64
+             * @description Negative or zero
+             */
+            debts_minor: number;
+            /** @description Largest first */
+            by_class: components["schemas"]["StructureSlice"][];
+            by_currency: components["schemas"]["StructureSlice"][];
+            by_account: components["schemas"]["StructureSlice"][];
+            by_country: components["schemas"]["StructureSlice"][];
+            /** @description Papers left out for want of a price */
+            unpriced: number;
+            /** @description Currencies left out for want of today's rate */
+            missing_rates: string[];
+        };
         CashflowFlow: {
             /**
              * Format: int64
@@ -3140,6 +3187,31 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getStructure: {
+        parameters: {
+            query?: {
+                /** @description Papers at the liquid (when absent) or the full valuation (decision Р-11) */
+                valuation?: "liquid" | "full";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The structure */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Structure"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
     getPayouts: {
         parameters: {
             query?: {

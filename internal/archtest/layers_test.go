@@ -29,6 +29,7 @@ var layers = map[string]int{
 	"internal/importer/":       4,
 	"internal/export":          4,
 	"internal/cashflow":        4,
+	"internal/structure":       4,
 	"internal/payouts":         4,
 	"internal/recurring":       4,
 	"cmd/":                     5,
