@@ -421,7 +421,11 @@ func cashbackAPI(c Cashback) apitypes.CreditCardCashback {
 
 // feesFromAPI reads the tariff's fees; an empty percent is none.
 func feesFromAPI(in apitypes.CreditCardFees) (Fees, error) {
-	f := Fees{Monthly: in.MonthlyMinor, CashFree: in.CashFreeMinor, CashFixed: in.CashFixedMinor, TransferFixed: in.TransferFixedMinor}
+	f := Fees{
+		Monthly: in.MonthlyMinor, Yearly: in.YearlyMinor, CashFree: in.CashFreeMinor, CashFixed: in.CashFixedMinor,
+		TransferFree: in.TransferFreeMinor, TransferFixed: in.TransferFixedMinor, IntroDays: in.IntroDays,
+		IntroFree: in.IntroFreeMinor, PenaltyFromDay: in.PenaltyFromDay,
+	}
 	for _, p := range []struct {
 		name string
 		in   string
@@ -430,6 +434,7 @@ func feesFromAPI(in apitypes.CreditCardFees) (Fees, error) {
 		{"cash_percent", in.CashPercent, &f.CashPercent},
 		{"transfer_percent", in.TransferPercent, &f.TransferPercent},
 		{"penalty_daily_percent", in.PenaltyDailyPercent, &f.PenaltyDaily},
+		{"penalty_yearly_percent", in.PenaltyYearlyPercent, &f.PenaltyYearly},
 	} {
 		if p.in == "" {
 			continue
@@ -464,9 +469,12 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		MissedMinimumPeriod: t.MissedMinimumPeriod,
 		TransferCategories:  t.TransferCategories,
 		Fees: apitypes.CreditCardFees{
-			MonthlyMinor: t.Fees.Monthly, CashFreeMinor: t.Fees.CashFree, CashPercent: t.Fees.CashPercent.String(),
-			CashFixedMinor: t.Fees.CashFixed, TransferPercent: t.Fees.TransferPercent.String(),
-			TransferFixedMinor: t.Fees.TransferFixed, PenaltyDailyPercent: t.Fees.PenaltyDaily.String(),
+			MonthlyMinor: t.Fees.Monthly, YearlyMinor: t.Fees.Yearly, CashFreeMinor: t.Fees.CashFree,
+			CashPercent: t.Fees.CashPercent.String(), CashFixedMinor: t.Fees.CashFixed,
+			TransferFreeMinor: t.Fees.TransferFree, TransferPercent: t.Fees.TransferPercent.String(),
+			TransferFixedMinor: t.Fees.TransferFixed, IntroDays: t.Fees.IntroDays, IntroFreeMinor: t.Fees.IntroFree,
+			PenaltyDailyPercent: t.Fees.PenaltyDaily.String(), PenaltyYearlyPercent: t.Fees.PenaltyYearly.String(),
+			PenaltyFromDay: t.Fees.PenaltyFromDay,
 		},
 		Cashback:    cashbackAPI(t.Cashback),
 		Installment: planAPI(t.Installment),
@@ -517,7 +525,9 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		MinimumEstimate: st.MinimumEstimate, NonGraceMinor: st.NonGrace, NonGraceInterestMinor: st.NonGraceInterest,
 		Grace: make([]apitypes.CreditCardDue, 0, len(st.Grace)), Lost: make([]apitypes.CreditCardLost, 0, len(st.Lost)),
 		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
-		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty, MinimumOverdueMinor: st.MinimumOverdue,
+		CashThisPeriodMinor: st.CashThisPeriod, TransfersThisPeriodMinor: st.TransfersThisPeriod,
+		IntroLeftMinor: st.IntroLeft, IntroUntil: nullable.NewNullNullable[string](), YearlyFeeOn: nullable.NewNullNullable[string](),
+		PenaltyMinor: st.Penalty, MinimumOverdueMinor: st.MinimumOverdue,
 		InstallmentsDueMinor: st.InstallmentsDue, Installments: make([]apitypes.CreditCardInstallment, 0, len(st.Installments)),
 		Bank:                  bankAPI(st.Bank),
 		CashbackExpectedMinor: st.CashbackExpected, CashbackOn: nullable.NewNullNullable[string](),
@@ -533,6 +543,12 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 	}
 	if !st.GraceOffSince.IsZero() {
 		out.GraceOffSince = nullable.NewNullableWithValue(date(st.GraceOffSince))
+	}
+	if !st.IntroUntil.IsZero() {
+		out.IntroUntil = nullable.NewNullableWithValue(date(st.IntroUntil))
+	}
+	if !st.YearlyFeeOn.IsZero() {
+		out.YearlyFeeOn = nullable.NewNullableWithValue(date(st.YearlyFeeOn))
 	}
 	for _, g := range st.Grace {
 		out.Grace = append(out.Grace, apitypes.CreditCardDue{On: date(g.On), AmountMinor: g.Amount})

@@ -3281,18 +3281,24 @@ components:
         percent: { type: string, description: "Decimal, 0 to 99.999" }
     CreditCardFees:
       type: object
-      required: [monthly_minor, cash_free_minor, cash_percent, cash_fixed_minor, transfer_percent, transfer_fixed_minor, penalty_daily_percent]
+      required: [monthly_minor, yearly_minor, cash_free_minor, cash_percent, cash_fixed_minor, transfer_free_minor, transfer_percent, transfer_fixed_minor, intro_days, intro_free_minor, penalty_daily_percent, penalty_yearly_percent, penalty_from_day]
       description: >-
         What the tariff charges besides interest, told before it is charged (decision Р-30); the
         journal gets the bank's charges as they happen. All zero when the tariff has none.
       properties:
         monthly_minor: { type: integer, format: int64, minimum: 0, description: "The monthly fee, charged at a period's end; 0 when there is none or it is waived" }
+        yearly_minor: { type: integer, format: int64, minimum: 0, description: "The fee a year, charged with the statement after the card's first spending and every twelfth one after it (Т-Банк); 0 for none" }
         cash_free_minor: { type: integer, format: int64, minimum: 0, description: "Cash a statement period takes out without a fee" }
         cash_percent: { type: string, description: "The fee for cash past the free part: percent of it (decimal, 0 to 99.999)" }
         cash_fixed_minor: { type: integer, format: int64, minimum: 0, description: "…and a fixed part for each withdrawal past it" }
-        transfer_percent: { type: string, description: "The fee for money moved off the card, percent of it (decimal)" }
+        transfer_free_minor: { type: integer, format: int64, minimum: 0, description: "Money a statement period moves off the card without a fee (Т-Банк: 80 000 ₽)" }
+        transfer_percent: { type: string, description: "The fee for money moved off the card past the free part, percent of it (decimal)" }
         transfer_fixed_minor: { type: integer, format: int64, minimum: 0 }
+        intro_days: { type: integer, minimum: 0, maximum: 366, description: "For so many days from the contract's day (opened_on, then required) cash and transfers are free up to intro_free_minor in all (ВТБ: 30 days); 0 for none" }
+        intro_free_minor: { type: integer, format: int64, minimum: 0, description: "…the amount; set both or neither" }
         penalty_daily_percent: { type: string, description: "The penalty for a payment missed: percent of it a day (decimal, 0 to 9.9999)" }
+        penalty_yearly_percent: { type: string, description: "…or percent of it a year (decimal, 0 to 999.9999; Т-Банк: 20); not both" }
+        penalty_from_day: { type: integer, minimum: 0, maximum: 90, description: "The day of lateness the penalty runs from («Халва»: 6); 0 or 1 for the first" }
     CreditCardDue:
       type: object
       required: [on, amount_minor]
@@ -3311,7 +3317,7 @@ components:
         early: { type: boolean, description: "The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)" }
     CreditCardStatus:
       type: object
-      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, minimum_overdue_minor, installments, installments_due_minor, bank, cashback_expected_minor, cashback_on]
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, transfers_this_period_minor, intro_left_minor, intro_until, yearly_fee_on, penalty_minor, minimum_overdue_minor, installments, installments_due_minor, bank, cashback_expected_minor, cashback_on]
       properties:
         debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
         available_minor: { type: integer, format: int64, description: "What is left of the limit" }
@@ -3329,7 +3335,11 @@ components:
         grace_off_by_minimum: { type: boolean }
         to_restore_minor: { type: integer, format: int64, description: "While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise" }
         cash_this_period_minor: { type: integer, format: int64, description: "Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor" }
-        penalty_minor: { type: integer, format: int64, description: "Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed" }
+        transfers_this_period_minor: { type: integer, format: int64, description: "Money moved off the card otherwise since the last statement, against fees.transfer_free_minor" }
+        intro_left_minor: { type: integer, format: int64, description: "What is left of the first days' free cash and transfers (fees.intro_free_minor); 0 once they are over" }
+        intro_until: { type: string, nullable: true, description: "The first days' last day, while they last; null otherwise" }
+        yearly_fee_on: { type: string, nullable: true, description: "The next statement the yearly fee comes with (fees.yearly_minor); null with none or before the first spending" }
+        penalty_minor: { type: integer, format: int64, description: "Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent or penalty_yearly_percent from penalty_from_day; 0 when none is missed" }
         minimum_overdue_minor: { type: integer, format: int64, description: "The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once" }
         installments: { type: array, items: { $ref: "#/components/schemas/CreditCardInstallment" }, description: "The purchases in installments still being shown, oldest first" }
         installments_due_minor: { type: integer, format: int64, description: "The installments' parts shown and not yet paid; in minimum_minor" }

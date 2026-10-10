@@ -38,8 +38,9 @@ const account: AccountWithBalance = {
 };
 
 const noFees = {
-  monthly_minor: 0, cash_free_minor: 0, cash_percent: "0", cash_fixed_minor: 0,
-  transfer_percent: "0", transfer_fixed_minor: 0, penalty_daily_percent: "0",
+  monthly_minor: 0, yearly_minor: 0, cash_free_minor: 0, cash_percent: "0", cash_fixed_minor: 0,
+  transfer_free_minor: 0, transfer_percent: "0", transfer_fixed_minor: 0, intro_days: 0, intro_free_minor: 0,
+  penalty_daily_percent: "0", penalty_yearly_percent: "0", penalty_from_day: 0,
 };
 
 const noInstallment = { months: 0, monthly_fee_percent: "0", fee_minor: 0 };
@@ -70,6 +71,7 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
   grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0,
+  transfers_this_period_minor: 0, intro_left_minor: 0, intro_until: null, yearly_fee_on: null,
   cashback_expected_minor: 0, cashback_on: null, minimum_overdue_minor: 0,
   installments: [], installments_due_minor: 0, bank: null, ...over,
 });
@@ -176,6 +178,40 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({ annual_rate: "59.99", catalog: { revision: "2026-09-10" } });
+  });
+
+  // Fees as Т-Банк and ВТБ state them (#462): the yearly fee's statement, the
+  // free transfers of the month, the first days' free part.
+  it("tells the yearly fee, the free transfers and the first days", async () => {
+    const c = card({ transfers_this_period_minor: 30_000_00, yearly_fee_on: "2027-03-10", intro_left_minor: 20_000_00, intro_until: "2026-09-30" });
+    c.terms.fees = { ...noFees, yearly_minor: 590_00, transfer_free_minor: 80_000_00, transfer_percent: "4.9", transfer_fixed_minor: 490_00,
+      intro_days: 30, intro_free_minor: 50_000_00, penalty_yearly_percent: "20", penalty_from_day: 6 };
+    answer({ "/credit-card": c });
+    show(<CreditCardPanel account={account} canEdit={false} />);
+    const norm = (s: string | null) => (s ?? "").replace(/\s/g, " ");
+    expect(norm((await screen.findByTestId("card-yearly-fee")).textContent)).toBe("Обслуживание 590,00 ₽ за год банк спишет с выпиской 10.03.2027.");
+    expect(norm(screen.getByTestId("card-transfers").textContent)).toBe("Переводами в этом месяце: 30 000,00 ₽ из бесплатных 80 000,00 ₽.");
+    expect(norm(screen.getByTestId("card-intro").textContent)).toBe("До 30.09.2026 снятие и переводы без комиссии — ещё на 20 000,00 ₽.");
+    const line = norm(screen.getByTestId("card-panel").textContent);
+    expect(line).toContain("обслуживание 590,00 ₽ в год");
+    expect(line).toContain("переводы сверх 80 000,00 ₽ в месяц — 4,9 % + 490,00 ₽");
+    expect(line).toContain("неустойка 20 % годовых с 6-го дня просрочки");
+  });
+
+  it("states the penalty a year and from its day", async () => {
+    answer({ "/credit-card": card() });
+    Element.prototype.scrollIntoView ??= () => {};
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Изменить условия" }));
+    fireEvent.keyDown(await screen.findByRole("combobox", { name: "Неустойка считается" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "в % годовых" }));
+    fireEvent.change(screen.getByLabelText("Неустойка за просрочку, % годовых"), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText("Неустойка — с какого дня просрочки"), { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText(/Обслуживание в год/), { target: { value: "590" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect((await put.json()).fees).toMatchObject({ penalty_daily_percent: "0", penalty_yearly_percent: "20", penalty_from_day: 6, yearly_minor: 590_00 });
   });
 
   it("names the categories the bank takes for transfers", async () => {

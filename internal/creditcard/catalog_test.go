@@ -39,7 +39,8 @@ func TestTheCatalogHolds(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", p.ID, err)
 			}
-			if terms.GraceKind == Windows {
+			// The contract's day is the person's, for windows and first days.
+			if terms.GraceKind == Windows || terms.Fees.IntroDays > 0 {
 				opened := d("2026-07-10")
 				terms.OpenedOn = &opened
 			}

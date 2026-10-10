@@ -7,15 +7,16 @@ versions:
   - contracts_from: null
     contracts_to: null
     revision: 2026-09-30
-    checked_on: 2026-10-10
+    checked_on: 2026-10-11
     sources:
       - https://cdn.tbank.ru/static/documents/credit_cards-tariffs-platinum.pdf
       - https://www.tbank.ru/cards/credit-cards/platinum/tariffs/
     notes: >-
       Ставка (29,9–61,9 %) и минимальный платёж (до 14 % долга) — у каждого свои: банк пишет их в
       выписке, их удобно вносить в «Что пишет банк». День выписки и дата платежа — тоже в выписке.
-      Обслуживание 290–590 ₽ в год, переводы через сервисы банка до 80 000 ₽ за период бесплатно —
-      программа пока этого не учитывает (#462). Неустойка — 20 % годовых.
+      Обслуживание — от 290 до 590 ₽ в год, у каждого своё: укажите своё в «Обслуживание в год», банк
+      спишет его с выпиской после первой траты. Переводы до 80 000 ₽ за период бесплатны только через
+      сервисы Т-Банка и «в случаях, предусмотренных тарифом» — проверьте свой.
     terms:
       grace_kind: statement
       payment_days: 25
@@ -25,6 +26,8 @@ versions:
       fees:
         cash_percent: "4.9"
         cash_fixed_minor: 49000
+        transfer_free_minor: 8000000
         transfer_percent: "4.9"
         transfer_fixed_minor: 49000
-        penalty_daily_percent: "0.0548"
+        penalty_daily_percent: "0"
+        penalty_yearly_percent: "20"

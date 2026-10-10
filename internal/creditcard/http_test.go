@@ -119,6 +119,26 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		t.Errorf("fees = %+v", f)
 	}
 
+	// Fees as Т-Банк, ВТБ and «Халва» state them (#462), read back as
+	// stated; then the windows again for what follows.
+	more := `{"limit_minor":30000000,"statement_day":1,"payment_days":25,"grace_kind":"statement","grace_days":0,
+		"opened_on":"2026-07-10","min_percent":"3","min_floor_minor":60000,"annual_rate":"29.9","own_rate":null,
+		"fees":{"monthly_minor":0,"yearly_minor":59000,"cash_free_minor":0,"cash_percent":"4.9","cash_fixed_minor":49000,
+			"transfer_free_minor":8000000,"transfer_percent":"4.9","transfer_fixed_minor":49000,"intro_days":30,
+			"intro_free_minor":5000000,"penalty_daily_percent":"0","penalty_yearly_percent":"20","penalty_from_day":6}}`
+	resp = apitest.Do(t, c, "PUT", path, more)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("more fees = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if f := got.Terms.Fees; f.YearlyMinor != 59_000 || f.TransferFreeMinor != 8_000_000 || f.IntroDays != 30 ||
+		f.IntroFreeMinor != 5_000_000 || f.PenaltyYearlyPercent != "20" || f.PenaltyFromDay != 6 {
+		t.Errorf("more fees = %+v", f)
+	}
+	if r := apitest.Do(t, c, "PUT", path, fmt.Sprintf(windows, `"2026-07-10"`)); r.StatusCode != http.StatusOK {
+		t.Fatalf("windows again = %d", r.StatusCode)
+	}
+
 	// Cash taken out today — money moved to a cash account — counts against
 	// the free part of the period.
 	cash := mk("Наличные", "cash")

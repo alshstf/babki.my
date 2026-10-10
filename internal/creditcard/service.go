@@ -165,7 +165,8 @@ const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, 
 	cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor, penalty_daily_percent,
 	cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points, cashback_credit_days,
 	grace_run_from, pay_day, min_round_up_minor, installment_months, installment_fee_percent, installment_fee_minor,
-	missed_minimum_period, catalog_product, catalog_contracts_from, catalog_revision`
+	missed_minimum_period, catalog_product, catalog_contracts_from, catalog_revision, yearly_fee_minor,
+	transfer_free_minor, intro_free_days, intro_free_minor, penalty_yearly_percent, penalty_from_day`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
@@ -177,7 +178,8 @@ func scan(row pgx.Row) (Terms, error) {
 		&t.Fees.CashPercent, &t.Fees.CashFixed, &t.Fees.TransferPercent, &t.Fees.TransferFixed, &t.Fees.PenaltyDaily,
 		&t.Cashback.BasePercent, &t.Cashback.Categories, &t.Cashback.MonthlyCap, &t.Cashback.Points, &t.Cashback.CreditDays,
 		&t.RunFrom, &t.PayDay, &t.MinRoundUp, &t.Installment.Months, &t.Installment.MonthlyFeePercent, &t.Installment.Fee,
-		&t.MissedMinimumPeriod, &catalogProduct, &catalogFrom, &catalogRevision)
+		&t.MissedMinimumPeriod, &catalogProduct, &catalogFrom, &catalogRevision, &t.Fees.Yearly,
+		&t.Fees.TransferFree, &t.Fees.IntroDays, &t.Fees.IntroFree, &t.Fees.PenaltyYearly, &t.Fees.PenaltyFromDay)
 	if catalogProduct != nil && catalogRevision != nil {
 		t.Catalog = &CatalogRef{Product: *catalogProduct, ContractsFrom: catalogFrom, Revision: *catalogRevision}
 	}
@@ -246,9 +248,11 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			penalty_daily_percent, cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points,
 			cashback_credit_days, grace_run_from, pay_day, min_round_up_minor, installment_months,
 			installment_fee_percent, installment_fee_minor, missed_minimum_period, catalog_product,
-			catalog_contracts_from, catalog_revision)
+			catalog_contracts_from, catalog_revision, yearly_fee_minor, transfer_free_minor, intro_free_days,
+			intro_free_minor, penalty_yearly_percent, penalty_from_day)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
+			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42,
+			$43, $44, $45, $46)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
@@ -270,6 +274,9 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			installment_fee_minor = EXCLUDED.installment_fee_minor,
 			missed_minimum_period = EXCLUDED.missed_minimum_period, catalog_product = EXCLUDED.catalog_product,
 			catalog_contracts_from = EXCLUDED.catalog_contracts_from, catalog_revision = EXCLUDED.catalog_revision,
+			yearly_fee_minor = EXCLUDED.yearly_fee_minor, transfer_free_minor = EXCLUDED.transfer_free_minor,
+			intro_free_days = EXCLUDED.intro_free_days, intro_free_minor = EXCLUDED.intro_free_minor,
+			penalty_yearly_percent = EXCLUDED.penalty_yearly_percent, penalty_from_day = EXCLUDED.penalty_from_day,
 			updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
 		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
@@ -277,7 +284,8 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 		t.Fees.CashPercent, t.Fees.CashFixed, t.Fees.TransferPercent, t.Fees.TransferFixed, t.Fees.PenaltyDaily,
 		t.Cashback.BasePercent, t.Cashback.Categories, t.Cashback.MonthlyCap, t.Cashback.Points, t.Cashback.CreditDays,
 		t.RunFrom, t.PayDay, t.MinRoundUp, t.Installment.Months, t.Installment.MonthlyFeePercent, t.Installment.Fee,
-		t.MissedMinimumPeriod, catalogProduct, catalogFrom, catalogRevision)
+		t.MissedMinimumPeriod, catalogProduct, catalogFrom, catalogRevision, t.Fees.Yearly,
+		t.Fees.TransferFree, t.Fees.IntroDays, t.Fees.IntroFree, t.Fees.PenaltyYearly, t.Fees.PenaltyFromDay)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}

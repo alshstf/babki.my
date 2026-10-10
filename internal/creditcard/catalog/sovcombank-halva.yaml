@@ -7,7 +7,7 @@ versions:
   - contracts_from: null
     contracts_to: null
     revision: 2026-01-01
-    checked_on: 2026-10-10
+    checked_on: 2026-10-11
     sources:
       - https://prod-api.sovcombank.ru/documents/2772
       - https://halvacard.ru/
@@ -15,7 +15,7 @@ versions:
       Карта рассрочки: покупка у партнёров делится на части на срок партнёра — отметьте её
       «Оформить рассрочку» со своим сроком; покупки вне партнёров из лимита — рассрочка на 3 месяца
       с подпиской «Халва.Десятка» (2 без неё) и 99 ₽ за покупку (9 ₽ до 100 ₽). Снятие и переводы из
-      лимита — 499 ₽ за операцию. Неустойка 0,1 % в день — с 6-го дня просрочки. Срок платежа — в
+      лимита — 499 ₽ за операцию. Срок платежа — в
       приложении банка: удобно вносить его в «Что пишет банк».
     terms:
       grace_kind: statement
@@ -33,3 +33,4 @@ versions:
         transfer_percent: "0"
         transfer_fixed_minor: 49900
         penalty_daily_percent: "0.1"
+        penalty_from_day: 6

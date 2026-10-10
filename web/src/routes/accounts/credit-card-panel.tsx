@@ -176,6 +176,24 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
           })}
         </p>
       )}
+      {data.terms.fees.transfer_free_minor > 0 && (
+        <p className="text-sm text-muted-foreground" data-testid="card-transfers">
+          {t("card.transfersThisPeriod", {
+            taken: formatMinor(st.transfers_this_period_minor, c),
+            free: formatMinor(data.terms.fees.transfer_free_minor, c),
+          })}
+        </p>
+      )}
+      {st.intro_until && (
+        <p className="text-sm text-muted-foreground" data-testid="card-intro">
+          {t("card.introLeft", { amount: formatMinor(st.intro_left_minor, c), date: formatDate(st.intro_until) })}
+        </p>
+      )}
+      {st.yearly_fee_on && (
+        <p className="text-sm text-muted-foreground" data-testid="card-yearly-fee">
+          {t("card.yearlyFeeOn", { amount: formatMinor(data.terms.fees.yearly_minor, c), date: formatDate(st.yearly_fee_on) })}
+        </p>
+      )}
 
       {data.catalog_update && canEdit && <CatalogUpdate account={account} card={data} />}
 
@@ -233,7 +251,13 @@ const FIELD_LABEL: Record<string, string> = {
   "fees.transfer_percent": "transferPercent",
   "fees.transfer_fixed_minor": "transferFixed",
   "fees.penalty_daily_percent": "penalty",
+  "fees.penalty_yearly_percent": "penaltyYearly",
+  "fees.penalty_from_day": "penaltyFromDay",
   "fees.monthly_minor": "monthlyFee",
+  "fees.yearly_minor": "yearlyFee",
+  "fees.transfer_free_minor": "transferFree",
+  "fees.intro_days": "introDays",
+  "fees.intro_free_minor": "introFree",
 };
 
 // CatalogUpdate offers the catalog's newer revision of the card's tariff
@@ -534,13 +558,22 @@ function InstallmentDialog({ account, card, onClose }: { account: AccountWithBal
 function feesLine(t: (key: string, values?: Record<string, unknown>) => string, fees: CreditCardTerms["fees"], c: string): string {
   const parts: string[] = [];
   if (fees.monthly_minor > 0) parts.push(t("card.feeMonthly", { amount: formatMinor(fees.monthly_minor, c) }));
+  if (fees.yearly_minor > 0) parts.push(t("card.feeYearly", { amount: formatMinor(fees.yearly_minor, c) }));
+  if (fees.intro_days > 0) parts.push(t("card.feeIntro", { days: fees.intro_days, amount: formatMinor(fees.intro_free_minor, c) }));
   if (Number(fees.cash_percent) > 0 || fees.cash_fixed_minor > 0) {
     parts.push(t("card.feeCash", { free: formatMinor(fees.cash_free_minor, c), pct: pct(fees.cash_percent), fixed: formatMinor(fees.cash_fixed_minor, c) }));
   }
   if (Number(fees.transfer_percent) > 0 || fees.transfer_fixed_minor > 0) {
-    parts.push(t("card.feeTransfer", { pct: pct(fees.transfer_percent), fixed: formatMinor(fees.transfer_fixed_minor, c) }));
+    const values = { free: formatMinor(fees.transfer_free_minor, c), pct: pct(fees.transfer_percent), fixed: formatMinor(fees.transfer_fixed_minor, c) };
+    parts.push(fees.transfer_free_minor > 0 ? t("card.feeTransferFree", values) : t("card.feeTransfer", values));
   }
-  if (Number(fees.penalty_daily_percent) > 0) parts.push(t("card.feePenalty", { pct: pct(fees.penalty_daily_percent) }));
+  const penalty =
+    Number(fees.penalty_yearly_percent) > 0
+      ? t("card.feePenaltyYearly", { pct: pct(fees.penalty_yearly_percent) })
+      : Number(fees.penalty_daily_percent) > 0
+        ? t("card.feePenalty", { pct: pct(fees.penalty_daily_percent) })
+        : "";
+  if (penalty) parts.push(fees.penalty_from_day > 1 ? `${penalty} ${t("card.feePenaltyFrom", { day: fees.penalty_from_day })}` : penalty);
   return parts.length ? t("card.feesLine", { list: parts.join("; ") }) : "";
 }
 
@@ -626,12 +659,19 @@ interface Form {
   chargesInFull: boolean;
   transferCategories: string[];
   monthlyFee: string;
+  yearlyFee: string;
   cashFree: string;
   cashPercent: string;
   cashFixed: string;
   transferPercent: string;
   transferFixed: string;
+  transferFree: string;
+  introDays: string;
+  introFree: string;
+  // penaltyDaily is the penalty's percent, a day or a year as penaltyUnit says.
   penaltyDaily: string;
+  penaltyUnit: "day" | "year";
+  penaltyFromDay: string;
   cashbackBase: string;
   cashbackCap: string;
   cashbackDays: string;
@@ -660,7 +700,7 @@ function termsOf(f: Form): CreditCardTerms {
     grace_run_from: f.kind === "running" ? f.runFrom : "purchase",
     window_months: f.kind === "windows" ? int(f.windowMonths) : 0,
     grace_months: f.kind === "windows" ? int(f.graceMonths) : 0,
-    opened_on: f.kind === "windows" ? f.openedOn : null,
+    opened_on: f.kind === "windows" || int(f.introDays) > 0 ? f.openedOn : null,
     grace_all_lost: f.graceAllLost,
     missed_minimum_period: f.missedMinimumPeriod,
     pay_by_period_end: f.dueMode === "periodEnd",
@@ -670,12 +710,18 @@ function termsOf(f: Form): CreditCardTerms {
     transfer_categories: f.transferCategories,
     fees: {
       monthly_minor: money(f.monthlyFee),
+      yearly_minor: money(f.yearlyFee),
       cash_free_minor: money(f.cashFree),
       cash_percent: String(num(f.cashPercent)),
       cash_fixed_minor: money(f.cashFixed),
+      transfer_free_minor: money(f.transferFree),
       transfer_percent: String(num(f.transferPercent)),
       transfer_fixed_minor: money(f.transferFixed),
-      penalty_daily_percent: String(num(f.penaltyDaily)),
+      intro_days: int(f.introDays),
+      intro_free_minor: int(f.introDays) > 0 ? money(f.introFree) : 0,
+      penalty_daily_percent: f.penaltyUnit === "day" ? String(num(f.penaltyDaily)) : "0",
+      penalty_yearly_percent: f.penaltyUnit === "year" ? String(num(f.penaltyDaily)) : "0",
+      penalty_from_day: int(f.penaltyFromDay),
     },
     installment: {
       months: int(f.installMonths || "0"),
@@ -722,12 +768,18 @@ function toForm(terms?: CreditCardTerms): Form {
     chargesInFull: terms?.charges_in_full ?? false,
     transferCategories: terms?.transfer_categories ?? [],
     monthlyFee: terms ? minorToInput(terms.fees.monthly_minor) : "0",
+    yearlyFee: terms ? minorToInput(terms.fees.yearly_minor) : "0",
     cashFree: terms ? minorToInput(terms.fees.cash_free_minor) : "0",
     cashPercent: terms?.fees.cash_percent ?? "0",
     cashFixed: terms ? minorToInput(terms.fees.cash_fixed_minor) : "0",
     transferPercent: terms?.fees.transfer_percent ?? "0",
     transferFixed: terms ? minorToInput(terms.fees.transfer_fixed_minor) : "0",
-    penaltyDaily: terms?.fees.penalty_daily_percent ?? "0",
+    transferFree: terms ? minorToInput(terms.fees.transfer_free_minor) : "0",
+    introDays: terms ? String(terms.fees.intro_days) : "0",
+    introFree: terms ? minorToInput(terms.fees.intro_free_minor) : "0",
+    penaltyDaily: terms && Number(terms.fees.penalty_yearly_percent) > 0 ? terms.fees.penalty_yearly_percent : (terms?.fees.penalty_daily_percent ?? "0"),
+    penaltyUnit: terms && Number(terms.fees.penalty_yearly_percent) > 0 ? "year" : "day",
+    penaltyFromDay: terms ? String(terms.fees.penalty_from_day) : "0",
     cashbackBase: terms?.cashback.base_percent ?? "0",
     cashbackCap: terms ? minorToInput(terms.cashback.monthly_cap_minor) : "0",
     cashbackDays: terms ? String(terms.cashback.credit_days) : "0",
@@ -755,13 +807,19 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
   const money = (s: string) => parseToMinor(s.trim() === "" ? "0" : s);
   const fees = {
     monthly_minor: money(f.monthlyFee),
+    yearly_minor: money(f.yearlyFee),
     cash_free_minor: money(f.cashFree),
     cash_fixed_minor: money(f.cashFixed),
+    transfer_free_minor: money(f.transferFree),
     transfer_fixed_minor: money(f.transferFixed),
+    intro_free_minor: money(f.introFree),
   };
+  const introOn = int(f.introDays || "0", 1, 366);
   const feesValid =
     Object.values(fees).every((v) => v !== null && v >= 0) &&
-    decimalOk(f.cashPercent || "0", 100) && decimalOk(f.transferPercent || "0", 100) && decimalOk(f.penaltyDaily || "0", 10);
+    decimalOk(f.cashPercent || "0", 100) && decimalOk(f.transferPercent || "0", 100) &&
+    decimalOk(f.penaltyDaily || "0", f.penaltyUnit === "day" ? 10 : 1000) && int(f.penaltyFromDay || "0", 0, 90) &&
+    int(f.introDays || "0", 0, 366) && (!introOn || ((fees.intro_free_minor ?? 0) > 0 && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn)));
   const cashbackCap = money(f.cashbackCap);
   const cashbackValid =
     decimalOk(f.cashbackBase || "0", 100) && cashbackCap !== null && cashbackCap >= 0 && int(f.cashbackDays || "0", 0, 60) &&
@@ -792,7 +850,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
   const applyCatalog = () => {
     if (!product || !version) return;
     const next = toForm(mergeTerms(termsOf(f), version.terms));
-    if (next.kind === "windows" && contractOn) next.openedOn = contractOn;
+    if ((next.kind === "windows" || Number(next.introDays) > 0) && contractOn) next.openedOn = contractOn;
     setF(next);
     setCatalogRef({ product: product.id, contracts_from: version.contracts_from, revision: version.revision });
   };
@@ -976,6 +1034,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
             <legend className="px-1 text-sm font-medium">{t("card.feesTitle")}</legend>
             <p className="text-xs text-muted-foreground">{t("card.feesHint")}</p>
             {field("monthlyFee", t("card.monthlyFee", { currency: account.currency }), t("card.monthlyFeeHint"))}
+            {field("yearlyFee", t("card.yearlyFee", { currency: account.currency }), t("card.yearlyFeeHint"))}
             {field("cashFree", t("card.cashFree", { currency: account.currency }))}
             <div className="grid grid-cols-2 gap-2">
               {field("cashPercent", t("card.cashPercent"))}
@@ -985,7 +1044,27 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
               {field("transferPercent", t("card.transferPercent"))}
               {field("transferFixed", t("card.feeFixedTransfer", { currency: account.currency }))}
             </div>
-            {field("penaltyDaily", t("card.penaltyDaily"))}
+            {field("transferFree", t("card.transferFree", { currency: account.currency }))}
+            <div className="grid grid-cols-2 gap-2">
+              {field("introDays", t("card.introDays"))}
+              {field("introFree", t("card.introFree", { currency: account.currency }))}
+            </div>
+            <p className="text-xs text-muted-foreground">{t("card.introHint")}</p>
+            {Number(f.introDays) > 0 && f.kind !== "windows" && field("openedOn", t("card.openedOn"), undefined, "date")}
+            <div className="grid gap-1">
+              <Label>{t("card.penaltyUnit")}</Label>
+              <Select value={f.penaltyUnit} onValueChange={(v) => set({ penaltyUnit: v as Form["penaltyUnit"] })}>
+                <SelectTrigger aria-label={t("card.penaltyUnit")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">{t("card.penaltyUnitDay")}</SelectItem>
+                  <SelectItem value="year">{t("card.penaltyUnitYear")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {field("penaltyDaily", f.penaltyUnit === "day" ? t("card.penaltyDaily") : t("card.penaltyYearly"))}
+            {field("penaltyFromDay", t("card.penaltyFromDay"), t("card.penaltyFromDayHint"))}
           </fieldset>
           <fieldset className="grid gap-2 rounded-md border p-3" data-testid="card-installment-rules">
             <legend className="px-1 text-sm font-medium">{t("card.installmentTitle")}</legend>

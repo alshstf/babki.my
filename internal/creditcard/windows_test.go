@@ -215,16 +215,16 @@ var gpbFees = Fees{
 }
 
 func TestTheTariffsFeesAreToldAhead(t *testing.T) {
-	if got := gpbFees.Transfer(10_000_00); got != 880_00 {
+	if got := gpbFees.Transfer(10_000_00, 0, 0); got != 880_00 {
 		t.Errorf("a transfer of 10 000 costs %d, want 490 + 390", got)
 	}
-	if got := gpbFees.Cash(30_000_00, 60_000_00); got != 0 {
+	if got := gpbFees.Cash(30_000_00, 60_000_00, 0); got != 0 {
 		t.Errorf("cash within the free part costs %d", got)
 	}
-	if got := gpbFees.Cash(30_000_00, 80_000_00); got != 590_00+590_00 {
+	if got := gpbFees.Cash(30_000_00, 80_000_00, 0); got != 590_00+590_00 {
 		t.Errorf("cash 10 000 past the free part costs %d, want 590 + 590", got)
 	}
-	if got := (Fees{}).Transfer(10_000_00); got != 0 {
+	if got := (Fees{}).Transfer(10_000_00, 0, 0); got != 0 {
 		t.Errorf("a tariff without fees charges %d", got)
 	}
 
