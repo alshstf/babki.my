@@ -561,19 +561,9 @@ export function OperationsTable({
                         onChange={(categoryId) => setCategory.mutate({ operationId: operation.id, categoryId })}
                         counterparty={operation.counterparty || operation.note}
                         onRemember={(categoryId) => remember(operation.counterparty || operation.note, categoryId)}
+                        onSplit={operation.type === "withdrawal" || operation.type === "deposit" ? () => setSplitting(operation) : undefined}
+                        split={(operation.parts ?? []).length > 0}
                       />
-                      {canDelete && (operation.type === "withdrawal" || operation.type === "deposit") && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 text-xs text-muted-foreground"
-                          data-testid="operation-split"
-                          onClick={() => setSplitting(operation)}
-                        >
-                          {(operation.parts ?? []).length > 0 ? t("parts.edit") : t("parts.split")}
-                        </Button>
-                      )}
                       {family.length > 0 && (
                         <MemberChip
                           members={family}
