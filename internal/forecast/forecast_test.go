@@ -73,7 +73,7 @@ func (fakeRates) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Ra
 // first three; ahead of it the rent, the mortgage's schedule and the salary
 // with its advance. The mortgage's interest, found among the regular
 // payments under the loan's name, is not counted twice; a payment on the
-// deposit is not counted at all.
+// deposit is not counted at all, nor one the family said is not regular.
 func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 	acc := func(name string, typ account.Type, currency string, balance *int64, byJournal bool) account.WithBalance {
 		a := account.WithBalance{Account: account.Account{
@@ -105,6 +105,11 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 			pay("ООО «Ромашка»", d("2026-10-25"), 60_000_00, current),
 			pay("ООО «Ромашка»", d("2026-11-05"), 180_000_00, current),
 			pay("Проценты по вкладу", d("2026-10-20"), 3_000_00, deposit),
+			func() recurring.Payment {
+				p := pay("Пятёрочка", d("2026-10-12"), -1_500_00, current)
+				p.Hidden = true
+				return p
+			}(),
 		},
 		fakeLoans{{AccountID: mortgage.ID, Principal: 3_000_000_00, AnnualRate: decimal.RequireFromString("18.5"), TermMonths: 240, IssuedOn: d("2026-03-15"), Kind: loan.Annuity}},
 		fakeRates{},

@@ -260,6 +260,36 @@ paths:
               schema: { $ref: "#/components/schemas/PushTestResult" }
         "401": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /api/v1/recurring/hidden:
+    put:
+      tags: [recurring]
+      operationId: hideRecurring
+      description: Says a regular payment is not regular — three trips to one shop a month apart are not a subscription. It stays in GET /recurring with hidden true, and leaves the forecast.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecurringKey" }
+      responses:
+        "204": { description: Hidden }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [recurring]
+      operationId: showRecurring
+      description: Takes a hidden payment back among the regular ones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecurringKey" }
+      responses:
+        "204": { description: Shown again }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/forecast:
     get:
       tags: [forecast]
@@ -2753,7 +2783,7 @@ components:
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out of the base figures for want of today's rate" }
     RecurringPayment:
       type: object
-      required: [name, cadence, amount_minor, currency, account_id, category_id, last_on, next_on, count, overdue]
+      required: [name, cadence, amount_minor, currency, account_id, category_id, last_on, next_on, count, overdue, hidden]
       properties:
         name: { type: string, description: "The counterparty, or the note, as last written, without trailing numbers" }
         cadence: { type: string, enum: [weekly, monthly, quarterly, yearly] }
@@ -2765,6 +2795,14 @@ components:
         next_on: { type: string, description: "Date YYYY-MM-DD the next one is due" }
         count: { type: integer, description: "How many payments the pattern rests on" }
         overdue: { type: boolean, description: "Its day has passed without it — late, or not entered yet" }
+        hidden: { type: boolean, description: "The family said it is not regular (PUT /recurring/hidden): listed apart, out of the forecast" }
+    RecurringKey:
+      type: object
+      required: [name, incoming, currency]
+      properties:
+        name: { type: string, maxLength: 200, description: "RecurringPayment.name; case and «ё» do not matter" }
+        incoming: { type: boolean, description: "amount_minor above zero" }
+        currency: { type: string }
     StructureSlice:
       type: object
       required: [key, minor]

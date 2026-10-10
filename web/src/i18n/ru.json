@@ -1308,7 +1308,10 @@
       "quarterly": "раз в квартал",
       "yearly": "раз в год"
     },
-    "expected": "ожидался {{date}}"
+    "expected": "ожидался {{date}}",
+    "hide": "Не считать регулярным",
+    "hiddenCount": "Скрытые: {{count}}",
+    "unhide": "вернуть"
   },
   "structure": {
     "title": "Структура капитала",
