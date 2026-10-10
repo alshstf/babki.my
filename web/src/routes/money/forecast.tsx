@@ -76,6 +76,7 @@ export function ForecastCard() {
                 <span className={cn("min-w-0 truncate", e.overdue && "text-amber-700 dark:text-amber-400")}>
                   {e.overdue ? t("forecast.expectedToday") : formatDate(e.on)} · {e.name}
                   {e.kind === "loan" && <span className="text-muted-foreground"> · {t("forecast.loan")}</span>}
+                  {e.kind === "cashback" && <span className="text-muted-foreground"> · {t("forecast.cashback")}</span>}
                 </span>
                 <span className={cn("shrink-0 tabular-nums", signClass(e.in_base_minor))}>
                   {formatMinor(e.in_base_minor, c)}

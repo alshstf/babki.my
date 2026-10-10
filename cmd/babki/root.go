@@ -143,7 +143,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	recurringSvc := recurring.NewService(opStore, accStore, recurringHidden)
 	recurring.NewHandler(recurringSvc, recurringHidden, famAuth, famSM).Mount(srv)
 	forecast.NewHandler(forecast.NewService(accStore, positions, famStore, recurringSvc,
-		loanSvc, converter), famAuth, famSM).Mount(srv)
+		loanSvc, cardSvc, converter), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)), instStore, famAuth, famSM).Mount(srv)
 

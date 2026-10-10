@@ -131,6 +131,13 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
+      {st.cashback_on && (
+        <p className="text-sm text-muted-foreground" data-testid="card-cashback">
+          {data.terms.cashback.points
+            ? t("card.cashbackPoints", { amount: (st.cashback_expected_minor / 100).toLocaleString("ru-RU"), date: formatDate(st.cashback_on) })
+            : t("card.cashbackExpected", { amount: formatMinor(st.cashback_expected_minor, c), date: formatDate(st.cashback_on) })}
+        </p>
+      )}
       {data.terms.fees.cash_free_minor > 0 && (
         <p className="text-sm text-muted-foreground" data-testid="card-cash">
           {t("card.cashThisPeriod", {
@@ -271,6 +278,11 @@ interface Form {
   transferPercent: string;
   transferFixed: string;
   penaltyDaily: string;
+  cashbackBase: string;
+  cashbackCap: string;
+  cashbackDays: string;
+  cashbackPoints: boolean;
+  cashbackCategories: { id: string; percent: string }[];
 }
 
 function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
@@ -301,6 +313,11 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     transferPercent: terms?.fees.transfer_percent ?? "0",
     transferFixed: terms ? minorToInput(terms.fees.transfer_fixed_minor) : "0",
     penaltyDaily: terms?.fees.penalty_daily_percent ?? "0",
+    cashbackBase: terms?.cashback.base_percent ?? "0",
+    cashbackCap: terms ? minorToInput(terms.cashback.monthly_cap_minor) : "0",
+    cashbackDays: terms ? String(terms.cashback.credit_days) : "0",
+    cashbackPoints: terms?.cashback.points ?? false,
+    cashbackCategories: (terms?.cashback.categories ?? []).map((c) => ({ id: c.category_id, percent: c.percent })),
   });
   const categories = useCategories();
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
@@ -319,6 +336,10 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
   const feesValid =
     Object.values(fees).every((v) => v !== null && v >= 0) &&
     decimalOk(f.cashPercent || "0", 100) && decimalOk(f.transferPercent || "0", 100) && decimalOk(f.penaltyDaily || "0", 10);
+  const cashbackCap = money(f.cashbackCap);
+  const cashbackValid =
+    decimalOk(f.cashbackBase || "0", 100) && cashbackCap !== null && cashbackCap >= 0 && int(f.cashbackDays || "0", 0, 60) &&
+    f.cashbackCategories.every((c) => decimalOk(c.percent, 100));
   const valid =
     limit !== null && limit >= 0 && floor !== null && floor >= 0 &&
     int(f.statementDay, 1, 31) && (f.payByPeriodEnd || int(f.paymentDays, 0, 60)) &&
@@ -326,7 +347,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
     decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000)) &&
-    feesValid;
+    feesValid && cashbackValid;
 
   const submit = () => {
     if (!valid || limit === null || floor === null) return;
@@ -353,6 +374,13 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           transfer_fixed_minor: fees.transfer_fixed_minor ?? 0,
           penalty_daily_percent: String(num(f.penaltyDaily || "0")),
         },
+        cashback: {
+          base_percent: String(num(f.cashbackBase || "0")),
+          categories: f.cashbackCategories.map((c) => ({ category_id: c.id, percent: String(num(c.percent)) })),
+          monthly_cap_minor: cashbackCap ?? 0,
+          points: f.cashbackPoints,
+          credit_days: Number(f.cashbackDays || "0"),
+        },
         min_percent: String(num(f.minPercent)),
         min_floor_minor: floor,
         annual_rate: String(num(f.rate)),
@@ -375,7 +403,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
-  type Switch = "graceAllLost" | "payByPeriodEnd" | "chargesInFull";
+  type Switch = "graceAllLost" | "payByPeriodEnd" | "chargesInFull" | "cashbackPoints";
   const toggle = (id: Switch, label: string, hint: string) => (
     <div className="flex items-start gap-2">
       <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
@@ -481,6 +509,52 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
               {field("transferFixed", t("card.feeFixedTransfer", { currency: account.currency }))}
             </div>
             {field("penaltyDaily", t("card.penaltyDaily"))}
+          </fieldset>
+          <fieldset className="grid gap-2 rounded-md border p-3" data-testid="card-cashback-rules">
+            <legend className="px-1 text-sm font-medium">{t("card.cashbackTitle")}</legend>
+            <p className="text-xs text-muted-foreground">{t("card.cashbackHint")}</p>
+            <div className="grid grid-cols-2 gap-2">
+              {field("cashbackBase", t("card.cashbackBase"))}
+              {field("cashbackCap", t("card.cashbackCap", { currency: account.currency }))}
+            </div>
+            {f.cashbackCategories.map((c, i) => (
+              <div key={c.id} className="flex items-end gap-2">
+                <div className="grid flex-1 gap-1">
+                  <Label htmlFor={`card-cashback-${c.id}`}>{t("card.cashbackIn", { name: categoryLabel(categories.data ?? [], c.id) ?? "?" })}</Label>
+                  <Input
+                    id={`card-cashback-${c.id}`}
+                    inputMode="decimal"
+                    value={c.percent}
+                    onChange={(e) =>
+                      set({ cashbackCategories: f.cashbackCategories.map((x, j) => (j === i ? { ...x, percent: e.target.value } : x)) })
+                    }
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label={t("card.transferRemove", { name: categoryLabel(categories.data ?? [], c.id) ?? "" })}
+                  onClick={() => set({ cashbackCategories: f.cashbackCategories.filter((_, j) => j !== i) })}
+                >
+                  ×
+                </Button>
+              </div>
+            ))}
+            <div className="grid gap-1">
+              <Label htmlFor="card-cashback-add">{t("card.cashbackAdd")}</Label>
+              <CategorySelect
+                id="card-cashback-add"
+                categories={categories.data ?? []}
+                kind="expense"
+                value={null}
+                onChange={(id) =>
+                  id && !f.cashbackCategories.some((c) => c.id === id) && set({ cashbackCategories: [...f.cashbackCategories, { id, percent: "5" }] })
+                }
+              />
+            </div>
+            {field("cashbackDays", t("card.cashbackDays"))}
+            {toggle("cashbackPoints", t("card.cashbackPointsLabel"), t("card.cashbackPointsHint"))}
           </fieldset>
           {field("rate", t("card.rate"))}
           {field("ownRate", t("card.ownRate"), t("card.ownRateHint"))}

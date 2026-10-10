@@ -2287,6 +2287,7 @@ export interface components {
             /** @description The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family */
             transfer_categories: string[];
             fees: components["schemas"]["CreditCardFees"];
+            cashback: components["schemas"]["CreditCardCashback"];
             /** @description The minimum payment, percent of the debt the statement shows (decimal) */
             min_percent: string;
             /**
@@ -2298,6 +2299,30 @@ export interface components {
             annual_rate: string;
             /** @description Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named */
             own_rate: string | null;
+        };
+        /** @description The card's cashback rules, to tell the cashback before it comes (decision Р-31): a purchase earns its category's percent or base_percent, whichever is higher (subcategories with their category); the period's sum not past monthly_cap_minor when it is above 0. Transfers, cash and the bank's charges earn nothing. All zero and empty when the card names none. */
+        CreditCardCashback: {
+            /** @description Percent of every purchase (decimal, 0 to 99.999) */
+            base_percent: string;
+            categories: components["schemas"]["CreditCardCashbackCategory"][];
+            /**
+             * Format: int64
+             * @description The most a period earns; 0 for no cap
+             */
+            monthly_cap_minor: number;
+            /** @description It comes as the bank's points, not money: shown, kept out of the money forecast */
+            points: boolean;
+            /** @description Days after the period's statement it comes in */
+            credit_days: number;
+        };
+        CreditCardCashbackCategory: {
+            /**
+             * Format: uuid
+             * @description One of the family's spending categories; 400 otherwise
+             */
+            category_id: string;
+            /** @description Decimal, 0 to 99.999 */
+            percent: string;
         };
         /** @description What the tariff charges besides interest, told before it is charged (decision Р-30); the journal gets the bank's charges as they happen. All zero when the tariff has none. */
         CreditCardFees: {
@@ -2403,6 +2428,13 @@ export interface components {
              * @description Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed
              */
             penalty_minor: number;
+            /**
+             * Format: int64
+             * @description The cashback this period's purchases so far bring by the card's rules, capped
+             */
+            cashback_expected_minor: number;
+            /** @description The day it comes; null when the card names no cashback rules */
+            cashback_on: string | null;
         };
         CreditCardBenefit: {
             /** @description A year before today, or the card's first row when later */
@@ -2490,8 +2522,11 @@ export interface components {
             on: string;
             /** @description The payee, or the loan account's name */
             name: string;
-            /** @enum {string} */
-            kind: "regular" | "loan";
+            /**
+             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)
+             * @enum {string}
+             */
+            kind: "regular" | "loan" | "cashback";
             /** Format: uuid */
             account_id: string;
             /**

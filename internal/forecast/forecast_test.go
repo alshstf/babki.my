@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
@@ -53,6 +54,10 @@ func (f fakeRegulars) Find(context.Context, uuid.UUID) ([]recurring.Payment, err
 type fakeLoans []loan.Terms
 
 func (f fakeLoans) All(context.Context, uuid.UUID) ([]loan.Terms, error) { return f, nil }
+
+type fakeCards []creditcard.Card
+
+func (f fakeCards) All(context.Context, uuid.UUID) ([]creditcard.Card, error) { return f, nil }
 
 // fakeRates knows the dollar at 90 roubles and nothing else.
 type fakeRates struct{}
@@ -105,6 +110,9 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 			pay("ООО «Ромашка»", d("2026-10-25"), 60_000_00, current),
 			pay("ООО «Ромашка»", d("2026-11-05"), 180_000_00, current),
 			pay("Проценты по вкладу", d("2026-10-20"), 3_000_00, deposit),
+			// The card's cashback as the journal repeats it: its rules say
+			// it instead.
+			pay("Кэшбэк", d("2026-10-28"), 900_00, card),
 			func() recurring.Payment {
 				p := pay("Пятёрочка", d("2026-10-12"), -1_500_00, current)
 				p.Hidden = true
@@ -112,6 +120,11 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 			}(),
 		},
 		fakeLoans{{AccountID: mortgage.ID, Principal: 3_000_000_00, AnnualRate: decimal.RequireFromString("18.5"), TermMonths: 240, IssuedOn: d("2026-03-15"), Kind: loan.Annuity}},
+		fakeCards{{
+			Account: card,
+			Terms:   creditcard.Terms{Cashback: creditcard.Cashback{BasePercent: decimal.NewFromInt(1)}},
+			Status:  creditcard.Status{CashbackExpected: 1_234_00, CashbackOn: d("2026-11-01")},
+		}},
 		fakeRates{},
 	)
 	svc.now = func() time.Time { return d("2026-10-10").Add(15 * time.Hour) }
@@ -137,6 +150,7 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 		{"2026-10-10", "ИП Смирнова", -45_000_00},
 		{"2026-10-15", "Ипотека ВТБ", -47_456_90},
 		{"2026-10-25", "ООО «Ромашка»", 60_000_00},
+		{"2026-11-01", card.Name, 1_234_00},
 		{"2026-11-05", "ООО «Ромашка»", 180_000_00},
 		{"2026-11-06", "ИП Смирнова", -45_000_00},
 		{"2026-11-15", "Ипотека ВТБ", -47_456_90},
@@ -169,7 +183,7 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 }
 
 func TestAHorizonOutOfBoundsIsRefused(t *testing.T) {
-	svc := NewService(fakeAccounts{}, fakePositions{}, fakeSpaces{}, fakeRegulars{}, fakeLoans{}, fakeRates{})
+	svc := NewService(fakeAccounts{}, fakePositions{}, fakeSpaces{}, fakeRegulars{}, fakeLoans{}, fakeCards{}, fakeRates{})
 	for _, days := range []int{0, MinDays - 1, MaxDays + 1} {
 		if _, err := svc.Of(context.Background(), uuid.New(), days); err == nil {
 			t.Errorf("%d days accepted", days)
@@ -186,7 +200,7 @@ func TestAPaymentBeforeTheBalanceMarkIsInTheBalance(t *testing.T) {
 	}
 	svc := NewService(fakeAccounts{current}, fakePositions{}, fakeSpaces{},
 		fakeRegulars{{Name: "Аренда", Cadence: recurring.Monthly, Amount: -5_000_00, Currency: "RUB", AccountID: current.ID, Next: d("2026-10-06")}},
-		fakeLoans{}, fakeRates{})
+		fakeLoans{}, fakeCards{}, fakeRates{})
 	svc.now = func() time.Time { return d("2026-10-10") }
 	f, err := svc.Of(context.Background(), uuid.New(), 40)
 	if err != nil {

@@ -324,13 +324,16 @@ func (e CreditCardTermsGraceKind) Valid() bool {
 
 // Defines values for ForecastEventKind.
 const (
-	ForecastEventKindLoan    ForecastEventKind = "loan"
-	ForecastEventKindRegular ForecastEventKind = "regular"
+	ForecastEventKindCashback ForecastEventKind = "cashback"
+	ForecastEventKindLoan     ForecastEventKind = "loan"
+	ForecastEventKindRegular  ForecastEventKind = "regular"
 )
 
 // Valid indicates whether the value is a known member of the ForecastEventKind enum.
 func (e ForecastEventKind) Valid() bool {
 	switch e {
+	case ForecastEventKindCashback:
+		return true
 	case ForecastEventKindLoan:
 		return true
 	case ForecastEventKindRegular:
@@ -1973,6 +1976,31 @@ type CreditCardBenefit struct {
 	TotalMinor int64 `json:"total_minor"`
 }
 
+// CreditCardCashback The card's cashback rules, to tell the cashback before it comes (decision Р-31): a purchase earns its category's percent or base_percent, whichever is higher (subcategories with their category); the period's sum not past monthly_cap_minor when it is above 0. Transfers, cash and the bank's charges earn nothing. All zero and empty when the card names none.
+type CreditCardCashback struct {
+	// BasePercent Percent of every purchase (decimal, 0 to 99.999)
+	BasePercent string                       `json:"base_percent"`
+	Categories  []CreditCardCashbackCategory `json:"categories"`
+
+	// CreditDays Days after the period's statement it comes in
+	CreditDays int `json:"credit_days"`
+
+	// MonthlyCapMinor The most a period earns; 0 for no cap
+	MonthlyCapMinor int64 `json:"monthly_cap_minor"`
+
+	// Points It comes as the bank's points, not money: shown, kept out of the money forecast
+	Points bool `json:"points"`
+}
+
+// CreditCardCashbackCategory defines model for CreditCardCashbackCategory.
+type CreditCardCashbackCategory struct {
+	// CategoryId One of the family's spending categories; 400 otherwise
+	CategoryId openapi_types.UUID `json:"category_id"`
+
+	// Percent Decimal, 0 to 99.999
+	Percent string `json:"percent"`
+}
+
 // CreditCardDue defines model for CreditCardDue.
 type CreditCardDue struct {
 	AmountMinor int64 `json:"amount_minor"`
@@ -2032,6 +2060,12 @@ type CreditCardStatus struct {
 	// CashThisPeriodMinor Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor
 	CashThisPeriodMinor int64 `json:"cash_this_period_minor"`
 
+	// CashbackExpectedMinor The cashback this period's purchases so far bring by the card's rules, capped
+	CashbackExpectedMinor int64 `json:"cashback_expected_minor"`
+
+	// CashbackOn The day it comes; null when the card names no cashback rules
+	CashbackOn nullable.Nullable[string] `json:"cashback_on"`
+
 	// DebtMinor Owed on the card; below zero the family's own money on it
 	DebtMinor int64 `json:"debt_minor"`
 
@@ -2081,6 +2115,9 @@ type CreditCardSummary struct {
 type CreditCardTerms struct {
 	// AnnualRate Percent a year charged once the grace is lost (decimal)
 	AnnualRate string `json:"annual_rate"`
+
+	// Cashback The card's cashback rules, to tell the cashback before it comes (decision Р-31): a purchase earns its category's percent or base_percent, whichever is higher (subcategories with their category); the period's sum not past monthly_cap_minor when it is above 0. Transfers, cash and the bank's charges earn nothing. All zero and empty when the card names none.
+	Cashback CreditCardCashback `json:"cashback"`
 
 	// ChargesInFull The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full
 	ChargesInFull bool `json:"charges_in_full"`
@@ -2452,8 +2489,10 @@ type ForecastEvent struct {
 	Currency    string `json:"currency"`
 
 	// InBaseMinor The same in the base currency at today's rate
-	InBaseMinor int64             `json:"in_base_minor"`
-	Kind        ForecastEventKind `json:"kind"`
+	InBaseMinor int64 `json:"in_base_minor"`
+
+	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)
+	Kind ForecastEventKind `json:"kind"`
 
 	// Name The payee, or the loan account's name
 	Name string `json:"name"`
@@ -2465,7 +2504,7 @@ type ForecastEvent struct {
 	Overdue bool `json:"overdue"`
 }
 
-// ForecastEventKind defines model for ForecastEvent.Kind.
+// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)
 type ForecastEventKind string
 
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.

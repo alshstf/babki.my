@@ -158,6 +158,26 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		t.Errorf("transfer categories = %v, want the spending one once", got.Terms.TransferCategories)
 	}
 
+	// Cashback rules: a spending category's percent; an income one refused.
+	withCashback := func(category string) string {
+		return fmt.Sprintf(`{"limit_minor":15000000,"statement_day":1,"payment_days":20,"grace_kind":"statement","grace_days":0,
+			"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":null,
+			"cashback":{"base_percent":"1","categories":[{"category_id":%q,"percent":"5"}],"monthly_cap_minor":500000,"points":true,"credit_days":3}}`, category)
+	}
+	if r := apitest.Do(t, c, "PUT", path, withCashback(earning)); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("an income category's cashback = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path, withCashback(spending))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cashback rules = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if cb := got.Terms.Cashback; cb.BasePercent != "1" || len(cb.Categories) != 1 || cb.Categories[0].Percent != "5" ||
+		cb.Categories[0].CategoryId.String() != spending || cb.MonthlyCapMinor != 500_000 || !cb.Points || cb.CreditDays != 3 ||
+		got.Status.CashbackOn.IsNull() {
+		t.Errorf("cashback = %+v, status on %v", cb, got.Status.CashbackOn)
+	}
+
 	if r := apitest.Do(t, c, "DELETE", path, ""); r.StatusCode != http.StatusNoContent {
 		t.Errorf("delete = %d", r.StatusCode)
 	}

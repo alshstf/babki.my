@@ -271,3 +271,44 @@ func TestTheTariffsFeesAreToldAhead(t *testing.T) {
 		t.Errorf("minimum = %d, want 3%% of 19 400 and the 590 to come = 1 172", st.Minimum)
 	}
 }
+
+// The cashback this period's purchases bring by the card's rules (decision
+// Р-31): a category's percent where it is higher than the base, its
+// subcategories with it; a transfer earns nothing; the cap holds.
+func TestTheCashbackIsToldAhead(t *testing.T) {
+	food, deli, wallets := uuid.New(), uuid.New(), uuid.New()
+	set := categorySet{kinds: Kinds{}, parent: map[uuid.UUID]uuid.UUID{deli: food}}
+	terms := alfa
+	terms.TransferCategories = []uuid.UUID{wallets}
+	terms.Cashback = Cashback{
+		BasePercent: decimal.NewFromInt(1),
+		Categories:  []CategoryPercent{{CategoryID: food, Percent: decimal.NewFromInt(5)}},
+		CreditDays:  5,
+	}
+	in := func(op operation.Operation, cat uuid.UUID) operation.Operation {
+		op.CategoryID = &cat
+		return op
+	}
+	ops := []operation.Operation{
+		spend("2026-08-20", 50_000), // last period's: not this one's
+		in(spend("2026-09-03", 2_000), food), in(spend("2026-09-04", 1_000), deli), spend("2026-09-05", 10_000),
+		in(spend("2026-09-06", 7_000), wallets),
+	}
+	st := Work(terms, ops, "RUB", d("2026-09-10"), set.of(terms))
+	// 5% of 3 000 and 1% of 10 000.
+	if st.CashbackExpected != 250_00 || day(st.CashbackOn) != "2026-10-06" {
+		t.Errorf("cashback = %d on %s, want 250 on 06.10", st.CashbackExpected, day(st.CashbackOn))
+	}
+	terms.Cashback.MonthlyCap = 200_00
+	if st := Work(terms, ops, "RUB", d("2026-09-10"), set.of(terms)); st.CashbackExpected != 200_00 {
+		t.Errorf("capped cashback = %d, want 200", st.CashbackExpected)
+	}
+	if st := Work(alfa, ops, "RUB", d("2026-09-10"), set.of(alfa)); st.CashbackExpected != 0 || !st.CashbackOn.IsZero() {
+		t.Errorf("a card without rules: cashback %d on %v", st.CashbackExpected, st.CashbackOn)
+	}
+	bad := terms
+	bad.Cashback.BasePercent = decimal.NewFromInt(100)
+	if bad.Validate() == nil {
+		t.Error("a cashback of 100% was accepted")
+	}
+}
