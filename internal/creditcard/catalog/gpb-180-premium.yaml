@@ -1,6 +1,8 @@
 id: gpb-180-premium
 bank: Газпромбанк
 card: «180 дней Премиум»
+watch:
+  - https://www.gazprombank.ru/documents-and-tariffs/?q=180%20%D0%B4%D0%BD%D0%B5%D0%B9%20%D0%9F%D1%80%D0%B5%D0%BC%D0%B8%D1%83%D0%BC
 versions:
   - contracts_from: 2025-10-01
     contracts_to: null

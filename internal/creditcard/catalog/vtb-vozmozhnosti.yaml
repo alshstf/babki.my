@@ -1,6 +1,8 @@
 id: vtb-vozmozhnosti
 bank: ВТБ
 card: «Карта возможностей»
+watch:
+  - https://www.vtb.ru/personal/karty/kreditnye/vozmozhnosti/
 versions:
   - contracts_from: null
     contracts_to: null

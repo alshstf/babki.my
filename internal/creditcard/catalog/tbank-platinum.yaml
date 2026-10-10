@@ -1,6 +1,8 @@
 id: tbank-platinum
 bank: Т-Банк
 card: «Платинум»
+watch:
+  - https://www.tbank.ru/cards/credit-cards/platinum/tariffs/
 versions:
   - contracts_from: null
     contracts_to: null

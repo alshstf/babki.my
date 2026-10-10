@@ -1,6 +1,8 @@
 id: sovcombank-halva
 bank: Совкомбанк
 card: «Халва»
+watch:
+  - https://halvacard.ru/tariffs
 versions:
   - contracts_from: null
     contracts_to: null
