@@ -201,33 +201,57 @@ func (c Cashback) Named() bool {
 // Fees are what the tariff charges besides interest (decision Р-30), told
 // before they are charged; the journal gets them when the bank takes them.
 // Amounts in minor units, percents of the money moved; PenaltyDaily is a
-// percent of the payment missed, a day.
+// percent of the payment missed, a day, PenaltyYearly a year (Т-Банк).
 type Fees struct {
-	Monthly         int64
-	CashFree        int64
-	CashPercent     decimal.Decimal
-	CashFixed       int64
+	Monthly int64
+	// Yearly is charged at the statement after the card's first spending and
+	// at every twelfth one after it (Т-Банк).
+	Yearly      int64
+	CashFree    int64
+	CashPercent decimal.Decimal
+	CashFixed   int64
+	// TransferFree is what a statement period moves off the card without a
+	// fee (Т-Банк: 80 000 ₽).
+	TransferFree    int64
 	TransferPercent decimal.Decimal
 	TransferFixed   int64
-	PenaltyDaily    decimal.Decimal
+	// IntroDays from the contract's day, cash and transfers are free up to
+	// IntroFree in all (ВТБ: 50 000 ₽ in the first 30 days).
+	IntroDays     int
+	IntroFree     int64
+	PenaltyDaily  decimal.Decimal
+	PenaltyYearly decimal.Decimal
+	// PenaltyFromDay is the day of a payment's lateness the penalty runs
+	// from («Халва»: the 6th); 0 or 1 for the first.
+	PenaltyFromDay int
 }
 
 // Cash is the fee for taking amount out in cash with already taken out this
-// period: the fixed part and the percent of what goes past the free part.
-func (f Fees) Cash(amount, already int64) int64 {
-	over := amount - max(f.CashFree-already, 0)
+// period and introLeft of the first days' free part unused: the fixed part
+// and the percent of what goes past the free parts.
+func (f Fees) Cash(amount, already, introLeft int64) int64 {
+	over := amount - introLeft - max(f.CashFree-already, 0)
 	if over <= 0 || f.CashPercent.IsZero() && f.CashFixed == 0 {
 		return 0
 	}
 	return percentOf(over, f.CashPercent) + f.CashFixed
 }
 
-// Transfer is the fee for moving amount off the card.
-func (f Fees) Transfer(amount int64) int64 {
-	if amount <= 0 || f.TransferPercent.IsZero() && f.TransferFixed == 0 {
+// Transfer is the fee for moving amount off the card, likewise against the
+// period's free transfers.
+func (f Fees) Transfer(amount, already, introLeft int64) int64 {
+	over := amount - introLeft - max(f.TransferFree-already, 0)
+	if over <= 0 || f.TransferPercent.IsZero() && f.TransferFixed == 0 {
 		return 0
 	}
-	return percentOf(amount, f.TransferPercent) + f.TransferFixed
+	return percentOf(over, f.TransferPercent) + f.TransferFixed
+}
+
+// penalty is the penalty on overdue, the sum of what was overdue each day
+// it runs.
+func (f Fees) penalty(overdue int64) int64 {
+	v, _ := money.Minor(decimal.NewFromInt(overdue).Mul(f.PenaltyDaily.Add(f.PenaltyYearly.Div(decimal.NewFromInt(365)))).Div(hundred).Round(0))
+	return v
 }
 
 func percentOf(amount int64, pct decimal.Decimal) int64 {
@@ -272,12 +296,21 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: the card's rate is from 0 to 999.9999 percent", family.ErrValidation)
 	case t.OwnRate != nil && !rate(*t.OwnRate):
 		return fmt.Errorf("%w: the own money's rate is from 0 to 999.9999 percent", family.ErrValidation)
-	case t.Fees.Monthly < 0 || t.Fees.CashFree < 0 || t.Fees.CashFixed < 0 || t.Fees.TransferFixed < 0:
+	case t.Fees.Monthly < 0 || t.Fees.Yearly < 0 || t.Fees.CashFree < 0 || t.Fees.CashFixed < 0 || t.Fees.TransferFree < 0 ||
+		t.Fees.TransferFixed < 0 || t.Fees.IntroFree < 0:
 		return fmt.Errorf("%w: the tariff's amounts cannot be below zero", family.ErrValidation)
 	case !share(t.Fees.CashPercent) || !share(t.Fees.TransferPercent):
 		return fmt.Errorf("%w: a fee is 0 to 99.999 percent", family.ErrValidation)
+	case t.Fees.IntroDays < 0 || t.Fees.IntroDays > 366 || (t.Fees.IntroDays > 0) != (t.Fees.IntroFree > 0):
+		return fmt.Errorf("%w: free cash and transfers at the start are an amount for 1 to 366 days, both or neither", family.ErrValidation)
+	case t.Fees.IntroDays > 0 && t.OpenedOn == nil:
+		return fmt.Errorf("%w: the first days count from the day the card's contract was made", family.ErrValidation)
 	case t.Fees.PenaltyDaily.IsNegative() || t.Fees.PenaltyDaily.GreaterThanOrEqual(decimal.NewFromInt(10)):
 		return fmt.Errorf("%w: the penalty is 0 to 9.9999 percent a day", family.ErrValidation)
+	case !rate(t.Fees.PenaltyYearly) || t.Fees.PenaltyYearly.IsPositive() && t.Fees.PenaltyDaily.IsPositive():
+		return fmt.Errorf("%w: the penalty is 0 to 999.9999 percent a year, or a day, not both", family.ErrValidation)
+	case t.Fees.PenaltyFromDay < 0 || t.Fees.PenaltyFromDay > 90:
+		return fmt.Errorf("%w: the penalty runs from a day of lateness 1 to 90", family.ErrValidation)
 	case !share(t.Cashback.BasePercent) || slices.ContainsFunc(t.Cashback.Categories, func(c CategoryPercent) bool { return !share(c.Percent) }):
 		return fmt.Errorf("%w: a cashback is 0 to 99.999 percent", family.ErrValidation)
 	case t.Installment.Validate() != nil:
@@ -419,10 +452,20 @@ type Status struct {
 	GraceOffByMinimum bool
 	ToRestore         int64
 	// CashThisPeriod is the cash taken out since the last statement, against
-	// the tariff's free part (Fees.CashFree).
-	CashThisPeriod int64
+	// the tariff's free part (Fees.CashFree); TransfersThisPeriod the money
+	// moved off the card otherwise, against Fees.TransferFree.
+	CashThisPeriod      int64
+	TransfersThisPeriod int64
+	// IntroLeft is what is left of the first days' free cash and transfers
+	// (Fees.IntroFree), until IntroUntil, its last day; zero time once they
+	// are over or with none.
+	IntroLeft  int64
+	IntroUntil time.Time
+	// YearlyFeeOn is the next statement the yearly fee comes with
+	// (Fees.Yearly); zero time with none or before the first spending.
+	YearlyFeeOn time.Time
 	// Penalty is roughly what the bank charges for the minimum missed so
-	// far, at Fees.PenaltyDaily.
+	// far, at Fees.PenaltyDaily or PenaltyYearly from PenaltyFromDay.
 	Penalty int64
 	// MinimumOverdue is the part of Minimum that is earlier minimums missed:
 	// the bank adds them to the next one, and they are due at once.
@@ -551,6 +594,7 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	// first, and the penalty it runs up while overdue; the charges the last
 	// statement showed, for ChargesInFull.
 	var charges, minimumDue, paidToward, overdue, overdueDays int64
+	var lateDays int
 	var minimumBy, minimumFrom, periodLostUntil time.Time
 	stated := false
 	first := today
@@ -653,15 +697,17 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			off, all, st.GraceOffSince, st.GraceOffByMinimum = false, false, time.Time{}, false
 			run = nil
 		}
-		// The penalty of the stretch overdue now; one repaid is the bank's
-		// charge by then, in the journal.
+		// The penalty of the stretch overdue now, from its PenaltyFromDay-th
+		// day; one repaid is the bank's charge by then, in the journal.
 		if overdue > 0 {
-			overdueDays += overdue
+			if lateDays++; lateDays >= t.Fees.PenaltyFromDay {
+				overdueDays += overdue
+			}
 		} else {
-			overdueDays = 0
+			overdueDays, lateDays = 0, 0
 		}
 	}
-	st.Penalty = percentOf(overdueDays, t.Fees.PenaltyDaily)
+	st.Penalty = t.Fees.penalty(overdueDays)
 	if !stated {
 		charges = owedOf(isCharge)
 	}
@@ -755,17 +801,25 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			continue
 		}
 		now := !op.OccurredOn.Before(st.LastStatement)
-		if now && kinds.Cash[op.ID] {
+		switch {
+		case now && kinds.Cash[op.ID]:
 			st.CashThisPeriod -= op.AmountMinor
+		case now && op.TransferGroupID != nil:
+			st.TransfersThisPeriod -= op.AmountMinor
 		}
 		if kinds.charge(op) {
 			chargedBefore, chargedNow = chargedBefore || !now, chargedNow || now
 		}
 	}
+	st.intro(t, rows, today)
+	yearlyLast, yearlyNext := st.yearly(t, rows, kinds)
 	st.cashback(t, rows, kinds)
 	var fee int64
 	if !chargedBefore && first.Before(st.LastStatement) {
 		fee = t.Fees.Monthly
+	}
+	if yearlyLast && !chargedBefore && !chargedNow {
+		fee += t.Fees.Yearly
 	}
 	st.MinimumOn = t.dueOn(st.LastStatement)
 	// Since the statement, payments go to the minimums missed first; the
@@ -790,6 +844,9 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		fee = 0
 		if !chargedNow {
 			fee = t.Fees.Monthly
+		}
+		if yearlyNext {
+			fee += t.Fees.Yearly
 		}
 		st.nextMinimum(t, st.Debt-instLeft(plans)-partsUnpaid+fee, owedOf(isCharge)+fee)
 		st.Minimum += nextParts
@@ -819,6 +876,49 @@ func instLeft(plans []*Installment) int64 {
 		sum += in.Left
 	}
 	return sum
+}
+
+// intro is what is left of the free cash and transfers of the card's first
+// days (Fees.IntroFree), while they last: all the money moved off the card
+// since the contract's day counts against it.
+func (st *Status) intro(t Terms, rows []operation.Operation, today time.Time) {
+	if t.Fees.IntroDays == 0 || t.OpenedOn == nil {
+		return
+	}
+	until := t.OpenedOn.AddDate(0, 0, t.Fees.IntroDays-1)
+	if today.After(until) {
+		return
+	}
+	var used int64
+	for _, op := range rows {
+		if op.TransferGroupID != nil && op.AmountMinor < 0 && !op.OccurredOn.Before(*t.OpenedOn) {
+			used -= op.AmountMinor
+		}
+	}
+	st.IntroLeft, st.IntroUntil = max(t.Fees.IntroFree-used, 0), until
+}
+
+// yearly finds the next statement the yearly fee comes with — the one after
+// the journal's first spending, and every twelfth after it — and says
+// whether the last statement and the next one are such.
+func (st *Status) yearly(t Terms, rows []operation.Operation, kinds Kinds) (last, next bool) {
+	if t.Fees.Yearly == 0 {
+		return false, false
+	}
+	i := slices.IndexFunc(rows, func(op operation.Operation) bool { return op.AmountMinor < 0 && !kinds.charge(op) })
+	if i < 0 {
+		return false, false
+	}
+	_, firstFee := t.period(rows[i].OccurredOn)
+	months := func(s time.Time) int {
+		return (s.Year()-firstFee.Year())*12 + int(s.Month()-firstFee.Month())
+	}
+	if n := months(st.LastStatement); n >= 0 && n%12 == 0 {
+		last = true
+	}
+	n := max(months(st.NextStatement), 0)
+	st.YearlyFeeOn = t.statementAfter(firstFee, (n+11)/12*12)
+	return last, st.YearlyFeeOn.Equal(st.NextStatement)
 }
 
 // cashback is what this period's purchases bring by the card's rules: each

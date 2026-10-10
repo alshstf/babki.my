@@ -7,12 +7,14 @@ versions:
   - contracts_from: null
     contracts_to: null
     revision: 2026-08-31
-    checked_on: 2026-10-10
+    checked_on: 2026-10-11
     sources:
       - https://www.vtb.ru/personal/karty/kreditnye/vozmozhnosti/
+      - https://www.vtb.ru/media-files/vtb.ru/sitepages/personal/karty/kreditnye/vozmozhnosti/kk_tarif_31.08.2026.pdf
     notes: >-
-      Ставка — от 29,9 до 69,9 % годовых, у каждого своя: укажите свою. Снятие и переводы до 50 000 ₽
-      в первые 30 дней без комиссии. Рассрочка на покупку — 4 % в месяц от суммы.
+      Ставка — от 29,9 до 69,9 % годовых, у каждого своя: укажите свою. Снятие и переводы без комиссии
+      до 50 000 ₽ в первые 30 дней — банк не пишет, от какого дня; программа считает от дня договора:
+      укажите его. Рассрочка на покупку — 4 % в месяц от суммы.
     terms:
       statement_day: 1
       grace_kind: running
@@ -32,3 +34,5 @@ versions:
         cash_fixed_minor: 59000
         transfer_percent: "5.9"
         transfer_fixed_minor: 59000
+        intro_days: 30
+        intro_free_minor: 5000000

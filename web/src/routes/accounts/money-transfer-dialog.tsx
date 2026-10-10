@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { MAX_AMOUNT_MINOR, amountRefusal, formatMinor, formatMinorCompact, parseToMinor } from "@/lib/money";
-import { localToday } from "@/lib/dates";
+import { formatDate, localToday } from "@/lib/dates";
 import { isConflict, useCreateMoneyTransfer } from "@/api/operations";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
@@ -74,15 +74,22 @@ export function MoneyTransferDialog({
     if (account.type !== "credit_card" || !c) return null;
     const amountNow = amountValid && parsed !== null ? parsed : 0;
     const lines = [t("moneyTransfer.cardNoGrace")];
-    if (target?.type === "cash") {
-      const freeLeft = Math.max(c.terms.fees.cash_free_minor - c.status.cash_this_period_minor, 0);
-      if (c.terms.fees.cash_free_minor > 0) lines.push(t("moneyTransfer.cashFreeLeft", { amount: formatMinor(freeLeft, account.currency) }));
-      const fee = cashFee(c.terms.fees, amountNow, c.status.cash_this_period_minor);
-      if (fee > 0) lines.push(t("moneyTransfer.cardFee", { amount: formatMinor(fee, account.currency) }));
-    } else {
-      const fee = transferFee(c.terms.fees, amountNow);
-      if (fee > 0) lines.push(t("moneyTransfer.cardFee", { amount: formatMinor(fee, account.currency) }));
+    const { fees } = c.terms;
+    const intro = c.status.intro_until ? c.status.intro_left_minor : 0;
+    if (c.status.intro_until) {
+      lines.push(t("moneyTransfer.introLeft", { amount: formatMinor(intro, account.currency), date: formatDate(c.status.intro_until) }));
     }
+    let fee: number;
+    if (target?.type === "cash") {
+      const freeLeft = Math.max(fees.cash_free_minor - c.status.cash_this_period_minor, 0);
+      if (fees.cash_free_minor > 0) lines.push(t("moneyTransfer.cashFreeLeft", { amount: formatMinor(freeLeft, account.currency) }));
+      fee = cashFee(fees, amountNow, c.status.cash_this_period_minor, intro);
+    } else {
+      const freeLeft = Math.max(fees.transfer_free_minor - c.status.transfers_this_period_minor, 0);
+      if (fees.transfer_free_minor > 0) lines.push(t("moneyTransfer.transferFreeLeft", { amount: formatMinor(freeLeft, account.currency) }));
+      fee = transferFee(fees, amountNow, c.status.transfers_this_period_minor, intro);
+    }
+    if (fee > 0) lines.push(t("moneyTransfer.cardFee", { amount: formatMinor(fee, account.currency) }));
     return lines.join(" ");
   })();
 

@@ -118,9 +118,11 @@ describe("MoneyTransferDialog off a credit card", () => {
   const card: AccountWithBalance = { ...source, id: "card-1", name: "Кредитка", type: "credit_card" };
   const cash: AccountWithBalance = { ...source, id: "cash-1", name: "Кошелёк", type: "cash" };
   const fees = {
-    monthly_minor: 0, cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00,
-    transfer_percent: "4.9", transfer_fixed_minor: 390_00, penalty_daily_percent: "0.1",
+    monthly_minor: 0, yearly_minor: 0, cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00,
+    transfer_free_minor: 0, transfer_percent: "4.9", transfer_fixed_minor: 390_00, intro_days: 0, intro_free_minor: 0,
+    penalty_daily_percent: "0.1", penalty_yearly_percent: "0", penalty_from_day: 0,
   };
+  const status = { cash_this_period_minor: 80_000_00, transfers_this_period_minor: 0, intro_left_minor: 0, intro_until: null };
 
   it("tells the fee before the money leaves", async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
@@ -128,7 +130,7 @@ describe("MoneyTransferDialog off a credit card", () => {
       const path = new URL(url, "http://localhost").pathname;
       const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
       if (path.endsWith("/api/v1/accounts")) return json([card, cash, source]);
-      if (path.endsWith("/card-1/credit-card")) return json({ terms: { fees }, status: { cash_this_period_minor: 80_000_00 } });
+      if (path.endsWith("/card-1/credit-card")) return json({ terms: { fees }, status });
       return new Response("null", { status: 404 });
     });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -147,5 +149,40 @@ describe("MoneyTransferDialog off a credit card", () => {
     await pick("Т-Банк");
     await waitFor(() => expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("≈ 1 860,00 ₽"));
     expect(screen.getByTestId("card-transfer-warning").textContent).toContain("льготы нет");
+  });
+
+  // Т-Банк's free transfers of the month and ВТБ's first days (#462).
+  it("counts the free transfers and the first days", async () => {
+    const tbank = { ...fees, transfer_free_minor: 80_000_00 };
+    let st: Record<string, unknown> = { ...status, transfers_this_period_minor: 60_000_00 };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const path = new URL(url, "http://localhost").pathname;
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (path.endsWith("/api/v1/accounts")) return json([card, cash, source]);
+      if (path.endsWith("/card-1/credit-card")) return json({ terms: { fees: tbank }, status: st });
+      return new Response("null", { status: 404 });
+    });
+    const norm = (s: string | null) => (s ?? "").replace(/\s/g, " ");
+    const open = async () => {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={qc}>
+          <MoneyTransferDialog open onOpenChange={vi.fn()} account={card} />
+        </QueryClientProvider>,
+      );
+      await pick("Т-Банк");
+      fireEvent.change(screen.getByLabelText("Сумма, RUB"), { target: { value: "30000" } });
+    };
+    await open();
+    await waitFor(() => expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("перевести ещё 20 000,00 ₽"));
+    // 10 000 past the free part: 490 and 390.
+    expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("≈ 880,00 ₽");
+    cleanup();
+
+    st = { ...status, transfers_this_period_minor: 60_000_00, intro_left_minor: 50_000_00, intro_until: "2026-09-30" };
+    await open();
+    await waitFor(() => expect(norm(screen.getByTestId("card-transfer-warning").textContent)).toContain("До 30.09.2026 снятие и переводы без комиссии — ещё на 50 000,00 ₽."));
+    expect(screen.getByTestId("card-transfer-warning").textContent).not.toContain("комиссию ≈");
   });
 });

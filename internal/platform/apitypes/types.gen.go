@@ -2142,15 +2142,33 @@ type CreditCardFees struct {
 	// CashPercent The fee for cash past the free part: percent of it (decimal, 0 to 99.999)
 	CashPercent string `json:"cash_percent"`
 
+	// IntroDays For so many days from the contract's day (opened_on, then required) cash and transfers are free up to intro_free_minor in all (ВТБ: 30 days); 0 for none
+	IntroDays int `json:"intro_days"`
+
+	// IntroFreeMinor …the amount; set both or neither
+	IntroFreeMinor int64 `json:"intro_free_minor"`
+
 	// MonthlyMinor The monthly fee, charged at a period's end; 0 when there is none or it is waived
 	MonthlyMinor int64 `json:"monthly_minor"`
 
 	// PenaltyDailyPercent The penalty for a payment missed: percent of it a day (decimal, 0 to 9.9999)
 	PenaltyDailyPercent string `json:"penalty_daily_percent"`
-	TransferFixedMinor  int64  `json:"transfer_fixed_minor"`
 
-	// TransferPercent The fee for money moved off the card, percent of it (decimal)
+	// PenaltyFromDay The day of lateness the penalty runs from («Халва»: 6); 0 or 1 for the first
+	PenaltyFromDay int `json:"penalty_from_day"`
+
+	// PenaltyYearlyPercent …or percent of it a year (decimal, 0 to 999.9999; Т-Банк: 20); not both
+	PenaltyYearlyPercent string `json:"penalty_yearly_percent"`
+	TransferFixedMinor   int64  `json:"transfer_fixed_minor"`
+
+	// TransferFreeMinor Money a statement period moves off the card without a fee (Т-Банк: 80 000 ₽)
+	TransferFreeMinor int64 `json:"transfer_free_minor"`
+
+	// TransferPercent The fee for money moved off the card past the free part, percent of it (decimal)
 	TransferPercent string `json:"transfer_percent"`
+
+	// YearlyMinor The fee a year, charged with the statement after the card's first spending and every twelfth one after it (Т-Банк); 0 for none
+	YearlyMinor int64 `json:"yearly_minor"`
 }
 
 // CreditCardInstallment defines model for CreditCardInstallment.
@@ -2240,6 +2258,12 @@ type CreditCardStatus struct {
 	// InstallmentsDueMinor The installments' parts shown and not yet paid; in minimum_minor
 	InstallmentsDueMinor int64 `json:"installments_due_minor"`
 
+	// IntroLeftMinor What is left of the first days' free cash and transfers (fees.intro_free_minor); 0 once they are over
+	IntroLeftMinor int64 `json:"intro_left_minor"`
+
+	// IntroUntil The first days' last day, while they last; null otherwise
+	IntroUntil nullable.Nullable[string] `json:"intro_until"`
+
 	// LastStatement The latest statement day on or before today
 	LastStatement string           `json:"last_statement"`
 	Lost          []CreditCardLost `json:"lost"`
@@ -2262,11 +2286,17 @@ type CreditCardStatus struct {
 	// NonGraceMinor Money moved off the card, fees and interest charged still owed: interest from their day
 	NonGraceMinor int64 `json:"non_grace_minor"`
 
-	// PenaltyMinor Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed
+	// PenaltyMinor Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent or penalty_yearly_percent from penalty_from_day; 0 when none is missed
 	PenaltyMinor int64 `json:"penalty_minor"`
 
 	// ToRestoreMinor While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise
 	ToRestoreMinor int64 `json:"to_restore_minor"`
+
+	// TransfersThisPeriodMinor Money moved off the card otherwise since the last statement, against fees.transfer_free_minor
+	TransfersThisPeriodMinor int64 `json:"transfers_this_period_minor"`
+
+	// YearlyFeeOn The next statement the yearly fee comes with (fees.yearly_minor); null with none or before the first spending
+	YearlyFeeOn nullable.Nullable[string] `json:"yearly_fee_on"`
 }
 
 // CreditCardSummary defines model for CreditCardSummary.

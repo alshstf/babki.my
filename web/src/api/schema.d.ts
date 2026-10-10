@@ -2522,6 +2522,11 @@ export interface components {
             monthly_minor: number;
             /**
              * Format: int64
+             * @description The fee a year, charged with the statement after the card's first spending and every twelfth one after it (Т-Банк); 0 for none
+             */
+            yearly_minor: number;
+            /**
+             * Format: int64
              * @description Cash a statement period takes out without a fee
              */
             cash_free_minor: number;
@@ -2532,12 +2537,28 @@ export interface components {
              * @description …and a fixed part for each withdrawal past it
              */
             cash_fixed_minor: number;
-            /** @description The fee for money moved off the card, percent of it (decimal) */
+            /**
+             * Format: int64
+             * @description Money a statement period moves off the card without a fee (Т-Банк: 80 000 ₽)
+             */
+            transfer_free_minor: number;
+            /** @description The fee for money moved off the card past the free part, percent of it (decimal) */
             transfer_percent: string;
             /** Format: int64 */
             transfer_fixed_minor: number;
+            /** @description For so many days from the contract's day (opened_on, then required) cash and transfers are free up to intro_free_minor in all (ВТБ: 30 days); 0 for none */
+            intro_days: number;
+            /**
+             * Format: int64
+             * @description …the amount; set both or neither
+             */
+            intro_free_minor: number;
             /** @description The penalty for a payment missed: percent of it a day (decimal, 0 to 9.9999) */
             penalty_daily_percent: string;
+            /** @description …or percent of it a year (decimal, 0 to 999.9999; Т-Банк: 20); not both */
+            penalty_yearly_percent: string;
+            /** @description The day of lateness the penalty runs from («Халва»: 6); 0 or 1 for the first */
+            penalty_from_day: number;
         };
         CreditCardDue: {
             /** @description Date YYYY-MM-DD */
@@ -2614,7 +2635,21 @@ export interface components {
             cash_this_period_minor: number;
             /**
              * Format: int64
-             * @description Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed
+             * @description Money moved off the card otherwise since the last statement, against fees.transfer_free_minor
+             */
+            transfers_this_period_minor: number;
+            /**
+             * Format: int64
+             * @description What is left of the first days' free cash and transfers (fees.intro_free_minor); 0 once they are over
+             */
+            intro_left_minor: number;
+            /** @description The first days' last day, while they last; null otherwise */
+            intro_until: string | null;
+            /** @description The next statement the yearly fee comes with (fees.yearly_minor); null with none or before the first spending */
+            yearly_fee_on: string | null;
+            /**
+             * Format: int64
+             * @description Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent or penalty_yearly_percent from penalty_from_day; 0 when none is missed
              */
             penalty_minor: number;
             /**
