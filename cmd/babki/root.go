@@ -18,6 +18,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/background"
+	"babki.my/babki/internal/benchmark"
 	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
@@ -116,7 +117,9 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		metrics.Registry.MustRegister(background.NewSourcesCollector(r.pool))
 		srv.Mount("GET /metrics", metrics.Handler())
 	}
-	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
+	accHandler := account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM)
+	accHandler.Mount(srv)
+	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
 	structure.NewHandler(structure.NewService(accStore, positions, famStore, converter), famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))

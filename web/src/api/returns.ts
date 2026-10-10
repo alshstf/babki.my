@@ -51,3 +51,21 @@ export function useInstrumentReturn(instrumentId: string, from: string, to: stri
     },
   });
 }
+
+export type Benchmarks = components["schemas"]["Benchmarks"];
+
+// The family's return weighed against indices (GET /api/v1/return/benchmarks):
+// the same money put into each on the same days.
+export function useReturnBenchmarks(from: string, to: string, enabled = true) {
+  return useQuery({
+    queryKey: ["return", "benchmarks", from, to],
+    enabled,
+    queryFn: async (): Promise<Benchmarks> => {
+      const { data, error, response } = await api.GET("/api/v1/return/benchmarks", {
+        params: { query: { from, to } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}

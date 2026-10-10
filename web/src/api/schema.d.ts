@@ -108,6 +108,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/return/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's return of GET /return weighed against total-return indices (#401): for each, a model portfolio that put the same money into the index on the same days — the worth at `from`, every contribution and withdrawal — valued at `to`, and its money-weighted annual rate, in the base currency (an index in another currency at each day's rate). MCFTR and RGBITR from the exchange, SP500TR (the S&P 500 with dividends, in dollars) from the foreign feed. `complete` is false when the index has no close within a week of a day it needed one, or when the family took out more than the model would have held (the model would owe the index); the end and the rate are then null. */
+        get: operations["getReturnBenchmarks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/payouts/received": {
         parameters: {
             query?: never;
@@ -2040,6 +2057,25 @@ export interface components {
              */
             in_base_minor: number | null;
         };
+        Benchmark: {
+            /** @enum {string} */
+            code: "MCFTR" | "RGBITR" | "SP500TR";
+            index_currency: string;
+            complete: boolean;
+            /**
+             * Format: int64
+             * @description What the model portfolio would be worth at `to`, in the base currency
+             */
+            end_minor: number | null;
+            /** @description Its money-weighted annual rate, a fraction (decimal) */
+            annual_rate: string | null;
+        };
+        Benchmarks: {
+            currency: string;
+            from: string;
+            to: string;
+            benchmarks: components["schemas"]["Benchmark"][];
+        };
         PayoutCheck: {
             /** @description Date YYYY-MM-DD the money was due */
             on: string;
@@ -2567,7 +2603,7 @@ export interface components {
             started_at: string;
         };
         DataSource: {
-            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices, marketdata.refresh_bond_schedules */
+            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices, marketdata.refresh_bond_schedules, marketdata.refresh_indexes */
             kind: string;
             /** @description How often it runs */
             every_seconds: number;
@@ -3964,6 +4000,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PayoutsForecast"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getReturnBenchmarks: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The benchmarks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Benchmarks"];
                 };
             };
             400: components["responses"]["Error"];

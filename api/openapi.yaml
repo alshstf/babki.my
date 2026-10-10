@@ -181,6 +181,29 @@ paths:
               schema: { $ref: "#/components/schemas/PayoutsForecast" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/return/benchmarks:
+    get:
+      tags: [accounts]
+      operationId: getReturnBenchmarks
+      description: >-
+        The family's return of GET /return weighed against total-return indices (#401): for each, a model
+        portfolio that put the same money into the index on the same days — the worth at `from`, every
+        contribution and withdrawal — valued at `to`, and its money-weighted annual rate, in the base currency
+        (an index in another currency at each day's rate). MCFTR and RGBITR from the exchange, SP500TR (the
+        S&P 500 with dividends, in dollars) from the foreign feed. `complete` is false when the index has no
+        close within a week of a day it needed one, or when the family took out more than the model would
+        have held (the model would owe the index); the end and the rate are then null.
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string } }
+        - { name: to, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The benchmarks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Benchmarks" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/payouts/received:
     get:
       tags: [payouts]
@@ -2836,6 +2859,23 @@ components:
         amount_minor: { type: integer, format: int64, nullable: true, description: "per_unit × quantity in minor units of `currency`, before tax" }
         currency: { type: string }
         in_base_minor: { type: integer, format: int64, nullable: true, description: "amount_minor in the base currency at today's rate; null without an amount or a rate" }
+    Benchmark:
+      type: object
+      required: [code, index_currency, complete, end_minor, annual_rate]
+      properties:
+        code: { type: string, enum: [MCFTR, RGBITR, SP500TR] }
+        index_currency: { type: string }
+        complete: { type: boolean }
+        end_minor: { type: integer, format: int64, nullable: true, description: "What the model portfolio would be worth at `to`, in the base currency" }
+        annual_rate: { type: string, nullable: true, description: "Its money-weighted annual rate, a fraction (decimal)" }
+    Benchmarks:
+      type: object
+      required: [currency, from, to, benchmarks]
+      properties:
+        currency: { type: string }
+        from: { type: string }
+        to: { type: string }
+        benchmarks: { type: array, items: { $ref: "#/components/schemas/Benchmark" } }
     PayoutCheck:
       type: object
       required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, status, got_minor, got_currency, got_on]
@@ -3213,7 +3253,7 @@ components:
       type: object
       required: [kind, every_seconds, last_success_at, last_failure_at, last_error, stale]
       properties:
-        kind: { type: string, description: "The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices, marketdata.refresh_bond_schedules" }
+        kind: { type: string, description: "The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices, marketdata.refresh_bond_schedules, marketdata.refresh_indexes" }
         every_seconds: { type: integer, description: "How often it runs" }
         last_success_at: { type: string, format: date-time, nullable: true }
         last_failure_at: { type: string, format: date-time, nullable: true }
