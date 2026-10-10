@@ -95,9 +95,18 @@ func (f categorySet) of(t Terms) Kinds {
 	for _, c := range t.Cashback.Categories {
 		k.Earns[c.CategoryID] = c.Percent
 	}
+	k.Graces = map[uuid.UUID]int{}
+	for _, c := range t.GraceCategories {
+		k.Graces[c.CategoryID] = c.Periods
+	}
 	for child, parent := range f.parent {
 		if k.Transfers[parent] {
 			k.Transfers[child] = true
+		}
+		if n, ok := k.Graces[parent]; ok {
+			if _, own := k.Graces[child]; !own {
+				k.Graces[child] = n
+			}
 		}
 		// A subcategory's own percent stands over its parent's.
 		if pct, ok := k.Earns[parent]; ok {
@@ -123,6 +132,26 @@ func (s *Service) cashbackCategories(ctx context.Context, spaceID uuid.UUID, in 
 		return nil, err
 	}
 	out := make([]CategoryPercent, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, last[id])
+	}
+	return out, nil
+}
+
+// graceCategories checks that the categories are the family's spending
+// ones; a category named twice keeps its last number. Nil comes back empty.
+func (s *Service) graceCategories(ctx context.Context, spaceID uuid.UUID, in []CategoryPeriods) ([]CategoryPeriods, error) {
+	ids := make([]uuid.UUID, 0, len(in))
+	last := map[uuid.UUID]CategoryPeriods{}
+	for _, c := range in {
+		ids = append(ids, c.CategoryID)
+		last[c.CategoryID] = c
+	}
+	ids, err := s.spendingCategories(ctx, spaceID, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CategoryPeriods, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, last[id])
 	}
@@ -166,7 +195,8 @@ const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, 
 	cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points, cashback_credit_days,
 	grace_run_from, pay_day, min_round_up_minor, installment_months, installment_fee_percent, installment_fee_minor,
 	missed_minimum_period, catalog_product, catalog_contracts_from, catalog_revision, yearly_fee_minor,
-	transfer_free_minor, intro_free_days, intro_free_minor, penalty_yearly_percent, penalty_from_day`
+	transfer_free_minor, intro_free_days, intro_free_minor, penalty_yearly_percent, penalty_from_day, grace_moves,
+	grace_periods, grace_categories, grace_to_month_end`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
@@ -179,7 +209,8 @@ func scan(row pgx.Row) (Terms, error) {
 		&t.Cashback.BasePercent, &t.Cashback.Categories, &t.Cashback.MonthlyCap, &t.Cashback.Points, &t.Cashback.CreditDays,
 		&t.RunFrom, &t.PayDay, &t.MinRoundUp, &t.Installment.Months, &t.Installment.MonthlyFeePercent, &t.Installment.Fee,
 		&t.MissedMinimumPeriod, &catalogProduct, &catalogFrom, &catalogRevision, &t.Fees.Yearly,
-		&t.Fees.TransferFree, &t.Fees.IntroDays, &t.Fees.IntroFree, &t.Fees.PenaltyYearly, &t.Fees.PenaltyFromDay)
+		&t.Fees.TransferFree, &t.Fees.IntroDays, &t.Fees.IntroFree, &t.Fees.PenaltyYearly, &t.Fees.PenaltyFromDay,
+		&t.GraceMoves, &t.GracePeriods, &t.GraceCategories, &t.GraceToMonthEnd)
 	if catalogProduct != nil && catalogRevision != nil {
 		t.Catalog = &CatalogRef{Product: *catalogProduct, ContractsFrom: catalogFrom, Revision: *catalogRevision}
 	}
@@ -233,6 +264,9 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 	if t.TransferCategories, err = s.spendingCategories(ctx, spaceID, t.TransferCategories); err != nil {
 		return Terms{}, err
 	}
+	if t.GraceCategories, err = s.graceCategories(ctx, spaceID, t.GraceCategories); err != nil {
+		return Terms{}, err
+	}
 	if t.Cashback.Categories, err = s.cashbackCategories(ctx, spaceID, t.Cashback.Categories); err != nil {
 		return Terms{}, err
 	}
@@ -249,10 +283,11 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			cashback_credit_days, grace_run_from, pay_day, min_round_up_minor, installment_months,
 			installment_fee_percent, installment_fee_minor, missed_minimum_period, catalog_product,
 			catalog_contracts_from, catalog_revision, yearly_fee_minor, transfer_free_minor, intro_free_days,
-			intro_free_minor, penalty_yearly_percent, penalty_from_day)
+			intro_free_minor, penalty_yearly_percent, penalty_from_day, grace_moves, grace_periods, grace_categories,
+			grace_to_month_end)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
 			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42,
-			$43, $44, $45, $46)
+			$43, $44, $45, $46, $47, $48, $49, $50)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
@@ -277,6 +312,8 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			yearly_fee_minor = EXCLUDED.yearly_fee_minor, transfer_free_minor = EXCLUDED.transfer_free_minor,
 			intro_free_days = EXCLUDED.intro_free_days, intro_free_minor = EXCLUDED.intro_free_minor,
 			penalty_yearly_percent = EXCLUDED.penalty_yearly_percent, penalty_from_day = EXCLUDED.penalty_from_day,
+			grace_moves = EXCLUDED.grace_moves, grace_periods = EXCLUDED.grace_periods,
+			grace_categories = EXCLUDED.grace_categories, grace_to_month_end = EXCLUDED.grace_to_month_end,
 			updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
 		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
@@ -285,7 +322,8 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 		t.Cashback.BasePercent, t.Cashback.Categories, t.Cashback.MonthlyCap, t.Cashback.Points, t.Cashback.CreditDays,
 		t.RunFrom, t.PayDay, t.MinRoundUp, t.Installment.Months, t.Installment.MonthlyFeePercent, t.Installment.Fee,
 		t.MissedMinimumPeriod, catalogProduct, catalogFrom, catalogRevision, t.Fees.Yearly,
-		t.Fees.TransferFree, t.Fees.IntroDays, t.Fees.IntroFree, t.Fees.PenaltyYearly, t.Fees.PenaltyFromDay)
+		t.Fees.TransferFree, t.Fees.IntroDays, t.Fees.IntroFree, t.Fees.PenaltyYearly, t.Fees.PenaltyFromDay,
+		t.GraceMoves, t.GracePeriods, t.GraceCategories, t.GraceToMonthEnd)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}

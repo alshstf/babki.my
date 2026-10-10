@@ -115,8 +115,21 @@ type Terms struct {
 	// transfers, not purchases — no grace, interest from the day (decision
 	// Р-29); their subcategories with them.
 	TransferCategories []uuid.UUID
-	Fees               Fees
-	Cashback           Cashback
+	// GraceMoves: the cash taken out and the money moved off the card have
+	// the grace too, as purchases do (Альфа's «без % на всё»).
+	GraceMoves bool
+	// GracePeriods: a FromStatement grace's purchases are paid by the
+	// payment day of the statement so many periods after the one closing
+	// their period (Ozon: 1, «до 80 дней»); GraceCategories give a
+	// category's purchases their own number, its subcategories with it
+	// (Ozon's «до 140 дней»: 3).
+	GracePeriods    int
+	GraceCategories []CategoryPeriods
+	// GraceToMonthEnd: a long or running grace's last day moves to the last
+	// day of its month (Альфа, contracts from 10.08.2026).
+	GraceToMonthEnd bool
+	Fees            Fees
+	Cashback        Cashback
 	// Installment: every purchase of the card in installments when Months
 	// is above 0 — a card of installments («Халва», decision Р-33).
 	Installment Plan
@@ -185,6 +198,12 @@ type Cashback struct {
 	MonthlyCap  int64
 	Points      bool
 	CreditDays  int
+}
+
+// CategoryPeriods is a category's own GracePeriods.
+type CategoryPeriods struct {
+	CategoryID uuid.UUID `json:"category_id"`
+	Periods    int       `json:"periods"`
 }
 
 // CategoryPercent is a category's cashback percent.
@@ -282,6 +301,12 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: a window is 1 to 12 periods of purchases", family.ErrValidation)
 	case t.GraceKind == Windows && (t.GraceMonths < t.WindowMonths || t.GraceMonths > 36):
 		return fmt.Errorf("%w: a window's purchases are paid by the end of its own last period or a later one, at most the 36th", family.ErrValidation)
+	case t.GracePeriods < 0 || t.GracePeriods > 12 || slices.ContainsFunc(t.GraceCategories, func(c CategoryPeriods) bool { return c.Periods < 0 || c.Periods > 12 }):
+		return fmt.Errorf("%w: purchases are paid 0 to 12 statements later", family.ErrValidation)
+	case t.GraceKind != FromStatement && (t.GracePeriods > 0 || len(t.GraceCategories) > 0):
+		return fmt.Errorf("%w: statements later is a grace from the statement's", family.ErrValidation)
+	case t.GraceToMonthEnd && t.GraceKind != Long && t.GraceKind != Running:
+		return fmt.Errorf("%w: a grace to its month's end is a long one or one from the first purchase", family.ErrValidation)
 	case t.GraceKind == Windows && t.OpenedOn == nil:
 		return fmt.Errorf("%w: windows count from the day the card's contract was made", family.ErrValidation)
 	case t.MinPercent.IsNegative() || t.MinPercent.GreaterThan(hundred):
@@ -387,17 +412,44 @@ func (t Terms) group(d time.Time) (from, to time.Time) {
 	return t.period(d)
 }
 
-// deadline is the last day a purchase on day d is free of interest.
-func (t Terms) deadline(d time.Time) time.Time {
+// deadline is the last day a purchase on day d is free of interest; periods
+// are its statements later (GracePeriods).
+func (t Terms) deadline(d time.Time, periods int) time.Time {
 	start, end := t.period(d)
 	switch t.GraceKind {
 	case Long:
-		return start.AddDate(0, 0, t.GraceDays-1)
+		return t.toMonthEnd(start.AddDate(0, 0, t.GraceDays-1))
 	case Windows:
 		start, _ = t.window(d)
 		return t.statementAfter(start, t.GraceMonths).AddDate(0, 0, -1)
 	}
-	return t.dueOn(end)
+	return t.dueOn(t.statementAfter(end, periods))
+}
+
+// toMonthEnd is a grace's last day, moved to its month's last with
+// GraceToMonthEnd.
+func (t Terms) toMonthEnd(d time.Time) time.Time {
+	if !t.GraceToMonthEnd {
+		return d
+	}
+	return time.Date(d.Year(), d.Month()+1, 0, 0, 0, 0, 0, time.UTC)
+}
+
+// periods is a purchase's statements later: its category's own, or the
+// card's.
+func (t Terms) periods(op operation.Operation, kinds Kinds) int {
+	if op.CategoryID != nil {
+		if n, ok := kinds.Graces[*op.CategoryID]; ok {
+			return n
+		}
+	}
+	return t.GracePeriods
+}
+
+// movedOff says whether a journal row is money moved off the card: cash taken
+// out or a transfer to another account.
+func movedOff(op operation.Operation, kinds Kinds) bool {
+	return op.Type == operation.TypeWithdrawal && op.TransferGroupID != nil && op.AmountMinor < 0 && !kinds.charge(op)
 }
 
 // Due is an amount to pay by a day.
@@ -673,15 +725,15 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 				continue
 			}
 			if owed -= take; owed > 0 {
-				it := &item{on: day, left: owed, grace: purchase(op, kinds), charge: kinds.charge(op)}
+				it := &item{on: day, left: owed, grace: purchase(op, kinds) || t.GraceMoves && movedOff(op, kinds), charge: kinds.charge(op)}
 				it.from, it.to = t.group(day)
 				if it.grace {
-					it.deadline = t.deadline(day)
+					it.deadline = t.deadline(day, t.periods(op, kinds))
 					if t.GraceKind == Running && !off {
 						if run == nil {
 							start := t.RunFrom.runStart(day)
 							end := start.AddDate(0, 0, t.GraceDays)
-							run = &item{from: start, to: end, deadline: end.AddDate(0, 0, -1)}
+							run = &item{from: start, to: end, deadline: t.toMonthEnd(end.AddDate(0, 0, -1))}
 						}
 						it.from, it.to, it.deadline = run.from, run.to, run.deadline
 					}
@@ -745,7 +797,8 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		return v
 	}
 	grace := map[time.Time]int64{}
-	lost := map[time.Time]*Lost{}
+	type lostKey struct{ from, deadline time.Time }
+	lost := map[lostKey]*Lost{}
 	for _, it := range items {
 		if it.left == 0 {
 			continue
@@ -759,10 +812,11 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			grace[it.deadline] += it.left
 			continue
 		}
-		l, ok := lost[it.from]
+		key := lostKey{it.from, it.deadline}
+		l, ok := lost[key]
 		if !ok {
 			l = &Lost{From: it.from, To: it.to.AddDate(0, 0, -1), Deadline: it.deadline, Early: true}
-			lost[it.from] = l
+			lost[key] = l
 		}
 		l.Early = l.Early && it.early
 		l.Amount += it.left
@@ -775,7 +829,12 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	for _, l := range lost {
 		st.Lost = append(st.Lost, *l)
 	}
-	slices.SortFunc(st.Lost, func(a, b Lost) int { return a.From.Compare(b.From) })
+	slices.SortFunc(st.Lost, func(a, b Lost) int {
+		if c := a.From.Compare(b.From); c != 0 {
+			return c
+		}
+		return a.Deadline.Compare(b.Deadline)
+	})
 
 	// The minimum of the last statement: a share of the debt it showed, not
 	// less than the floor nor more than the debt, less what was paid since.
@@ -1025,6 +1084,9 @@ type Kinds struct {
 	// Installments are the card's purchases in installments by their row,
 	// over Terms.Installment.
 	Installments map[uuid.UUID]Plan
+	// Graces are the card's own statements later by category, its
+	// subcategories with it (Terms.GraceCategories).
+	Graces map[uuid.UUID]int
 }
 
 func (k Kinds) cashback(op operation.Operation) bool {

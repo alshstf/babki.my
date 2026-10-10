@@ -73,7 +73,7 @@ export function MoneyTransferDialog({
     const c = card.data;
     if (account.type !== "credit_card" || !c) return null;
     const amountNow = amountValid && parsed !== null ? parsed : 0;
-    const lines = [t("moneyTransfer.cardNoGrace")];
+    const lines = [c.terms.grace_moves ? t("moneyTransfer.cardInGrace") : t("moneyTransfer.cardNoGrace")];
     const { fees } = c.terms;
     const intro = c.status.intro_until ? c.status.intro_left_minor : 0;
     if (c.status.intro_until) {

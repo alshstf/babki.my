@@ -2171,6 +2171,13 @@ type CreditCardFees struct {
 	YearlyMinor int64 `json:"yearly_minor"`
 }
 
+// CreditCardGraceCategory defines model for CreditCardGraceCategory.
+type CreditCardGraceCategory struct {
+	// CategoryId One of the family's spending categories; 400 otherwise
+	CategoryId openapi_types.UUID `json:"category_id"`
+	Periods    int                `json:"periods"`
+}
+
 // CreditCardInstallment defines model for CreditCardInstallment.
 type CreditCardInstallment struct {
 	// AmountMinor The sum in installments
@@ -2328,6 +2335,9 @@ type CreditCardTerms struct {
 	// GraceAllLost A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is
 	GraceAllLost bool `json:"grace_all_lost"`
 
+	// GraceCategories For grace_kind statement: spending categories whose purchases have their own grace_periods, subcategories with them (Ozon «до 140 дней»: 3). 400 for an id that is not a spending category of the family
+	GraceCategories []CreditCardGraceCategory `json:"grace_categories"`
+
 	// GraceDays For grace_kind long: the days a period's purchases stay free from the period's start; for running: the grace's length; 0 otherwise
 	GraceDays int `json:"grace_days"`
 
@@ -2337,8 +2347,17 @@ type CreditCardTerms struct {
 	// GraceMonths For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise
 	GraceMonths int `json:"grace_months"`
 
+	// GraceMoves The cash taken out and the money moved off the card have the grace too, as purchases do (Альфа «без % на всё»)
+	GraceMoves bool `json:"grace_moves"`
+
+	// GracePeriods For grace_kind statement: a period's purchases are paid by the payment day of the statement so many periods after the one closing it (Ozon: 1, «до 80 дней»); 0 otherwise
+	GracePeriods int `json:"grace_periods"`
+
 	// GraceRunFrom For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise
 	GraceRunFrom CreditCardTermsGraceRunFrom `json:"grace_run_from"`
+
+	// GraceToMonthEnd For grace_kind long and running: the grace's last day moves to the last day of its month (Альфа, contracts from 10.08.2026)
+	GraceToMonthEnd bool `json:"grace_to_month_end"`
 
 	// Installment Every purchase of the card in installments when months is above 0 — a card of installments («Халва»); 0 months otherwise
 	Installment CreditCardInstallmentPlan `json:"installment"`
@@ -2356,7 +2375,7 @@ type CreditCardTerms struct {
 	// MissedMinimumPeriod A minimum missed takes the grace off the purchases of the period it was due in — those its next statement shows — and no others (Т-Банк)
 	MissedMinimumPeriod bool `json:"missed_minimum_period"`
 
-	// OpenedOn For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise
+	// OpenedOn The day the card's contract was made (YYYY-MM-DD): for grace_kind windows, whose period the windows count from, and for fees.intro_days, the first days'; null otherwise
 	OpenedOn nullable.Nullable[string] `json:"opened_on"`
 
 	// OwnRate Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named
