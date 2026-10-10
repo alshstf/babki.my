@@ -3261,8 +3261,10 @@ components:
         stale: { type: boolean }
     PeriodReturn:
       type: object
-      required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete]
+      required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete, time_weighted_rate, time_weighted_period]
       properties:
+        time_weighted_rate: { type: string, nullable: true, description: "Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from" }
+        time_weighted_period: { type: string, nullable: true, description: "The same over the period, not compounded to a year" }
         currency: { type: string, description: "The space's base currency" }
         from: { type: string }
         to: { type: string }
