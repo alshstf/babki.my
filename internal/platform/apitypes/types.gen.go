@@ -739,6 +739,30 @@ func (e RealizedGap) Valid() bool {
 	}
 }
 
+// Defines values for RecurringPaymentCadence.
+const (
+	Monthly   RecurringPaymentCadence = "monthly"
+	Quarterly RecurringPaymentCadence = "quarterly"
+	Weekly    RecurringPaymentCadence = "weekly"
+	Yearly    RecurringPaymentCadence = "yearly"
+)
+
+// Valid indicates whether the value is a known member of the RecurringPaymentCadence enum.
+func (e RecurringPaymentCadence) Valid() bool {
+	switch e {
+	case Monthly:
+		return true
+	case Quarterly:
+		return true
+	case Weekly:
+		return true
+	case Yearly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Role.
 const (
 	RoleEditor Role = "editor"
@@ -2553,6 +2577,38 @@ type RealizedTotal struct {
 	// UnknownCostPositions How many positions sold shares that arrived with no purchase price and are counted as bought for nothing (Position.has_unknown_cost): the whole of what they sold for is in this result as profit, in every currency, so it is HIGHER than the truth by whatever was really paid for them. 0 when every sale knew its cost.
 	UnknownCostPositions int `json:"unknown_cost_positions"`
 }
+
+// RecurringPayment defines model for RecurringPayment.
+type RecurringPayment struct {
+	// AccountId The account of the latest payment
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor The usual amount, signed as the journal signs it: negative going out
+	AmountMinor int64                   `json:"amount_minor"`
+	Cadence     RecurringPaymentCadence `json:"cadence"`
+
+	// CategoryId The latest payment's category
+	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id"`
+
+	// Count How many payments the pattern rests on
+	Count    int    `json:"count"`
+	Currency string `json:"currency"`
+
+	// LastOn Date YYYY-MM-DD of the latest payment
+	LastOn string `json:"last_on"`
+
+	// Name The counterparty, or the note, as last written, without trailing numbers
+	Name string `json:"name"`
+
+	// NextOn Date YYYY-MM-DD the next one is due
+	NextOn string `json:"next_on"`
+
+	// Overdue Its day has passed without it — late, or not entered yet
+	Overdue bool `json:"overdue"`
+}
+
+// RecurringPaymentCadence defines model for RecurringPayment.Cadence.
+type RecurringPaymentCadence string
 
 // ReorderCategoryRulesRequest defines model for ReorderCategoryRulesRequest.
 type ReorderCategoryRulesRequest struct {

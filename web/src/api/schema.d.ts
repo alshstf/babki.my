@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recurring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The regular payments the journals of the family's everyday accounts show: money going to or coming from one counterparty (or, without one, one note) at a steady pace — weekly, monthly, quarterly, yearly — and a steady amount, still going today. Trailing words with digits (a shop's number, a card's tail) do not split a payee. The soonest due first; a payment whose day has passed within the slack its pace allows is `overdue`. Nothing is stored: a payment that stops drops out. */
+        get: operations["listRecurring"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cashflow": {
         parameters: {
             query?: never;
@@ -1790,6 +1807,36 @@ export interface components {
             /** @description Currencies left out of the base figures for want of today's rate */
             missing_rates: string[];
         };
+        RecurringPayment: {
+            /** @description The counterparty, or the note, as last written, without trailing numbers */
+            name: string;
+            /** @enum {string} */
+            cadence: "weekly" | "monthly" | "quarterly" | "yearly";
+            /**
+             * Format: int64
+             * @description The usual amount, signed as the journal signs it: negative going out
+             */
+            amount_minor: number;
+            currency: string;
+            /**
+             * Format: uuid
+             * @description The account of the latest payment
+             */
+            account_id: string;
+            /**
+             * Format: uuid
+             * @description The latest payment's category
+             */
+            category_id: string | null;
+            /** @description Date YYYY-MM-DD of the latest payment */
+            last_on: string;
+            /** @description Date YYYY-MM-DD the next one is due */
+            next_on: string;
+            /** @description How many payments the pattern rests on */
+            count: number;
+            /** @description Its day has passed without it — late, or not entered yet */
+            overdue: boolean;
+        };
         CashflowFlow: {
             /**
              * Format: int64
@@ -3118,6 +3165,27 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    listRecurring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The regular payments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecurringPayment"][];
+                };
+            };
             401: components["responses"]["Error"];
         };
     };

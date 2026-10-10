@@ -29,6 +29,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 import { formatMinorCompact } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { PERIODS, periodDays, type Period } from "@/lib/periods";
+import { RecurringPayments } from "./recurring";
 
 const EVERYONE = "all";
 // Past this many months a table shows the totals only: the columns would not
@@ -137,6 +138,7 @@ export function MoneyPage() {
             categories={categories.data ?? []}
             testId="money-income"
           />
+          <RecurringPayments />
           <Investments report={data.investments} currency={data.base_currency} />
         </>
       )}

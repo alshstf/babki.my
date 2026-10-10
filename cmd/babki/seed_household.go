@@ -15,8 +15,9 @@ import (
 // seedHousehold gives the demo family two months of everyday money (household
 // stage 1): salaries in, rent, groceries, a taxi out, each under a default
 // category and with whom it was, on the card, the current account and the
-// cash. One spending is left unfiled, so the journal's «без категории» has
-// something to find.
+// cash — and July's fixed payments before them, so the regular ones show
+// three months running. One spending is left unfiled, so the journal's «без
+// категории» has something to find.
 func seedHousehold(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID,
 	accIDs map[string]uuid.UUID, d func(string) time.Time,
 ) error {
@@ -38,6 +39,11 @@ func seedHousehold(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID,
 	}
 	in, out := operation.TypeDeposit, operation.TypeWithdrawal
 	entries := []entry{
+		// July's fixed payments, so the regular ones show three months running.
+		{"Текущий Сбер", "2026-07-06", out, 45_000, "expense/Аренда", "ИП Смирнова"},
+		{"Текущий Сбер", "2026-07-10", out, 5_900, "expense/Коммунальные платежи", "ЕИРЦ"},
+		{"Текущий Сбер", "2026-07-12", out, 890, "expense/Связь и интернет", "МТС"},
+		{"Кредитка Альфа", "2026-07-30", out, 399, "expense/Подписки и сервисы", "Яндекс Плюс"},
 		{"Текущий Сбер", "2026-08-05", in, 180_000, "income/Зарплата", "ООО «Ромашка»"},
 		{"Текущий Сбер", "2026-08-06", out, 45_000, "expense/Аренда", "ИП Смирнова"},
 		{"Текущий Сбер", "2026-08-10", out, 6_200, "expense/Коммунальные платежи", "ЕИРЦ"},
