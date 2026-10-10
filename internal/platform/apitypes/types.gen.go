@@ -1122,18 +1122,21 @@ type AccountWithBalance struct {
 	// BalanceInBase Account's balance converted into the space's base currency at today's fx rate. Null when the account has no balance, its currency already equals base_currency (nothing to convert), or no fx rate could be resolved.
 	BalanceInBase nullable.Nullable[MoneyInBase] `json:"balance_in_base,omitempty"`
 
-	// CountedBy Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active brokerage account with at least one operation, not valued_by_balance — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere.
+	// CountedBy Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
 	CountedBy   AccountWithBalanceCountedBy `json:"counted_by"`
 	CreatedAt   time.Time                   `json:"created_at"`
 	Currency    string                      `json:"currency"`
 	Id          openapi_types.UUID          `json:"id"`
 	Institution string                      `json:"institution"`
 
-	// Journal What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE brokerage account with at least one operation, whichever figure counted_by names, so an account valued by its balance can still say what its journal comes to. Null on every other account.
-	Journal     nullable.Nullable[AccountJournal]     `json:"journal,omitempty"`
-	Name        string                                `json:"name"`
-	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
-	Status      AccountStatus                         `json:"status"`
+	// Journal What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE account with at least one operation, whichever figure counted_by names, so an account counted by its balance can still say what its journal comes to. Null on every other account.
+	Journal nullable.Nullable[AccountJournal] `json:"journal,omitempty"`
+
+	// KeptByOperations The family's choice for an everyday account — checking, savings, deposit, credit card, loan, cash: keep it by its operations, so the total counts its journal (the money its operations leave, a debt negative) reconciled with its latest balance mark, as a brokerage account is. False until somebody sets it (UpdateAccountRequest.kept_by_operations); then the account is counted by its balance, as before. Means nothing on a brokerage account.
+	KeptByOperations bool                                  `json:"kept_by_operations"`
+	Name             string                                `json:"name"`
+	OwnerUserId      nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
+	Status           AccountStatus                         `json:"status"`
 
 	// TradesAbroad Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it.
 	TradesAbroad bool        `json:"trades_abroad"`
@@ -1143,7 +1146,7 @@ type AccountWithBalance struct {
 	ValuedByBalance bool `json:"valued_by_balance"`
 }
 
-// AccountWithBalanceCountedBy Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active brokerage account with at least one operation, not valued_by_balance — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere.
+// AccountWithBalanceCountedBy Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
 type AccountWithBalanceCountedBy string
 
 // Arrival defines model for Arrival.
@@ -2980,6 +2983,9 @@ type TransferResponse struct {
 // UpdateAccountRequest defines model for UpdateAccountRequest.
 type UpdateAccountRequest struct {
 	Institution *string `json:"institution,omitempty"`
+
+	// KeptByOperations See AccountWithBalance.kept_by_operations. Omitted, it stays as it is.
+	KeptByOperations *bool `json:"kept_by_operations,omitempty"`
 
 	// Name Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states.
 	Name        *string                               `json:"name,omitempty"`

@@ -67,8 +67,12 @@ type Account struct {
 	// TradesAbroad is whether the account's broker trades on foreign exchanges,
 	// where a foreign share sells at its home exchange's price (decision Р-20).
 	TradesAbroad bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// KeptByOperations is the family's choice to keep an everyday account — not
+	// a brokerage one — by its journal rather than by balance marks (household
+	// stage 1; see Handler.valuations).
+	KeptByOperations bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type BalancePoint struct {
@@ -91,10 +95,11 @@ type CurrencyTotal struct {
 // Update is a partial account update; nil fields are unchanged. OwnerUserID
 // is a double pointer: nil leaves it, a pointer to nil makes it shared.
 type Update struct {
-	Name            *string
-	Institution     *string
-	OwnerUserID     **uuid.UUID
-	Status          *Status
-	ValuedByBalance *bool
-	TradesAbroad    *bool
+	Name             *string
+	Institution      *string
+	OwnerUserID      **uuid.UUID
+	Status           *Status
+	ValuedByBalance  *bool
+	TradesAbroad     *bool
+	KeptByOperations *bool
 }

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { formatMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import type { AccountWithBalance } from "@/api/accounts";
+import { isDebt } from "@/lib/account-kinds";
 
 type Journal = NonNullable<AccountWithBalance["journal"]>;
 
@@ -26,6 +27,9 @@ export function JournalNotes({
   const { t } = useTranslation();
   const rec = journal.reconciliation;
   const byJournal = account.counted_by === "journal";
+  // An everyday account is kept by its balance as a rule, not pinned to it;
+  // a credit card or a loan below zero is a debt, not a missing deposit.
+  const everyday = account.type !== "brokerage";
   const balance = rec ? formatMinor(rec.balance_in_base_minor, journal.currency) : "";
   const difference = rec ? formatMinor(rec.difference_minor, journal.currency) : "";
   const date = rec ? formatDate(rec.balance_as_of) || rec.balance_as_of : "";
@@ -41,9 +45,13 @@ export function JournalNotes({
         </div>
       ) : (
         <div data-testid={`account-journal-pinned-${account.id}`} className="text-muted-foreground">
-          {t("accounts.journal.pinned", {
-            amount: formatMinor(journal.amount_minor, journal.currency),
-          })}
+          {everyday
+            ? t("accounts.journal.everydayByBalance", {
+                amount: formatMinor(journal.amount_minor, journal.currency),
+              })
+            : t("accounts.journal.pinned", {
+                amount: formatMinor(journal.amount_minor, journal.currency),
+              })}
         </div>
       )}
       {rec?.status === "agrees" && (
@@ -97,7 +105,7 @@ export function JournalNotes({
           {t("accounts.journal.unpriced", { count: journal.unpriced_positions - journal.not_traded_positions })}
         </div>
       )}
-      {journal.negative_cash.length > 0 && (
+      {journal.negative_cash.length > 0 && !isDebt(account) && (
         <div className="text-amber-600" title={t("accounts.journal.negativeCashHint")}>
           {t("accounts.journal.negativeCash", { currencies: journal.negative_cash.join(", ") })}
         </div>
@@ -117,7 +125,13 @@ export function JournalNotes({
           disabled={pending}
           onClick={() => onValueBy(account, byJournal)}
         >
-          {byJournal ? t("accounts.journal.useBalance") : t("accounts.journal.useJournal")}
+          {everyday
+            ? byJournal
+              ? t("everyday.keepByBank")
+              : t("everyday.keepByOperations")
+            : byJournal
+              ? t("accounts.journal.useBalance")
+              : t("accounts.journal.useJournal")}
         </Button>
       )}
     </div>

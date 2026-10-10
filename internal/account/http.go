@@ -135,10 +135,11 @@ func toAPI(a WithBalance) apitypes.AccountWithBalance {
 		Status:      apitypes.AccountStatus(a.Status),
 		CreatedAt:   a.CreatedAt,
 		// Overwritten wherever the account is valued.
-		ValuedByBalance: a.ValuedByBalance,
-		TradesAbroad:    a.TradesAbroad,
-		CountedBy:       apitypes.AccountWithBalanceCountedByBalance,
-		Journal:         nullable.NewNullNullable[apitypes.AccountJournal](),
+		ValuedByBalance:  a.ValuedByBalance,
+		TradesAbroad:     a.TradesAbroad,
+		KeptByOperations: a.KeptByOperations,
+		CountedBy:        apitypes.AccountWithBalanceCountedByBalance,
+		Journal:          nullable.NewNullNullable[apitypes.AccountJournal](),
 	}
 	if a.Balance != nil {
 		out.Balance = &apitypes.BalancePoint{
@@ -343,6 +344,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	upd.ValuedByBalance = req.ValuedByBalance
 	upd.TradesAbroad = req.TradesAbroad
+	upd.KeptByOperations = req.KeptByOperations
 	a, err := h.store.Update(r.Context(), p.SpaceID, id, upd)
 	if err != nil {
 		family.WriteError(w, err)

@@ -112,7 +112,15 @@ export function AccountsPage() {
             isViewer
               ? undefined
               : (account, byBalance) =>
-                  valueBy.mutate({ id: account.id, body: { valued_by_balance: byBalance } })
+                  valueBy.mutate({
+                    id: account.id,
+                    // A broker's account is pinned to its balance; an everyday
+                    // one is kept by its operations or not.
+                    body:
+                      account.type === "brokerage"
+                        ? { valued_by_balance: byBalance }
+                        : { kept_by_operations: !byBalance },
+                  })
           }
           switching={valueBy.isPending ? valueBy.variables?.id : undefined}
           onRowAction={

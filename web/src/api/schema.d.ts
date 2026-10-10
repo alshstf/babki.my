@@ -1267,14 +1267,16 @@ export interface components {
             balance_in_base?: components["schemas"]["MoneyInBase"] | null;
             /** @description The family's choice for a brokerage account kept by its operations: count it in the total by its balance rather than by its journal, while the journal's history is incomplete. False until somebody sets it (UpdateAccountRequest.valued_by_balance). On any other kind of account it is stored and means nothing — those are always counted by their balance. */
             valued_by_balance: boolean;
+            /** @description The family's choice for an everyday account — checking, savings, deposit, credit card, loan, cash: keep it by its operations, so the total counts its journal (the money its operations leave, a debt negative) reconciled with its latest balance mark, as a brokerage account is. False until somebody sets it (UpdateAccountRequest.kept_by_operations); then the account is counted by its balance, as before. Means nothing on a brokerage account. */
+            kept_by_operations: boolean;
             /** @description Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it. */
             trades_abroad: boolean;
             /**
-             * @description Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active brokerage account with at least one operation, not valued_by_balance — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere.
+             * @description Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
              * @enum {string}
              */
             counted_by: "journal" | "balance";
-            /** @description What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE brokerage account with at least one operation, whichever figure counted_by names, so an account valued by its balance can still say what its journal comes to. Null on every other account. */
+            /** @description What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE account with at least one operation, whichever figure counted_by names, so an account counted by its balance can still say what its journal comes to. Null on every other account. */
             journal?: components["schemas"]["AccountJournal"] | null;
         };
         AccountJournal: {
@@ -1362,6 +1364,8 @@ export interface components {
             valued_by_balance?: boolean;
             /** @description See AccountWithBalance.trades_abroad. Omitted, it stays as it is. */
             trades_abroad?: boolean;
+            /** @description See AccountWithBalance.kept_by_operations. Omitted, it stays as it is. */
+            kept_by_operations?: boolean;
         };
         SetBalanceRequest: {
             /** @description Date YYYY-MM-DD */
