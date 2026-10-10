@@ -50,6 +50,7 @@ const card: AccountWithBalance = {
 
 function makeOperation(overrides: Partial<Operation> = {}): Operation {
   return {
+    parts: [],
     id: "op-1",
     account_id: "acc-1",
     instrument_id: null,
