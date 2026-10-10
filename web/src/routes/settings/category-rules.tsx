@@ -37,7 +37,7 @@ import { categoryLabel } from "@/components/category-picker";
 import { QueryGate } from "@/components/query-notice";
 import { queryState } from "@/lib/query-state";
 
-const FIELDS: CategoryRuleField[] = ["counterparty", "note", "any"];
+const FIELDS: CategoryRuleField[] = ["counterparty", "note", "any", "item"];
 const MAX_PATTERN = 200;
 
 // CategoryRules lists the family's filing rules — «when the counterparty holds

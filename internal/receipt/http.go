@@ -2,8 +2,10 @@ package receipt
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -37,6 +39,9 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	}
 	srv.Mount("GET /api/v1/receipts/match", view(h.handleMatch))
 	srv.Mount("POST /api/v1/receipts", edit(h.handleCreate))
+	srv.Mount("GET /api/v1/receipts", view(h.handleList))
+	srv.Mount("POST /api/v1/receipts/import", edit(h.handleImport))
+	srv.Mount("POST /api/v1/receipts/{receiptId}/split", edit(h.handleResplit))
 }
 
 func (h *Handler) handleMatch(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +108,84 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusCreated, API(created))
+}
+
+func (h *Handler) handleResplit(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("receiptId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "receiptId must be a uuid")
+		return
+	}
+	split, err := h.svc.Resplit(r.Context(), p.SpaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, apitypes.ReceiptSplitResult{Split: split})
+}
+
+// maxStatement is the largest statement taken: years of a family's receipts.
+const maxStatement = 8 << 20
+
+func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStatement))
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		httpjson.Error(w, http.StatusRequestEntityTooLarge, "the statement is larger than 8 MB")
+		return
+	}
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "the statement could not be read")
+		return
+	}
+	receipts, err := ParseFNS(data)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	res, err := h.svc.Import(r.Context(), p.SpaceID, receipts)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, apitypes.ReceiptImportResult{
+		Found: res.Found, Attached: res.Attached, Waiting: res.Waiting, Enriched: res.Enriched, Known: res.Known, Split: res.Split,
+	})
+}
+
+// maxListed is the most rows or receipts one list asks for.
+const maxListed = 200
+
+func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	q := r.URL.Query()
+	var ids []uuid.UUID
+	if raw := q.Get("operation_ids"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			id, err := uuid.Parse(strings.TrimSpace(part))
+			if err != nil {
+				httpjson.Error(w, http.StatusBadRequest, "operation_ids are row ids, comma-separated")
+				return
+			}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > maxListed {
+		httpjson.Error(w, http.StatusBadRequest, "at most 200 operation_ids")
+		return
+	}
+	list, err := h.svc.List(r.Context(), p.SpaceID, ids, q.Get("waiting") == "true")
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := make([]apitypes.Receipt, 0, len(list))
+	for _, rc := range list {
+		out = append(out, API(rc))
+	}
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 // API is a receipt as the API and the export write it.

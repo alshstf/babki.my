@@ -61,7 +61,7 @@ func newStack(t *testing.T) stack {
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
-		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore), auth, sm).Mount(srv)
+		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore, category.NewStore(pool), operation.NewService(opStore)), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

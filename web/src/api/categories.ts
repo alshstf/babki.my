@@ -171,7 +171,8 @@ export function matchRule(
   const note = fold(text.note);
   for (const rule of rules) {
     const category = categories.find((c) => c.id === rule.category_id);
-    if (!category || category.kind !== kind || category.archived) continue;
+    // A rule of a receipt's lines files no row by its own text.
+    if (!category || category.kind !== kind || category.archived || rule.field === "item") continue;
     const pattern = fold(rule.pattern);
     const fits =
       rule.field === "counterparty"

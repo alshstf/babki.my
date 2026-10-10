@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"babki.my/babki/internal/family"
 )
@@ -27,8 +28,12 @@ const (
 	PayoutRefund Kind = "payout_refund"
 )
 
-// SourceQR is a receipt whose QR code was read here.
-const SourceQR = "qr"
+// Where a receipt came from: its QR code read here, or a statement of the
+// tax service's app «Проверка чеков».
+const (
+	SourceQR  = "qr"
+	SourceFNS = "fns"
+)
 
 // IssuedAtLayout is a receipt's time as the API writes it, to the minute.
 const IssuedAtLayout = "2006-01-02T15:04"
@@ -69,6 +74,9 @@ type Receipt struct {
 }
 
 var digits = regexp.MustCompile(`^[0-9]{1,20}$`)
+
+// ErrNotFound is a receipt that is not the space's: a 404.
+var ErrNotFound = fmt.Errorf("receipt: %w", pgx.ErrNoRows)
 
 // Validate refuses a receipt no till could have printed.
 func (r Receipt) Validate() error {
