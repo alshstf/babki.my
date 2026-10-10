@@ -27,6 +27,7 @@ type accounts interface {
 
 type journal interface {
 	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
+	CounterpartAccounts(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 type categories interface {
@@ -129,14 +130,16 @@ func (s *Service) spendingCategories(ctx context.Context, spaceID uuid.UUID, ids
 
 const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, grace_days,
 	min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on,
-	grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories`
+	grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, monthly_fee_minor, cash_free_minor,
+	cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor, penalty_daily_percent`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
 	var own decimal.NullDecimal
 	err := row.Scan(&t.AccountID, &t.Limit, &t.StatementDay, &t.PaymentDays, &t.GraceKind, &t.GraceDays,
 		&t.MinPercent, &t.MinFloor, &t.AnnualRate, &own, &t.WindowMonths, &t.GraceMonths, &t.OpenedOn,
-		&t.GraceAllLost, &t.PayByPeriodEnd, &t.ChargesInFull, &t.TransferCategories)
+		&t.GraceAllLost, &t.PayByPeriodEnd, &t.ChargesInFull, &t.TransferCategories, &t.Fees.Monthly, &t.Fees.CashFree,
+		&t.Fees.CashPercent, &t.Fees.CashFixed, &t.Fees.TransferPercent, &t.Fees.TransferFixed, &t.Fees.PenaltyDaily)
 	if own.Valid {
 		t.OwnRate = &own.Decimal
 	}
@@ -184,8 +187,11 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO credit_cards (account_id, space_id, limit_minor, statement_day, payment_days, grace_kind,
 			grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months,
-			opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, monthly_fee_minor,
+			cash_free_minor, cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor,
+			penalty_daily_percent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+			$22, $23, $24, $25)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
@@ -194,10 +200,15 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			grace_months = EXCLUDED.grace_months, opened_on = EXCLUDED.opened_on,
 			grace_all_lost = EXCLUDED.grace_all_lost, pay_by_period_end = EXCLUDED.pay_by_period_end,
 			charges_in_full = EXCLUDED.charges_in_full, transfer_categories = EXCLUDED.transfer_categories,
-			updated_at = now()`,
+			monthly_fee_minor = EXCLUDED.monthly_fee_minor, cash_free_minor = EXCLUDED.cash_free_minor,
+			cash_fee_percent = EXCLUDED.cash_fee_percent, cash_fee_fixed_minor = EXCLUDED.cash_fee_fixed_minor,
+			transfer_fee_percent = EXCLUDED.transfer_fee_percent,
+			transfer_fee_fixed_minor = EXCLUDED.transfer_fee_fixed_minor,
+			penalty_daily_percent = EXCLUDED.penalty_daily_percent, updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
 		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
-		t.GraceAllLost, t.PayByPeriodEnd, t.ChargesInFull, t.TransferCategories)
+		t.GraceAllLost, t.PayByPeriodEnd, t.ChargesInFull, t.TransferCategories, t.Fees.Monthly, t.Fees.CashFree,
+		t.Fees.CashPercent, t.Fees.CashFixed, t.Fees.TransferPercent, t.Fees.TransferFixed, t.Fees.PenaltyDaily)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}
@@ -250,7 +261,7 @@ func (s *Service) Card(ctx context.Context, spaceID, accountID uuid.UUID) (Card,
 	b := Weigh(t, ops, a.Currency, s.today(), k)
 	// What the bank will charge for the grace lost is a cost too, though not
 	// in the journal yet.
-	b.Pending = c.Status.NonGraceInterest
+	b.Pending = c.Status.NonGraceInterest + c.Status.Penalty
 	for _, l := range c.Status.Lost {
 		b.Pending += l.Interest
 	}
@@ -279,7 +290,45 @@ func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBal
 	if err != nil {
 		return Card{}, nil, err
 	}
+	if k.Cash, err = s.cashOut(ctx, spaceID, ops); err != nil {
+		return Card{}, nil, err
+	}
 	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today, k), ByJournal: true}, ops, nil
+}
+
+// cashOut is the card's rows that took cash out: money moved to one of the
+// family's cash accounts.
+func (s *Service) cashOut(ctx context.Context, spaceID uuid.UUID, ops []operation.Operation) (map[uuid.UUID]bool, error) {
+	var moved []uuid.UUID
+	for _, op := range ops {
+		if op.TransferGroupID != nil && op.AmountMinor < 0 {
+			moved = append(moved, op.ID)
+		}
+	}
+	out := map[uuid.UUID]bool{}
+	if len(moved) == 0 {
+		return out, nil
+	}
+	peers, err := s.journal.CounterpartAccounts(ctx, spaceID, moved)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.accounts.ListWithBalance(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	cash := map[uuid.UUID]bool{}
+	for _, a := range list {
+		if a.Type == account.TypeCash {
+			cash[a.ID] = true
+		}
+	}
+	for op, peer := range peers {
+		if cash[peer] {
+			out[op] = true
+		}
+	}
+	return out, nil
 }
 
 // AllTerms is every card's terms in the space.

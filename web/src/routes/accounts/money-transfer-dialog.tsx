@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { MAX_AMOUNT_MINOR, amountRefusal, formatMinorCompact, parseToMinor } from "@/lib/money";
+import { MAX_AMOUNT_MINOR, amountRefusal, formatMinor, formatMinorCompact, parseToMinor } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { isConflict, useCreateMoneyTransfer } from "@/api/operations";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
@@ -15,6 +15,8 @@ import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 import { isCurrencyCode } from "@/lib/currencies";
 import { useOnOpen } from "@/lib/use-on-open";
+import { useCreditCard } from "@/api/credit-cards";
+import { cashFee, transferFee } from "@/lib/card-fees";
 
 // Money moved from this account to another of the family's: one transfer, a
 // withdrawal here and a deposit there. What arrives is what left unless the
@@ -63,6 +65,26 @@ export function MoneyTransferDialog({
   const receivedCurrencyValid = !converted || isCurrencyCode(receivedCurrency);
   const valid =
     target !== undefined && amountValid && currencyValid && receivedValid && receivedCurrencyValid && occurredOn !== "";
+
+  // Off a credit card, money moved is no purchase: no grace, and the tariff's
+  // fee (decision Р-30).
+  const card = useCreditCard(account.id, open && account.type === "credit_card");
+  const cardWarning = (() => {
+    const c = card.data;
+    if (account.type !== "credit_card" || !c) return null;
+    const amountNow = amountValid && parsed !== null ? parsed : 0;
+    const lines = [t("moneyTransfer.cardNoGrace")];
+    if (target?.type === "cash") {
+      const freeLeft = Math.max(c.terms.fees.cash_free_minor - c.status.cash_this_period_minor, 0);
+      if (c.terms.fees.cash_free_minor > 0) lines.push(t("moneyTransfer.cashFreeLeft", { amount: formatMinor(freeLeft, account.currency) }));
+      const fee = cashFee(c.terms.fees, amountNow, c.status.cash_this_period_minor);
+      if (fee > 0) lines.push(t("moneyTransfer.cardFee", { amount: formatMinor(fee, account.currency) }));
+    } else {
+      const fee = transferFee(c.terms.fees, amountNow);
+      if (fee > 0) lines.push(t("moneyTransfer.cardFee", { amount: formatMinor(fee, account.currency) }));
+    }
+    return lines.join(" ");
+  })();
 
   const submit = () => {
     if (!valid || parsed === null) return;
@@ -177,6 +199,11 @@ export function MoneyTransferDialog({
             <Input id="mt-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           <p className="text-xs text-muted-foreground">{t("moneyTransfer.hint")}</p>
+          {cardWarning && (
+            <Alert className="border-amber-600/40 text-amber-800 dark:text-amber-300" data-testid="card-transfer-warning">
+              <AlertDescription>{cardWarning}</AlertDescription>
+            </Alert>
+          )}
           {transfer.isError && (
             <Alert variant="destructive">
               <AlertDescription>

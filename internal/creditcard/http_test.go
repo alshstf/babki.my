@@ -97,7 +97,9 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 	// as stated; without that day they are refused.
 	windows := `{"limit_minor":30000000,"statement_day":1,"payment_days":0,"grace_kind":"windows","grace_days":0,
 		"window_months":2,"grace_months":6,"opened_on":%s,"grace_all_lost":true,"pay_by_period_end":true,"charges_in_full":true,
-		"min_percent":"3","min_floor_minor":50000,"annual_rate":"59.99","own_rate":null}`
+		"min_percent":"3","min_floor_minor":50000,"annual_rate":"59.99","own_rate":null,
+		"fees":{"monthly_minor":0,"cash_free_minor":10000000,"cash_percent":"5.9","cash_fixed_minor":59000,
+			"transfer_percent":"4.9","transfer_fixed_minor":39000,"penalty_daily_percent":"0.1"}}`
 	if r := apitest.Do(t, c, "PUT", path, fmt.Sprintf(windows, "null")); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("windows with no contract day = %d, want 400", r.StatusCode)
 	}
@@ -110,6 +112,22 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		opened != "2026-07-10" || !got.Terms.GraceAllLost || !got.Terms.PayByPeriodEnd || !got.Terms.ChargesInFull ||
 		len(got.Status.Grace) != 1 || !got.Status.GraceOffSince.IsNull() {
 		t.Errorf("windows card = %+v", got)
+	}
+	if f := got.Terms.Fees; f.CashFreeMinor != 10_000_000 || f.CashPercent != "5.9" || f.TransferFixedMinor != 39_000 || f.PenaltyDailyPercent != "0.1" {
+		t.Errorf("fees = %+v", f)
+	}
+
+	// Cash taken out today — money moved to a cash account — counts against
+	// the free part of the period.
+	cash := mk("Наличные", "cash")
+	today := time.Now().UTC().Format(time.DateOnly)
+	if r := apitest.Do(t, c, "POST", url+"/api/v1/operations/money-transfer",
+		fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"occurred_on":%q,"amount_minor":500000,"currency":"RUB","note":""}`, card, cash, today)); r.StatusCode != http.StatusCreated {
+		t.Fatalf("cash out = %d", r.StatusCode)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", path, ""), &got)
+	if got.Status.CashThisPeriodMinor != 500_000 {
+		t.Errorf("cash this period = %d, want 5 000", got.Status.CashThisPeriodMinor)
 	}
 
 	// A transfer category is one of the family's spending categories.

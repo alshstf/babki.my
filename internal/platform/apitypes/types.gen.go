@@ -1981,6 +1981,28 @@ type CreditCardDue struct {
 	On string `json:"on"`
 }
 
+// CreditCardFees What the tariff charges besides interest, told before it is charged (decision Р-30); the journal gets the bank's charges as they happen. All zero when the tariff has none.
+type CreditCardFees struct {
+	// CashFixedMinor …and a fixed part for each withdrawal past it
+	CashFixedMinor int64 `json:"cash_fixed_minor"`
+
+	// CashFreeMinor Cash a statement period takes out without a fee
+	CashFreeMinor int64 `json:"cash_free_minor"`
+
+	// CashPercent The fee for cash past the free part: percent of it (decimal, 0 to 99.999)
+	CashPercent string `json:"cash_percent"`
+
+	// MonthlyMinor The monthly fee, charged at a period's end; 0 when there is none or it is waived
+	MonthlyMinor int64 `json:"monthly_minor"`
+
+	// PenaltyDailyPercent The penalty for a payment missed: percent of it a day (decimal, 0 to 9.9999)
+	PenaltyDailyPercent string `json:"penalty_daily_percent"`
+	TransferFixedMinor  int64  `json:"transfer_fixed_minor"`
+
+	// TransferPercent The fee for money moved off the card, percent of it (decimal)
+	TransferPercent string `json:"transfer_percent"`
+}
+
 // CreditCardLost defines model for CreditCardLost.
 type CreditCardLost struct {
 	// AmountMinor What is still owed of them
@@ -2006,6 +2028,9 @@ type CreditCardLost struct {
 type CreditCardStatus struct {
 	// AvailableMinor What is left of the limit
 	AvailableMinor int64 `json:"available_minor"`
+
+	// CashThisPeriodMinor Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor
+	CashThisPeriodMinor int64 `json:"cash_this_period_minor"`
 
 	// DebtMinor Owed on the card; below zero the family's own money on it
 	DebtMinor int64 `json:"debt_minor"`
@@ -2036,6 +2061,9 @@ type CreditCardStatus struct {
 	// NonGraceMinor Money moved off the card, fees and interest charged still owed: interest from their day
 	NonGraceMinor int64 `json:"non_grace_minor"`
 
+	// PenaltyMinor Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed
+	PenaltyMinor int64 `json:"penalty_minor"`
+
 	// ToRestoreMinor While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise
 	ToRestoreMinor int64 `json:"to_restore_minor"`
 }
@@ -2056,6 +2084,9 @@ type CreditCardTerms struct {
 
 	// ChargesInFull The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full
 	ChargesInFull bool `json:"charges_in_full"`
+
+	// Fees What the tariff charges besides interest, told before it is charged (decision Р-30); the journal gets the bank's charges as they happen. All zero when the tariff has none.
+	Fees CreditCardFees `json:"fees"`
 
 	// GraceAllLost A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is
 	GraceAllLost bool `json:"grace_all_lost"`
