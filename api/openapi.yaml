@@ -227,6 +227,45 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/PayoutCheck" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/credit-card/installments/{operationId}:
+    put:
+      tags: [credit-cards]
+      operationId: setCardInstallment
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        Puts a purchase on the card in installments, or restates its plan (decision Р-33): months
+        equal parts, one with each statement after it, its fees on top; the parts go in the minimum
+        and the purchase is kept apart from the grace. The purchase is a spending of the card's own
+        journal (400 otherwise); 404 for a card with no terms or a row not on it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreditCardInstallmentPlan" }
+      responses:
+        "200":
+          description: The card
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditCard" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [credit-cards]
+      operationId: deleteCardInstallment
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: Takes the purchase out of installments.
+      responses:
+        "204": { description: Taken out }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/credit-card:
     get:
       tags: [credit-cards]
@@ -2765,7 +2804,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -2794,6 +2833,10 @@ components:
           type: array
           description: "A loan's prepayments (POST /accounts/{accountId}/loan/prepayments), oldest first; empty on every other account"
           items: { $ref: "#/components/schemas/LoanPrepayment" }
+        credit_card_installments:
+          type: array
+          items: { $ref: "#/components/schemas/ExportCardInstallment" }
+          description: "A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account"
         loan:
           nullable: true
           description: "A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account"
@@ -3008,7 +3051,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback, installment]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3040,6 +3083,10 @@ components:
           description: "The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family"
         fees: { $ref: "#/components/schemas/CreditCardFees" }
         cashback: { $ref: "#/components/schemas/CreditCardCashback" }
+        installment:
+          allOf:
+            - $ref: "#/components/schemas/CreditCardInstallmentPlan"
+          description: "Every purchase of the card in installments when months is above 0 — a card of installments («Халва»); 0 months otherwise"
         min_percent: { type: string, description: "The minimum payment, percent of the debt the statement shows (decimal)" }
         min_floor_minor: { type: integer, format: int64, minimum: 0, description: "The smallest minimum payment" }
         annual_rate: { type: string, description: "Percent a year charged once the grace is lost (decimal)" }
@@ -3058,6 +3105,31 @@ components:
         monthly_cap_minor: { type: integer, format: int64, minimum: 0, description: "The most a period earns; 0 for no cap" }
         points: { type: boolean, description: "It comes as the bank's points, not money: shown, kept out of the money forecast" }
         credit_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the period's statement it comes in" }
+    CreditCardInstallmentPlan:
+      type: object
+      required: [months, monthly_fee_percent, fee_minor]
+      properties:
+        months: { type: integer, minimum: 0, maximum: 60, description: "Equal parts, one with each statement after the purchase; 1 to 60 for a purchase, 0 on the card for none" }
+        monthly_fee_percent: { type: string, description: "Percent of the sum a month on top (ВТБ: 4), decimal, 0 to 99.999" }
+        fee_minor: { type: integer, format: int64, minimum: 0, description: "Once, with the first part («Халва»: 99 ₽)" }
+    ExportCardInstallment:
+      type: object
+      required: [operation_id, plan]
+      properties:
+        operation_id: { type: string, format: uuid }
+        plan: { $ref: "#/components/schemas/CreditCardInstallmentPlan" }
+    CreditCardInstallment:
+      type: object
+      required: [operation_id, on, amount_minor, plan, billed, left_minor, next_minor, note]
+      properties:
+        operation_id: { type: string, format: uuid }
+        on: { type: string, description: "The purchase's day" }
+        amount_minor: { type: integer, format: int64, description: "The sum in installments" }
+        plan: { $ref: "#/components/schemas/CreditCardInstallmentPlan" }
+        billed: { type: integer, description: "The parts the statements have shown" }
+        left_minor: { type: integer, format: int64, description: "Of the sum, what is still to be shown" }
+        next_minor: { type: integer, format: int64, description: "The next part with its fees" }
+        note: { type: string }
     CreditCardCashbackCategory:
       type: object
       required: [category_id, percent]
@@ -3096,7 +3168,7 @@ components:
         early: { type: boolean, description: "The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)" }
     CreditCardStatus:
       type: object
-      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, minimum_overdue_minor, cashback_expected_minor, cashback_on]
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, minimum_overdue_minor, installments, installments_due_minor, cashback_expected_minor, cashback_on]
       properties:
         debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
         available_minor: { type: integer, format: int64, description: "What is left of the limit" }
@@ -3116,6 +3188,8 @@ components:
         cash_this_period_minor: { type: integer, format: int64, description: "Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor" }
         penalty_minor: { type: integer, format: int64, description: "Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed" }
         minimum_overdue_minor: { type: integer, format: int64, description: "The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once" }
+        installments: { type: array, items: { $ref: "#/components/schemas/CreditCardInstallment" }, description: "The purchases in installments still being shown, oldest first" }
+        installments_due_minor: { type: integer, format: int64, description: "The installments' parts shown and not yet paid; in minimum_minor" }
         cashback_expected_minor: { type: integer, format: int64, description: "The cashback this period's purchases so far bring by the card's rules, capped" }
         cashback_on: { type: string, nullable: true, description: "The day it comes; null when the card names no cashback rules" }
     CreditCardBenefit:

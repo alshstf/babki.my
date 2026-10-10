@@ -32,6 +32,7 @@ var owners = map[string]string{
 	"loans":                       "internal/loan",
 	"loan_prepayments":            "internal/loan",
 	"credit_cards":                "internal/creditcard",
+	"card_installments":           "internal/creditcard",
 	"push_subscriptions":          "internal/notify",
 	"push_sent":                   "internal/notify",
 	"recurring_hidden":            "internal/recurring",

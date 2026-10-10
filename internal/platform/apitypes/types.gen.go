@@ -2055,6 +2055,39 @@ type CreditCardFees struct {
 	TransferPercent string `json:"transfer_percent"`
 }
 
+// CreditCardInstallment defines model for CreditCardInstallment.
+type CreditCardInstallment struct {
+	// AmountMinor The sum in installments
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Billed The parts the statements have shown
+	Billed int `json:"billed"`
+
+	// LeftMinor Of the sum, what is still to be shown
+	LeftMinor int64 `json:"left_minor"`
+
+	// NextMinor The next part with its fees
+	NextMinor int64  `json:"next_minor"`
+	Note      string `json:"note"`
+
+	// On The purchase's day
+	On          string                    `json:"on"`
+	OperationId openapi_types.UUID        `json:"operation_id"`
+	Plan        CreditCardInstallmentPlan `json:"plan"`
+}
+
+// CreditCardInstallmentPlan defines model for CreditCardInstallmentPlan.
+type CreditCardInstallmentPlan struct {
+	// FeeMinor Once, with the first part («Халва»: 99 ₽)
+	FeeMinor int64 `json:"fee_minor"`
+
+	// MonthlyFeePercent Percent of the sum a month on top (ВТБ: 4), decimal, 0 to 99.999
+	MonthlyFeePercent string `json:"monthly_fee_percent"`
+
+	// Months Equal parts, one with each statement after the purchase; 1 to 60 for a purchase, 0 on the card for none
+	Months int `json:"months"`
+}
+
 // CreditCardLost defines model for CreditCardLost.
 type CreditCardLost struct {
 	// AmountMinor What is still owed of them
@@ -2099,6 +2132,12 @@ type CreditCardStatus struct {
 
 	// GraceOffSince The day a missed deadline (or, grace_off_by_minimum, a missed minimum) took the grace off the whole debt (grace_all_lost); null while the grace holds
 	GraceOffSince nullable.Nullable[string] `json:"grace_off_since"`
+
+	// Installments The purchases in installments still being shown, oldest first
+	Installments []CreditCardInstallment `json:"installments"`
+
+	// InstallmentsDueMinor The installments' parts shown and not yet paid; in minimum_minor
+	InstallmentsDueMinor int64 `json:"installments_due_minor"`
 
 	// LastStatement The latest statement day on or before today
 	LastStatement string           `json:"last_statement"`
@@ -2166,7 +2205,10 @@ type CreditCardTerms struct {
 
 	// GraceRunFrom For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise
 	GraceRunFrom CreditCardTermsGraceRunFrom `json:"grace_run_from"`
-	LimitMinor   int64                       `json:"limit_minor"`
+
+	// Installment Every purchase of the card in installments when months is above 0 — a card of installments («Халва»); 0 months otherwise
+	Installment CreditCardInstallmentPlan `json:"installment"`
+	LimitMinor  int64                     `json:"limit_minor"`
 
 	// MinFloorMinor The smallest minimum payment
 	MinFloorMinor int64 `json:"min_floor_minor"`
@@ -2268,11 +2310,14 @@ type ExportAccount struct {
 	CreatedAt time.Time       `json:"created_at"`
 
 	// CreditCard A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account
-	CreditCard       nullable.Nullable[CreditCardTerms] `json:"credit_card"`
-	Currency         string                             `json:"currency"`
-	Id               openapi_types.UUID                 `json:"id"`
-	Institution      string                             `json:"institution"`
-	KeptByOperations bool                               `json:"kept_by_operations"`
+	CreditCard nullable.Nullable[CreditCardTerms] `json:"credit_card"`
+
+	// CreditCardInstallments A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account
+	CreditCardInstallments []ExportCardInstallment `json:"credit_card_installments"`
+	Currency               string                  `json:"currency"`
+	Id                     openapi_types.UUID      `json:"id"`
+	Institution            string                  `json:"institution"`
+	KeptByOperations       bool                    `json:"kept_by_operations"`
 
 	// Loan A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account
 	Loan nullable.Nullable[LoanTerms] `json:"loan"`
@@ -2301,6 +2346,12 @@ type ExportBalance struct {
 
 	// AsOf Date YYYY-MM-DD
 	AsOf string `json:"as_of"`
+}
+
+// ExportCardInstallment defines model for ExportCardInstallment.
+type ExportCardInstallment struct {
+	OperationId openapi_types.UUID        `json:"operation_id"`
+	Plan        CreditCardInstallmentPlan `json:"plan"`
 }
 
 // ExportCategory defines model for ExportCategory.
@@ -4333,6 +4384,9 @@ type SetAccountBalanceJSONRequestBody = SetBalanceRequest
 
 // SetCreditCardJSONRequestBody defines body for SetCreditCard for application/json ContentType.
 type SetCreditCardJSONRequestBody = CreditCardTerms
+
+// SetCardInstallmentJSONRequestBody defines body for SetCardInstallment for application/json ContentType.
+type SetCardInstallmentJSONRequestBody = CreditCardInstallmentPlan
 
 // ImportTableJSONRequestBody defines body for ImportTable for application/json ContentType.
 type ImportTableJSONRequestBody = ImportTableRequest

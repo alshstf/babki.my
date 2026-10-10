@@ -42,6 +42,8 @@ const noFees = {
   transfer_percent: "0", transfer_fixed_minor: 0, penalty_daily_percent: "0",
 };
 
+const noInstallment = { months: 0, monthly_fee_percent: "0", fee_minor: 0 };
+
 const noCashback = { base_percent: "0", categories: [], monthly_cap_minor: 0, points: false, credit_days: 0 };
 
 const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
@@ -50,14 +52,15 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
   grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0,
-  cashback_expected_minor: 0, cashback_on: null, minimum_overdue_minor: 0, ...over,
+  cashback_expected_minor: 0, cashback_on: null, minimum_overdue_minor: 0,
+  installments: [], installments_due_minor: 0, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
   terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0, grace_run_from: "purchase", pay_day: 0, min_round_up_minor: 0,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
-    transfer_categories: [], fees: noFees, cashback: noCashback },
+    transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment },
   status: status(over), by_journal: byJournal, benefit,
 });
 
@@ -105,7 +108,7 @@ describe("CreditCardPanel", () => {
       limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120, grace_run_from: "purchase", pay_day: 0, min_round_up_minor: 0,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
-      transfer_categories: [], fees: noFees, cashback: noCashback,
+      transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment,
     });
   });
 
@@ -169,6 +172,42 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({ transfer_categories: ["c-wallets"] });
+  });
+
+  it("lists the purchases in installments and puts another in", async () => {
+    answer({
+      "/credit-card": card({
+        installments_due_minor: 4_480_00,
+        installments: [{
+          operation_id: "op-phone", on: "2026-09-10", amount_minor: 12_000_00,
+          plan: { months: 3, monthly_fee_percent: "4", fee_minor: 0 },
+          billed: 1, left_minor: 8_000_00, next_minor: 4_480_00, note: "Телефон",
+        }],
+      }),
+      "/operations": { operations: [
+        { id: "op-tv", account_id: "acc-1", type: "withdrawal", occurred_on: "2026-10-02", amount_minor: -30_000_00, currency: "RUB", note: "Телевизор", counterparty: "", transfer_group_id: null },
+        { id: "op-phone", account_id: "acc-1", type: "withdrawal", occurred_on: "2026-09-10", amount_minor: -12_000_00, currency: "RUB", note: "Телефон", counterparty: "", transfer_group_id: null },
+      ], has_more: false },
+    });
+    show(<CreditCardPanel account={account} canEdit />);
+    expect(norm((await screen.findByTestId("card-installment")).textContent ?? "")).toContain(
+      "10.09.2026 · Телефон — 12 000,00 ₽ на 3 мес.: осталось 8 000,00 ₽, следующая часть 4 480,00 ₽",
+    );
+    expect(screen.getByTestId("card-installments").textContent).toContain("Части рассрочек к оплате");
+
+    Element.prototype.scrollIntoView ??= () => {};
+    fireEvent.click(screen.getByRole("button", { name: "Оформить рассрочку" }));
+    const dialog = await screen.findByTestId("card-installment-dialog");
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "Покупка" }), { key: "Enter" });
+    // The purchase already in installments is not offered again.
+    expect(screen.queryByRole("option", { name: /Телефон/ })).toBeNull();
+    fireEvent.click(await screen.findByRole("option", { name: /Телевизор/ }));
+    fireEvent.change(within(dialog).getByLabelText("Месяцев"), { target: { value: "12" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(new URL(put.url).pathname).toBe("/api/v1/accounts/card-1/credit-card/installments/op-tv");
+    expect(await put.json()).toEqual({ months: 12, monthly_fee_percent: "0", fee_minor: 0 });
   });
 
   it("says which part of the minimum is overdue from before", async () => {

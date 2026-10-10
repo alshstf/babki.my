@@ -71,6 +71,7 @@ type loans interface {
 
 type cards interface {
 	AllTerms(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Terms, error)
+	Installments(ctx context.Context, spaceID, accountID uuid.UUID) (map[uuid.UUID]creditcard.Plan, error)
 }
 
 type prices interface {
@@ -193,6 +194,11 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		}
 		if t, ok := cardOf[a.ID]; ok {
 			out.CreditCard = nullable.NewNullableWithValue(creditcard.TermsAPI(t))
+			plans, err := h.cards.Installments(ctx, spaceID, a.ID)
+			if err != nil {
+				return apitypes.SpaceExport{}, err
+			}
+			out.CreditCardInstallments = creditcard.InstallmentsExport(plans)
 		}
 		doc.Accounts = append(doc.Accounts, out)
 		for _, o := range ops {
@@ -292,10 +298,11 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance, TradesAbroad: a.TradesAbroad,
 		KeptByOperations: a.KeptByOperations,
 		CreatedAt:        a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
-		WithheldStated:  []apitypes.ExportWithheldStated{},
-		Loan:            nullable.NewNullNullable[apitypes.LoanTerms](),
-		LoanPrepayments: []apitypes.LoanPrepayment{},
-		CreditCard:      nullable.NewNullNullable[apitypes.CreditCardTerms](),
+		WithheldStated:         []apitypes.ExportWithheldStated{},
+		Loan:                   nullable.NewNullNullable[apitypes.LoanTerms](),
+		LoanPrepayments:        []apitypes.LoanPrepayment{},
+		CreditCardInstallments: []apitypes.ExportCardInstallment{},
+		CreditCard:             nullable.NewNullNullable[apitypes.CreditCardTerms](),
 	}
 	for _, w := range stated {
 		out.WithheldStated = append(out.WithheldStated, apitypes.ExportWithheldStated{
