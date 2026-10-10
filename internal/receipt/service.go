@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
@@ -35,15 +36,27 @@ type accounts interface {
 	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
 }
 
-// Service keeps the receipts.
-type Service struct {
-	db       db.Executor
-	journal  journal
-	accounts accounts
+type categories interface {
+	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
+	Rules(ctx context.Context, spaceID uuid.UUID) ([]category.Rule, error)
 }
 
-func NewService(x db.Executor, j journal, acc accounts) *Service {
-	return &Service{db: x, journal: j, accounts: acc}
+type splitter interface {
+	SetParts(ctx context.Context, spaceID, id uuid.UUID, parts []operation.Part) (operation.Operation, error)
+	ClearParts(ctx context.Context, spaceID, id uuid.UUID) (operation.Operation, error)
+}
+
+// Service keeps the receipts.
+type Service struct {
+	db         db.Executor
+	journal    journal
+	accounts   accounts
+	categories categories
+	splitter   splitter
+}
+
+func NewService(x db.Executor, j journal, acc accounts, cats categories, sp splitter) *Service {
+	return &Service{db: x, journal: j, accounts: acc, categories: cats, splitter: sp}
 }
 
 // Lookup is where a receipt goes: the receipt as written already and the row
@@ -78,14 +91,22 @@ func (s *Service) Lookup(ctx context.Context, spaceID uuid.UUID, r Receipt) (Loo
 	case !errors.Is(err, pgx.ErrNoRows):
 		return Lookup{}, err
 	}
+	out.Candidates, err = s.candidates(ctx, spaceID, r)
+	return out, err
+}
+
+// candidates are the rows of exactly the receipt's total in roubles within
+// nearDays of its day, the right way, on any account but a broker's, that no
+// receipt completes yet, nearest first.
+func (s *Service) candidates(ctx context.Context, spaceID uuid.UUID, r Receipt) ([]operation.Operation, error) {
 	day := time.Date(r.IssuedAt.Year(), r.IssuedAt.Month(), r.IssuedAt.Day(), 0, 0, 0, 0, time.UTC)
 	rows, err := s.journal.ByAmount(ctx, spaceID, r.signed(), "RUB", day.AddDate(0, 0, -nearDays), day.AddDate(0, 0, nearDays))
 	if err != nil || len(rows) == 0 {
-		return out, err
+		return nil, err
 	}
 	list, err := s.accounts.ListWithBalance(ctx, spaceID)
 	if err != nil {
-		return Lookup{}, err
+		return nil, err
 	}
 	broker := map[uuid.UUID]bool{}
 	for _, a := range list {
@@ -97,11 +118,12 @@ func (s *Service) Lookup(ctx context.Context, spaceID uuid.UUID, r Receipt) (Loo
 	}
 	completed, err := s.completed(ctx, spaceID, ids)
 	if err != nil {
-		return Lookup{}, err
+		return nil, err
 	}
+	var out []operation.Operation
 	for _, op := range rows {
-		if !broker[op.AccountID] && !completed[op.ID] && len(out.Candidates) < maxCandidates {
-			out.Candidates = append(out.Candidates, op)
+		if !broker[op.AccountID] && !completed[op.ID] && len(out) < maxCandidates {
+			out = append(out, op)
 		}
 	}
 	return out, nil
@@ -141,6 +163,21 @@ func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, r Receipt) (Rec
 		return Receipt{}, fmt.Errorf("receipt: create: %w", err)
 	}
 	return r, nil
+}
+
+// List are the receipts completing the rows ids names, or (waiting) those
+// waiting for a row, newest first, at most 200.
+func (s *Service) List(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID, waiting bool) ([]Receipt, error) {
+	if len(ids) == 0 && !waiting {
+		return []Receipt{}, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT `+cols+` FROM receipts
+		WHERE space_id = $1 AND (operation_id = ANY($2) OR $3 AND operation_id IS NULL)
+		ORDER BY issued_at DESC, fn, fd LIMIT 200`, spaceID, ids, waiting)
+	if err != nil {
+		return nil, fmt.Errorf("receipt: list: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Receipt, error) { return scan(row) })
 }
 
 // All are the space's receipts, oldest first: for the export.

@@ -209,6 +209,7 @@ func (e CategoryKind) Valid() bool {
 const (
 	CategoryRuleFieldAny          CategoryRuleField = "any"
 	CategoryRuleFieldCounterparty CategoryRuleField = "counterparty"
+	CategoryRuleFieldItem         CategoryRuleField = "item"
 	CategoryRuleFieldNote         CategoryRuleField = "note"
 )
 
@@ -218,6 +219,8 @@ func (e CategoryRuleField) Valid() bool {
 	case CategoryRuleFieldAny:
 		return true
 	case CategoryRuleFieldCounterparty:
+		return true
+	case CategoryRuleFieldItem:
 		return true
 	case CategoryRuleFieldNote:
 		return true
@@ -1863,7 +1866,7 @@ type CategoryKind string
 type CategoryRule struct {
 	CategoryId openapi_types.UUID `json:"category_id"`
 
-	// Field Where the rule looks: the counterparty, the note, or either
+	// Field Where the rule looks: the counterparty, the note, or either; item — the names of a receipt's lines, to split a row by them (decision Р-36), never the row's own text
 	Field CategoryRuleField  `json:"field"`
 	Id    openapi_types.UUID `json:"id"`
 
@@ -1874,7 +1877,7 @@ type CategoryRule struct {
 	Position int `json:"position"`
 }
 
-// CategoryRuleField Where the rule looks: the counterparty, the note, or either
+// CategoryRuleField Where the rule looks: the counterparty, the note, or either; item — the names of a receipt's lines, to split a row by them (decision Р-36), never the row's own text
 type CategoryRuleField string
 
 // ChangePasswordRequest defines model for ChangePasswordRequest.
@@ -1958,7 +1961,7 @@ type CreateCategoryRequest struct {
 type CreateCategoryRuleRequest struct {
 	CategoryId openapi_types.UUID `json:"category_id"`
 
-	// Field Where the rule looks: the counterparty, the note, or either
+	// Field Where the rule looks: the counterparty, the note, or either; item — the names of a receipt's lines, to split a row by them (decision Р-36), never the row's own text
 	Field   CategoryRuleField `json:"field"`
 	Pattern string            `json:"pattern"`
 }
@@ -3751,6 +3754,27 @@ type Receipt struct {
 // ReceiptSource defines model for Receipt.Source.
 type ReceiptSource string
 
+// ReceiptImportResult defines model for ReceiptImportResult.
+type ReceiptImportResult struct {
+	// Attached New ones that completed a row at once
+	Attached int `json:"attached"`
+
+	// Enriched Known ones that got their seller and items now
+	Enriched int `json:"enriched"`
+
+	// Found Receipts found in the statement
+	Found int `json:"found"`
+
+	// Known Known ones the statement brought nothing new to
+	Known int `json:"known"`
+
+	// Split Rows split across categories by their items
+	Split int `json:"split"`
+
+	// Waiting New ones waiting for a row: none of their total near their day, or several
+	Waiting int `json:"waiting"`
+}
+
 // ReceiptItem defines model for ReceiptItem.
 type ReceiptItem struct {
 	Name       string `json:"name"`
@@ -3811,6 +3835,11 @@ type ReceiptNew struct {
 
 // ReceiptNewSource Where it came from: a QR code read here
 type ReceiptNewSource string
+
+// ReceiptSplitResult defines model for ReceiptSplitResult.
+type ReceiptSplitResult struct {
+	Split bool `json:"split"`
+}
 
 // RecurringKey defines model for RecurringKey.
 type RecurringKey struct {
@@ -4458,7 +4487,7 @@ type UpdateCategoryRequest struct {
 type UpdateCategoryRuleRequest struct {
 	CategoryId *openapi_types.UUID `json:"category_id,omitempty"`
 
-	// Field Where the rule looks: the counterparty, the note, or either
+	// Field Where the rule looks: the counterparty, the note, or either; item — the names of a receipt's lines, to split a row by them (decision Р-36), never the row's own text
 	Field   *CategoryRuleField `json:"field,omitempty"`
 	Pattern *string            `json:"pattern,omitempty"`
 }
@@ -4705,6 +4734,16 @@ type UnsubscribePushParams struct {
 	Endpoint string `form:"endpoint" json:"endpoint"`
 }
 
+// ListReceiptsParams defines parameters for ListReceipts.
+type ListReceiptsParams struct {
+	// OperationIds Row ids, comma-separated, at most 200
+	OperationIds *string `form:"operation_ids,omitempty" json:"operation_ids,omitempty"`
+	Waiting      *bool   `form:"waiting,omitempty" json:"waiting,omitempty"`
+}
+
+// ImportReceiptsJSONBody defines parameters for ImportReceipts.
+type ImportReceiptsJSONBody = interface{}
+
 // MatchReceiptParams defines parameters for MatchReceipt.
 type MatchReceiptParams struct {
 	Fn         string      `form:"fn" json:"fn"`
@@ -4865,6 +4904,9 @@ type SubscribePushJSONRequestBody = PushSubscriptionRequest
 
 // CreateReceiptJSONRequestBody defines body for CreateReceipt for application/json ContentType.
 type CreateReceiptJSONRequestBody = ReceiptNew
+
+// ImportReceiptsJSONRequestBody defines body for ImportReceipts for application/json ContentType.
+type ImportReceiptsJSONRequestBody = ImportReceiptsJSONBody
 
 // ShowRecurringJSONRequestBody defines body for ShowRecurring for application/json ContentType.
 type ShowRecurringJSONRequestBody = RecurringKey

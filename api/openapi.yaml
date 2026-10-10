@@ -633,7 +633,71 @@ paths:
               schema: { $ref: "#/components/schemas/ReceiptLookup" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/import:
+    post:
+      tags: [receipts]
+      operationId: importReceipts
+      description: >-
+        Takes a statement of the tax service's app «Проверка чеков» — the JSON file it mails with
+        the receipts scanned or sent to the owner's phone (decision Р-34) — as it is, at most 8 MB.
+        Any object carrying a fiscal drive's number, a document's number, a total and a time is a
+        receipt. A new receipt completes the one row of its total near its day (as GET
+        /receipts/match finds them) or waits for one; a known receipt (read off its QR code) gets
+        the seller and the items it lacked. A spending a receipt with items completes is split
+        across the categories the item rules give its lines (decision Р-36).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "200":
+          description: What the statement brought
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReceiptImportResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/{receiptId}/split:
+    post:
+      tags: [receipts]
+      operationId: resplitReceiptRow
+      description: >-
+        Divides the row a receipt completes by the item rules as they are now (decision Р-36), over
+        whatever split it had — asked for after a rule is learned from one of its lines. The items no
+        rule names, and what the total holds beyond the items, stay with the row's own category.
+        `split` is false when the rules name no other category for its items (the row is then whole).
+      parameters:
+        - { name: receiptId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Whether the row is split now
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReceiptSplitResult" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/receipts:
+    get:
+      tags: [receipts]
+      operationId: listReceipts
+      description: >-
+        The receipts completing the rows `operation_ids` names, or with `waiting`, those waiting for a
+        row, newest first; at most 200.
+      parameters:
+        - { name: operation_ids, in: query, required: false, schema: { type: string }, description: "Row ids, comma-separated, at most 200" }
+        - { name: waiting, in: query, required: false, schema: { type: boolean } }
+      responses:
+        "200":
+          description: The receipts
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Receipt" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
     post:
       tags: [receipts]
       operationId: createReceipt
@@ -3611,6 +3675,21 @@ components:
         address: { type: string, nullable: true }
         items: { type: array, items: { $ref: "#/components/schemas/ReceiptItem" } }
         source: { type: string, enum: [qr, fns, mail, file] }
+    ReceiptSplitResult:
+      type: object
+      required: [split]
+      properties:
+        split: { type: boolean }
+    ReceiptImportResult:
+      type: object
+      required: [found, attached, waiting, enriched, known, split]
+      properties:
+        found: { type: integer, description: "Receipts found in the statement" }
+        attached: { type: integer, description: "New ones that completed a row at once" }
+        waiting: { type: integer, description: "New ones waiting for a row: none of their total near their day, or several" }
+        enriched: { type: integer, description: "Known ones that got their seller and items now" }
+        known: { type: integer, description: "Known ones the statement brought nothing new to" }
+        split: { type: integer, description: "Rows split across categories by their items" }
     ReceiptLookup:
       type: object
       required: [receipt, written_to, candidates]
@@ -4370,8 +4449,8 @@ components:
         filed: { type: integer, description: "Rows filed" }
     CategoryRuleField:
       type: string
-      enum: [counterparty, note, any]
-      description: "Where the rule looks: the counterparty, the note, or either"
+      enum: [counterparty, note, any, item]
+      description: "Where the rule looks: the counterparty, the note, or either; item — the names of a receipt's lines, to split a row by them (decision Р-36), never the row's own text"
     CategoryRule:
       type: object
       required: [id, category_id, field, pattern, position]

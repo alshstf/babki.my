@@ -32,6 +32,7 @@ import { PERIODS, periodDays, type Period } from "@/lib/periods";
 import { RecurringPayments } from "./recurring";
 import { ForecastCard } from "./forecast";
 import { BudgetCard } from "./budget";
+import { ReceiptsCard } from "./receipts";
 
 const EVERYONE = "all";
 // Past this many months a table shows the totals only: the columns would not
@@ -141,6 +142,7 @@ export function MoneyPage() {
             testId="money-income"
           />
           <BudgetCard />
+          <ReceiptsCard />
           <ForecastCard />
           <RecurringPayments />
           <Investments report={data.investments} currency={data.base_currency} />

@@ -21,9 +21,14 @@ const (
 	FieldCounterparty Field = "counterparty"
 	FieldNote         Field = "note"
 	FieldAny          Field = "any"
+	// FieldItem looks in a receipt's item names (decision Р-36), never in a
+	// row's own text.
+	FieldItem Field = "item"
 )
 
-func (f Field) Valid() bool { return f == FieldCounterparty || f == FieldNote || f == FieldAny }
+func (f Field) Valid() bool {
+	return f == FieldCounterparty || f == FieldNote || f == FieldAny || f == FieldItem
+}
 
 // MaxPatternRunes bounds a rule's text, as the schema's CHECK does.
 const MaxPatternRunes = 200
@@ -44,9 +49,10 @@ type Rule struct {
 	CreatedAt  time.Time
 }
 
-// Text is what a rule reads of a row.
+// Text is what a rule reads of a row, or Item, of a line of its receipt.
 type Text struct {
 	Counterparty, Note string
+	Item               string
 }
 
 // fold is the text as a rule compares it: letter case aside, and «ё» read as
@@ -63,6 +69,8 @@ func (r Rule) fits(t Text) bool {
 		return strings.Contains(fold(t.Counterparty), p)
 	case FieldNote:
 		return strings.Contains(fold(t.Note), p)
+	case FieldItem:
+		return t.Item != "" && strings.Contains(fold(t.Item), p)
 	}
 	return strings.Contains(fold(t.Counterparty), p) || strings.Contains(fold(t.Note), p)
 }
@@ -108,7 +116,7 @@ func (s *Store) Rules(ctx context.Context, spaceID uuid.UUID) ([]Rule, error) {
 // characters once trimmed, and a category of the space's.
 func (s *Store) cleanRule(ctx context.Context, spaceID uuid.UUID, r Rule) (Rule, error) {
 	if !r.Field.Valid() {
-		return Rule{}, fmt.Errorf("%w: field is counterparty, note or any", family.ErrValidation)
+		return Rule{}, fmt.Errorf("%w: field is counterparty, note, any or item", family.ErrValidation)
 	}
 	r.Pattern = strings.TrimSpace(r.Pattern)
 	if n := utf8.RuneCountInString(r.Pattern); n == 0 || n > MaxPatternRunes {

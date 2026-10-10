@@ -60,6 +60,8 @@ import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import { rulePattern, treeOf, useCategories, useCreateCategoryRule, type Category } from "@/api/categories";
 import { CategoryChip, categoryKindOf, categoryLabel } from "@/components/category-picker";
 import { PartsDialog } from "./parts-dialog";
+import { ReceiptLine } from "./receipt-line";
+import { useReceiptsFor } from "@/api/receipts";
 import { MemberChip } from "@/components/member-picker";
 import { useMembers } from "@/api/members";
 import type { CostBasisRules } from "@/api/tax-residencies";
@@ -242,6 +244,10 @@ export function OperationsTable({
       { onSuccess: () => fileByRules.mutate(accountId) },
     );
   const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
+  // The receipts completing the page's purchases (household stage 3).
+  const receipts = useReceiptsFor(
+    list.filter((o) => o.type === "withdrawal" || o.type === "deposit").map((o) => o.id),
+  );
 
   // The journal reports its currencies to the screen-wide counter that decides
   // whether the display-currency toggle shows; it owns its query, and a foreign
@@ -582,6 +588,9 @@ export function OperationsTable({
                         .map((part) => `${categoryLabel(categoryList, part.category_id) ?? "?"} ${formatMinor(part.amount_minor, operation.currency)}`)
                         .join(" · ")}
                     </div>
+                  )}
+                  {receipts.data?.get(operation.id) && (
+                    <ReceiptLine receipt={receipts.data.get(operation.id)!} categories={categoryList} canEdit={canDelete} />
                   )}
                   {operation.counterparty && (
                     <div className="text-xs text-muted-foreground" data-testid="operation-counterparty">

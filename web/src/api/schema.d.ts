@@ -421,7 +421,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/receipts": {
+    "/api/v1/receipts/import": {
         parameters: {
             query?: never;
             header?: never;
@@ -429,6 +429,41 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        put?: never;
+        /** @description Takes a statement of the tax service's app «Проверка чеков» — the JSON file it mails with the receipts scanned or sent to the owner's phone (decision Р-34) — as it is, at most 8 MB. Any object carrying a fiscal drive's number, a document's number, a total and a time is a receipt. A new receipt completes the one row of its total near its day (as GET /receipts/match finds them) or waits for one; a known receipt (read off its QR code) gets the seller and the items it lacked. A spending a receipt with items completes is split across the categories the item rules give its lines (decision Р-36). */
+        post: operations["importReceipts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/receipts/{receiptId}/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Divides the row a receipt completes by the item rules as they are now (decision Р-36), over whatever split it had — asked for after a rule is learned from one of its lines. The items no rule names, and what the total holds beyond the items, stay with the row's own category. `split` is false when the rules name no other category for its items (the row is then whole). */
+        post: operations["resplitReceiptRow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The receipts completing the rows `operation_ids` names, or with `waiting`, those waiting for a row, newest first; at most 200. */
+        get: operations["listReceipts"];
         put?: never;
         /** @description Records a cash receipt, completing the row `operation_id` (the family's, of exactly its total, spending for a purchase or a payout's refund, earning for a refund or a payout); none leaves it waiting for one. 409 when the receipt is written already. */
         post: operations["createReceipt"];
@@ -2903,6 +2938,23 @@ export interface components {
             /** @enum {string} */
             source: "qr" | "fns" | "mail" | "file";
         };
+        ReceiptSplitResult: {
+            split: boolean;
+        };
+        ReceiptImportResult: {
+            /** @description Receipts found in the statement */
+            found: number;
+            /** @description New ones that completed a row at once */
+            attached: number;
+            /** @description New ones waiting for a row: none of their total near their day, or several */
+            waiting: number;
+            /** @description Known ones that got their seller and items now */
+            enriched: number;
+            /** @description Known ones the statement brought nothing new to */
+            known: number;
+            /** @description Rows split across categories by their items */
+            split: number;
+        };
         ReceiptLookup: {
             /** @description The receipt as written already, with the row it completes; null when it is new */
             receipt: components["schemas"]["Receipt"] | null;
@@ -3705,10 +3757,10 @@ export interface components {
             filed: number;
         };
         /**
-         * @description Where the rule looks: the counterparty, the note, or either
+         * @description Where the rule looks: the counterparty, the note, or either; item — the names of a receipt's lines, to split a row by them (decision Р-36), never the row's own text
          * @enum {string}
          */
-        CategoryRuleField: "counterparty" | "note" | "any";
+        CategoryRuleField: "counterparty" | "note" | "any" | "item";
         CategoryRule: {
             /** Format: uuid */
             id: string;
@@ -5247,6 +5299,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReceiptLookup"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    importReceipts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description What the statement brought */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptImportResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+        };
+    };
+    resplitReceiptRow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                receiptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether the row is split now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptSplitResult"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listReceipts: {
+        parameters: {
+            query?: {
+                /** @description Row ids, comma-separated, at most 200 */
+                operation_ids?: string;
+                waiting?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The receipts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Receipt"][];
                 };
             };
             400: components["responses"]["Error"];
