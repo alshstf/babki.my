@@ -1,0 +1,138 @@
+package receipt
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/alexedwards/scs/v2"
+	"github.com/google/uuid"
+	"github.com/oapi-codegen/nullable"
+
+	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/apitypes"
+	"babki.my/babki/internal/platform/httpjson"
+	"babki.my/babki/internal/platform/httpserver"
+)
+
+// Handler serves the receipts.
+type Handler struct {
+	svc  *Service
+	auth *family.Auth
+	sm   *scs.SessionManager
+}
+
+func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{svc: svc, auth: auth, sm: sm}
+}
+
+func (h *Handler) Mount(srv *httpserver.Server) {
+	view := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleViewer, fn)))
+	}
+	edit := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
+	}
+	srv.Mount("GET /api/v1/receipts/match", view(h.handleMatch))
+	srv.Mount("POST /api/v1/receipts", edit(h.handleCreate))
+}
+
+func (h *Handler) handleMatch(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	q := r.URL.Query()
+	total, err := strconv.ParseInt(q.Get("total_minor"), 10, 64)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "total_minor must be a whole number")
+		return
+	}
+	at, err := time.Parse(IssuedAtLayout, q.Get("issued_at"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "issued_at must be YYYY-MM-DDTHH:MM")
+		return
+	}
+	found, err := h.svc.Lookup(r.Context(), p.SpaceID, Receipt{FN: q.Get("fn"), FD: q.Get("fd"), Kind: Kind(q.Get("kind")), Total: total, IssuedAt: at})
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.ReceiptLookup{
+		Receipt: nullable.NewNullNullable[apitypes.Receipt](), WrittenTo: nullable.NewNullNullable[apitypes.ReceiptMatch](),
+		Candidates: make([]apitypes.ReceiptMatch, 0, len(found.Candidates)),
+	}
+	if found.Written != nil {
+		out.Receipt = nullable.NewNullableWithValue(API(*found.Written))
+	}
+	if found.WrittenTo != nil {
+		out.WrittenTo = nullable.NewNullableWithValue(match(*found.WrittenTo))
+	}
+	for _, op := range found.Candidates {
+		out.Candidates = append(out.Candidates, match(op))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.ReceiptNew
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	at, err := time.Parse(IssuedAtLayout, req.IssuedAt)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "issued_at must be YYYY-MM-DDTHH:MM")
+		return
+	}
+	in := Receipt{FN: req.Fn, FD: req.Fd, Kind: Kind(req.Kind), IssuedAt: at, Total: req.TotalMinor, Source: string(req.Source)}
+	if req.OperationId.IsSpecified() && !req.OperationId.IsNull() {
+		id := req.OperationId.MustGet()
+		in.OperationID = &id
+	}
+	if req.Fp.IsSpecified() && !req.Fp.IsNull() {
+		fp := req.Fp.MustGet()
+		in.FP = &fp
+	}
+	created, err := h.svc.Create(r.Context(), p.SpaceID, in)
+	if errors.Is(err, ErrWritten) {
+		httpjson.Error(w, http.StatusConflict, "the receipt is written already")
+		return
+	}
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusCreated, API(created))
+}
+
+// API is a receipt as the API and the export write it.
+func API(r Receipt) apitypes.Receipt {
+	out := apitypes.Receipt{
+		Id: r.ID, OperationId: nullable.NewNullNullable[uuid.UUID](), Fn: r.FN, Fd: r.FD, Fp: nullable.NewNullNullable[string](),
+		Kind: apitypes.ReceiptKind(r.Kind), IssuedAt: r.IssuedAt.Format(IssuedAtLayout), TotalMinor: r.Total,
+		Seller: nullable.NewNullNullable[string](), SellerInn: nullable.NewNullNullable[string](), Address: nullable.NewNullNullable[string](),
+		Items: make([]apitypes.ReceiptItem, 0, len(r.Items)), Source: apitypes.ReceiptSource(r.Source),
+	}
+	if r.OperationID != nil {
+		out.OperationId = nullable.NewNullableWithValue(*r.OperationID)
+	}
+	for _, f := range []struct {
+		v   *string
+		out *nullable.Nullable[string]
+	}{{r.FP, &out.Fp}, {r.Seller, &out.Seller}, {r.SellerINN, &out.SellerInn}, {r.Address, &out.Address}} {
+		if f.v != nil {
+			*f.out = nullable.NewNullableWithValue(*f.v)
+		}
+	}
+	for _, it := range r.Items {
+		out.Items = append(out.Items, apitypes.ReceiptItem{Name: it.Name, Quantity: it.Quantity, PriceMinor: it.Price, SumMinor: it.Sum})
+	}
+	return out
+}
+
+func match(op operation.Operation) apitypes.ReceiptMatch {
+	return apitypes.ReceiptMatch{
+		Id: op.ID, AccountId: op.AccountID, OccurredOn: op.OccurredOn.Format(time.DateOnly),
+		AmountMinor: op.AmountMinor, Currency: op.Currency,
+	}
+}

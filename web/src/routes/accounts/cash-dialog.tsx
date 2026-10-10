@@ -26,17 +26,16 @@ import {
   parseToMinor,
 } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
-import { parseReceiptQr, receiptIsIncoming } from "@/lib/receipt-qr";
+import { parseReceiptQr, receiptIsIncoming, type Receipt } from "@/lib/receipt-qr";
 import { decodeQrFromImage } from "@/lib/qr-decode";
 import {
-  findReceipt,
   useSaveOperation,
   isConflict,
-  type ReceiptMatch,
   type Operation,
   type OperationType,
 } from "@/api/operations";
-import type { AccountWithBalance } from "@/api/accounts";
+import { createReceipt, matchReceipt, type ReceiptMatch, type ReceiptNew } from "@/api/receipts";
+import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { matchRule, useCategories, useCategoryRules } from "@/api/categories";
 import { useMembers } from "@/api/members";
 import { MemberSelect } from "@/components/member-picker";
@@ -101,8 +100,14 @@ export function CashDialog({
   // Reading a receipt's QR code: what happened last, for the line under the
   // button.
   const [receipt, setReceipt] = useState<"reading" | "filled" | "noCode" | "notReceipt" | null>(null);
-  // A row the same receipt was written to before, if any.
-  const [already, setAlready] = useState<ReceiptMatch | null>(null);
+  // The receipt read, to be recorded with the row; the row it was written to
+  // before (or "waiting" with none); the rows of its total near its day it
+  // may complete instead — the bank's row of the same card purchase.
+  const [scanned, setScanned] = useState<Receipt | null>(null);
+  const [already, setAlready] = useState<ReceiptMatch | "waiting" | null>(null);
+  const [candidates, setCandidates] = useState<ReceiptMatch[]>([]);
+  const [attachFailed, setAttachFailed] = useState(false);
+  const allAccounts = useAccounts();
   const photo = useRef<HTMLInputElement>(null);
   const target = accounts?.find((a) => a.id === pickedId) ?? account;
 
@@ -117,7 +122,10 @@ export function CashDialog({
     setMemberId(editing?.member_id ?? null);
     setPickedId(account.id);
     setReceipt(null);
+    setScanned(null);
     setAlready(null);
+    setCandidates([]);
+    setAttachFailed(false);
     createOperation.reset();
   });
 
@@ -142,11 +150,13 @@ export function CashDialog({
 
   // A photo of a receipt fills the total, the day and which way the money
   // went; the shop is not in the code, the person names it. The fiscal
-  // numbers go to the note: they name the receipt for good.
+  // numbers go to the note and the receipt itself is recorded with the row.
   const readReceipt = async (file: File | undefined) => {
     if (!file) return;
     setReceipt("reading");
+    setScanned(null);
     setAlready(null);
+    setCandidates([]);
     let text: string | null = null;
     try {
       text = await decodeQrFromImage(file);
@@ -169,10 +179,33 @@ export function CashDialog({
       setNote(t("cash.receipt.note", { date: formatDate(r.date), time: r.time, fn: r.fn, fd: r.fd }));
     }
     setReceipt("filled");
-    // Only a warning: a lookup that fails leaves the form as filled.
-    findReceipt(r.fn, r.fd)
-      .then((found) => setAlready(found[0] ?? null))
-      .catch(() => setAlready(null));
+    setScanned(r);
+    // Only advice: a lookup that fails leaves the form as filled.
+    matchReceipt(receiptQuery(r))
+      .then((found) => {
+        if (found.receipt) setAlready(found.written_to ?? "waiting");
+        else setCandidates(found.candidates);
+      })
+      .catch(() => setCandidates([]));
+  };
+
+  // The receipt completes the row: the one saved here, or the bank's row it
+  // was taken for. One whose row was changed past its total waits for one.
+  const record = async (r: Receipt, operationId: string) => {
+    const body: ReceiptNew = { ...receiptQuery(r), fp: r.fp, operation_id: operationId, source: "qr" };
+    try {
+      await createReceipt(body);
+    } catch {
+      await createReceipt({ ...body, operation_id: null }).catch(() => undefined);
+    }
+  };
+
+  const attach = (to: ReceiptMatch) => {
+    if (!scanned) return;
+    setAttachFailed(false);
+    createReceipt({ ...receiptQuery(scanned), fp: scanned.fp, operation_id: to.id, source: "qr" })
+      .then(() => onOpenChange(false))
+      .catch(() => setAttachFailed(true));
   };
 
   const submit = () => {
@@ -191,6 +224,7 @@ export function CashDialog({
       },
       {
         onSuccess: (op) => {
+          if (scanned) void record(scanned, op.id);
           onSaved?.(op);
           onOpenChange(false);
         },
@@ -284,11 +318,30 @@ export function CashDialog({
               )}
               {already && (
                 <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="receipt-already">
-                  {t("cash.receipt.already", {
-                    date: formatDate(already.occurred_on),
-                    amount: formatMinor(Math.abs(already.amount_minor), already.currency),
-                  })}
+                  {already === "waiting"
+                    ? t("cash.receipt.alreadyWaiting")
+                    : t("cash.receipt.already", {
+                        date: formatDate(already.occurred_on),
+                        amount: formatMinor(Math.abs(already.amount_minor), already.currency),
+                      })}
                 </p>
+              )}
+              {candidates.length > 0 && (
+                <div className="grid gap-1 rounded-md border border-amber-300 p-2 dark:border-amber-800" data-testid="receipt-candidates">
+                  <p className="text-xs">{t("cash.receipt.candidates")}</p>
+                  {candidates.map((c) => (
+                    <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span>
+                        {allAccounts.data?.find((a) => a.id === c.account_id)?.name ?? ""} · {formatDate(c.occurred_on)} ·{" "}
+                        {formatMinor(Math.abs(c.amount_minor), c.currency)}
+                      </span>
+                      <Button type="button" size="sm" variant="outline" onClick={() => attach(c)}>
+                        {t("cash.receipt.attach")}
+                      </Button>
+                    </div>
+                  ))}
+                  {attachFailed && <p className="text-xs text-red-700 dark:text-red-400">{t("cash.receipt.attachFailed")}</p>}
+                </div>
               )}
             </div>
           )}
@@ -366,4 +419,10 @@ export function CashDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+// receiptQuery is a receipt read off its QR code as the API names it.
+function receiptQuery(r: Receipt) {
+  const kind: ReceiptNew["kind"] = r.kind === "payoutRefund" ? "payout_refund" : r.kind;
+  return { fn: r.fn, fd: r.fd, kind, total_minor: r.amountMinor, issued_at: `${r.date}T${r.time}` };
 }

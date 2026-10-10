@@ -28,6 +28,7 @@ import (
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
+	"babki.my/babki/internal/receipt"
 )
 
 type stack struct {
@@ -60,7 +61,7 @@ func newStack(t *testing.T) stack {
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
-		budget.NewService(pool, nil, category.NewStore(pool)), auth, sm).Mount(srv)
+		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

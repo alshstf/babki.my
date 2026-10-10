@@ -404,6 +404,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/receipts/match": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Where a cash receipt goes: `receipt` when it is written already (its numbers fn and fd name it for good), and otherwise `candidates` — the family's spending (a purchase, a payout's refund) or earning (a refund, a payout) rows of exactly its total in roubles within a day of its time, on any account but a broker's, that no receipt completes yet; nearest first, at most five. The bank's row of a card purchase is such a candidate: the receipt completes it rather than standing for a second purchase. */
+        get: operations["matchReceipt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records a cash receipt, completing the row `operation_id` (the family's, of exactly its total, spending for a purchase or a payout's refund, earning for a refund or a payout); none leaves it waiting for one. 409 when the receipt is written already. */
+        post: operations["createReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/categories": {
         parameters: {
             query?: never;
@@ -1224,23 +1258,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/operations/receipt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description The space's rows whose note names this cash receipt — «ФН {fn}, ФД {fd}», as the receipt dialog writes it — newest first, at most five: so the dialog can warn before the same receipt is written twice. Empty when there are none. */
-        get: operations["findReceipt"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/operations/file-by-rules": {
         parameters: {
             query?: never;
@@ -2006,6 +2023,8 @@ export interface components {
             category_rules: components["schemas"]["CategoryRule"][];
             /** @description The budget's limits, by category and the month each runs from (GET /budget/limits) */
             budget_limits: components["schemas"]["BudgetLimit"][];
+            /** @description The cash receipts, by their time; operation_id names the row each completes */
+            receipts: components["schemas"]["Receipt"][];
         };
         ExportCategory: {
             /** Format: uuid */
@@ -2806,6 +2825,70 @@ export interface components {
         PushTestResult: {
             devices: number;
             delivered: number;
+        };
+        /**
+         * @description The receipt's kind (its QR code's n): a purchase, its refund, the seller paying out (scrap bought from you), the refund of that
+         * @enum {string}
+         */
+        ReceiptKind: "purchase" | "refund" | "payout" | "payout_refund";
+        ReceiptItem: {
+            name: string;
+            /** @description Decimal, pieces or kilograms */
+            quantity: string;
+            /** Format: int64 */
+            price_minor: number;
+            /** Format: int64 */
+            sum_minor: number;
+        };
+        ReceiptNew: {
+            /** Format: uuid */
+            operation_id?: string | null;
+            /** @description The fiscal drive's number */
+            fn: string;
+            /** @description The fiscal document's number */
+            fd: string;
+            /** @description The fiscal sign */
+            fp?: string | null;
+            kind: components["schemas"]["ReceiptKind"];
+            /** @description The till's time, YYYY-MM-DDTHH:MM */
+            issued_at: string;
+            /** Format: int64 */
+            total_minor: number;
+            /**
+             * @description Where it came from: a QR code read here
+             * @enum {string}
+             */
+            source: "qr";
+        };
+        Receipt: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description The row it completes; null while it waits for one
+             */
+            operation_id: string | null;
+            fn: string;
+            fd: string;
+            fp: string | null;
+            kind: components["schemas"]["ReceiptKind"];
+            /** @description YYYY-MM-DDTHH:MM */
+            issued_at: string;
+            /** Format: int64 */
+            total_minor: number;
+            seller: string | null;
+            seller_inn: string | null;
+            address: string | null;
+            items: components["schemas"]["ReceiptItem"][];
+            /** @enum {string} */
+            source: "qr" | "fns" | "mail" | "file";
+        };
+        ReceiptLookup: {
+            /** @description The receipt as written already, with the row it completes; null when it is new */
+            receipt: components["schemas"]["Receipt"] | null;
+            /** @description The row the written receipt completes, when it completes one */
+            written_to: components["schemas"]["ReceiptMatch"] | null;
+            candidates: components["schemas"]["ReceiptMatch"][];
         };
         ReceiptMatch: {
             /** Format: uuid */
@@ -5107,6 +5190,63 @@ export interface operations {
             404: components["responses"]["Error"];
         };
     };
+    matchReceipt: {
+        parameters: {
+            query: {
+                fn: string;
+                fd: string;
+                kind: components["schemas"]["ReceiptKind"];
+                total_minor: number;
+                /** @description The till's time, YYYY-MM-DDTHH:MM */
+                issued_at: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The receipt's place */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptLookup"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    createReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiptNew"];
+            };
+        };
+        responses: {
+            /** @description The receipt */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Receipt"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
     listCategories: {
         parameters: {
             query?: never;
@@ -6709,33 +6849,6 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
-        };
-    };
-    findReceipt: {
-        parameters: {
-            query: {
-                /** @description The fiscal drive's number */
-                fn: string;
-                /** @description The fiscal document's number */
-                fd: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The rows */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReceiptMatch"][];
-                };
-            };
-            400: components["responses"]["Error"];
-            401: components["responses"]["Error"];
         };
     };
     fileOperationsByRules: {

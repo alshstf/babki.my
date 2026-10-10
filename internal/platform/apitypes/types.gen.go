@@ -327,19 +327,19 @@ func (e CreditCardTermsGraceKind) Valid() bool {
 
 // Defines values for CreditCardTermsGraceRunFrom.
 const (
-	MonthStart CreditCardTermsGraceRunFrom = "month_start"
-	NextDay    CreditCardTermsGraceRunFrom = "next_day"
-	Purchase   CreditCardTermsGraceRunFrom = "purchase"
+	CreditCardTermsGraceRunFromMonthStart CreditCardTermsGraceRunFrom = "month_start"
+	CreditCardTermsGraceRunFromNextDay    CreditCardTermsGraceRunFrom = "next_day"
+	CreditCardTermsGraceRunFromPurchase   CreditCardTermsGraceRunFrom = "purchase"
 )
 
 // Valid indicates whether the value is a known member of the CreditCardTermsGraceRunFrom enum.
 func (e CreditCardTermsGraceRunFrom) Valid() bool {
 	switch e {
-	case MonthStart:
+	case CreditCardTermsGraceRunFromMonthStart:
 		return true
-	case NextDay:
+	case CreditCardTermsGraceRunFromNextDay:
 		return true
-	case Purchase:
+	case CreditCardTermsGraceRunFromPurchase:
 		return true
 	default:
 		return false
@@ -964,6 +964,69 @@ const (
 func (e RealizedGap) Valid() bool {
 	switch e {
 	case NoRate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReceiptSource.
+const (
+	ReceiptSourceFile ReceiptSource = "file"
+	ReceiptSourceFns  ReceiptSource = "fns"
+	ReceiptSourceMail ReceiptSource = "mail"
+	ReceiptSourceQr   ReceiptSource = "qr"
+)
+
+// Valid indicates whether the value is a known member of the ReceiptSource enum.
+func (e ReceiptSource) Valid() bool {
+	switch e {
+	case ReceiptSourceFile:
+		return true
+	case ReceiptSourceFns:
+		return true
+	case ReceiptSourceMail:
+		return true
+	case ReceiptSourceQr:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReceiptKind.
+const (
+	ReceiptKindPayout       ReceiptKind = "payout"
+	ReceiptKindPayoutRefund ReceiptKind = "payout_refund"
+	ReceiptKindPurchase     ReceiptKind = "purchase"
+	ReceiptKindRefund       ReceiptKind = "refund"
+)
+
+// Valid indicates whether the value is a known member of the ReceiptKind enum.
+func (e ReceiptKind) Valid() bool {
+	switch e {
+	case ReceiptKindPayout:
+		return true
+	case ReceiptKindPayoutRefund:
+		return true
+	case ReceiptKindPurchase:
+		return true
+	case ReceiptKindRefund:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReceiptNewSource.
+const (
+	ReceiptNewSourceQr ReceiptNewSource = "qr"
+)
+
+// Valid indicates whether the value is a known member of the ReceiptNewSource enum.
+func (e ReceiptNewSource) Valid() bool {
+	switch e {
+	case ReceiptNewSourceQr:
 		return true
 	default:
 		return false
@@ -3649,6 +3712,56 @@ type RealizedTotal struct {
 	UnknownCostPositions int `json:"unknown_cost_positions"`
 }
 
+// Receipt defines model for Receipt.
+type Receipt struct {
+	Address nullable.Nullable[string] `json:"address"`
+	Fd      string                    `json:"fd"`
+	Fn      string                    `json:"fn"`
+	Fp      nullable.Nullable[string] `json:"fp"`
+	Id      openapi_types.UUID        `json:"id"`
+
+	// IssuedAt YYYY-MM-DDTHH:MM
+	IssuedAt string        `json:"issued_at"`
+	Items    []ReceiptItem `json:"items"`
+
+	// Kind The receipt's kind (its QR code's n): a purchase, its refund, the seller paying out (scrap bought from you), the refund of that
+	Kind ReceiptKind `json:"kind"`
+
+	// OperationId The row it completes; null while it waits for one
+	OperationId nullable.Nullable[openapi_types.UUID] `json:"operation_id"`
+	Seller      nullable.Nullable[string]             `json:"seller"`
+	SellerInn   nullable.Nullable[string]             `json:"seller_inn"`
+	Source      ReceiptSource                         `json:"source"`
+	TotalMinor  int64                                 `json:"total_minor"`
+}
+
+// ReceiptSource defines model for Receipt.Source.
+type ReceiptSource string
+
+// ReceiptItem defines model for ReceiptItem.
+type ReceiptItem struct {
+	Name       string `json:"name"`
+	PriceMinor int64  `json:"price_minor"`
+
+	// Quantity Decimal, pieces or kilograms
+	Quantity string `json:"quantity"`
+	SumMinor int64  `json:"sum_minor"`
+}
+
+// ReceiptKind The receipt's kind (its QR code's n): a purchase, its refund, the seller paying out (scrap bought from you), the refund of that
+type ReceiptKind string
+
+// ReceiptLookup defines model for ReceiptLookup.
+type ReceiptLookup struct {
+	Candidates []ReceiptMatch `json:"candidates"`
+
+	// Receipt The receipt as written already, with the row it completes; null when it is new
+	Receipt nullable.Nullable[Receipt] `json:"receipt"`
+
+	// WrittenTo The row the written receipt completes, when it completes one
+	WrittenTo nullable.Nullable[ReceiptMatch] `json:"written_to"`
+}
+
 // ReceiptMatch defines model for ReceiptMatch.
 type ReceiptMatch struct {
 	AccountId   openapi_types.UUID `json:"account_id"`
@@ -3659,6 +3772,32 @@ type ReceiptMatch struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 }
+
+// ReceiptNew defines model for ReceiptNew.
+type ReceiptNew struct {
+	// Fd The fiscal document's number
+	Fd string `json:"fd"`
+
+	// Fn The fiscal drive's number
+	Fn string `json:"fn"`
+
+	// Fp The fiscal sign
+	Fp nullable.Nullable[string] `json:"fp,omitempty"`
+
+	// IssuedAt The till's time, YYYY-MM-DDTHH:MM
+	IssuedAt string `json:"issued_at"`
+
+	// Kind The receipt's kind (its QR code's n): a purchase, its refund, the seller paying out (scrap bought from you), the refund of that
+	Kind        ReceiptKind                           `json:"kind"`
+	OperationId nullable.Nullable[openapi_types.UUID] `json:"operation_id,omitempty"`
+
+	// Source Where it came from: a QR code read here
+	Source     ReceiptNewSource `json:"source"`
+	TotalMinor int64            `json:"total_minor"`
+}
+
+// ReceiptNewSource Where it came from: a QR code read here
+type ReceiptNewSource string
 
 // RecurringKey defines model for RecurringKey.
 type RecurringKey struct {
@@ -3797,7 +3936,10 @@ type SpaceExport struct {
 	Instruments      []ExportInstrument      `json:"instruments"`
 	ManualPrices     []ExportManualPrice     `json:"manual_prices"`
 	Members          []ExportMember          `json:"members"`
-	Space            ExportSpace             `json:"space"`
+
+	// Receipts The cash receipts, by their time; operation_id names the row each completes
+	Receipts []Receipt   `json:"receipts"`
+	Space    ExportSpace `json:"space"`
 
 	// Version 1. Raised when a field changes meaning or goes away; new fields may appear without it.
 	Version int `json:"version"`
@@ -4521,15 +4663,6 @@ type GetInstrumentReturnParams struct {
 	To string `form:"to" json:"to"`
 }
 
-// FindReceiptParams defines parameters for FindReceipt.
-type FindReceiptParams struct {
-	// Fn The fiscal drive's number
-	Fn string `form:"fn" json:"fn"`
-
-	// Fd The fiscal document's number
-	Fd string `form:"fd" json:"fd"`
-}
-
 // GetPayoutsParams defines parameters for GetPayouts.
 type GetPayoutsParams struct {
 	Months *int `form:"months,omitempty" json:"months,omitempty"`
@@ -4552,6 +4685,17 @@ type GetPayoutsReceivedParams struct {
 // UnsubscribePushParams defines parameters for UnsubscribePush.
 type UnsubscribePushParams struct {
 	Endpoint string `form:"endpoint" json:"endpoint"`
+}
+
+// MatchReceiptParams defines parameters for MatchReceipt.
+type MatchReceiptParams struct {
+	Fn         string      `form:"fn" json:"fn"`
+	Fd         string      `form:"fd" json:"fd"`
+	Kind       ReceiptKind `form:"kind" json:"kind"`
+	TotalMinor int64       `form:"total_minor" json:"total_minor"`
+
+	// IssuedAt The till's time, YYYY-MM-DDTHH:MM
+	IssuedAt string `form:"issued_at" json:"issued_at"`
 }
 
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
@@ -4697,6 +4841,9 @@ type StateWithheldAbroadJSONRequestBody = StateWithheldRequest
 
 // SubscribePushJSONRequestBody defines body for SubscribePush for application/json ContentType.
 type SubscribePushJSONRequestBody = PushSubscriptionRequest
+
+// CreateReceiptJSONRequestBody defines body for CreateReceipt for application/json ContentType.
+type CreateReceiptJSONRequestBody = ReceiptNew
 
 // ShowRecurringJSONRequestBody defines body for ShowRecurring for application/json ContentType.
 type ShowRecurringJSONRequestBody = RecurringKey

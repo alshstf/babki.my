@@ -615,14 +615,16 @@ func (s *Store) ListMoneyFlows(ctx context.Context, spaceID uuid.UUID, from, to 
 		`+engineOrder, spaceID, from, to, types)
 }
 
-// ByReceipt is the space's rows whose note names a cash receipt — the fiscal
-// drive's number and the document's, as the receipt dialog writes them («ФН
-// 7380440700000000, ФД 12345») — newest first, at most five. fn and fd are
-// digits (the caller checks), so they go into the pattern as they are.
-func (s *Store) ByReceipt(ctx context.Context, spaceID uuid.UUID, fn, fd string) ([]Operation, error) {
+// ByAmount is the space's spending or earning rows of exactly amountMinor in
+// currency between from and to, both days included — not a leg of a move
+// between the family's accounts — nearest the middle first, at most ten: the
+// rows a cash receipt may be the shop's document of.
+func (s *Store) ByAmount(ctx context.Context, spaceID uuid.UUID, amountMinor int64, currency string, from, to time.Time) ([]Operation, error) {
+	middle := from.Add(to.Sub(from) / 2)
 	return s.list(ctx, `SELECT `+cols+` FROM operations
-		WHERE space_id = $1 AND note ~ $2
-		ORDER BY occurred_on DESC, created_at DESC LIMIT 5`, spaceID, "ФН "+fn+", ФД "+fd+"([^0-9]|$)")
+		WHERE space_id = $1 AND amount_minor = $2 AND currency = $3 AND occurred_on BETWEEN $4 AND $5
+			AND transfer_group_id IS NULL AND type IN ('withdrawal', 'deposit')
+		ORDER BY abs(occurred_on - $6::date), created_at LIMIT 10`, spaceID, amountMinor, currency, from, to, middle)
 }
 
 // ListForEngine returns the account's whole journal in engine order, with
