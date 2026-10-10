@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
+  formatMinor,
   minorToInput,
   parseToMinor,
 } from "@/lib/money";
@@ -28,8 +29,10 @@ import { formatDate, localToday } from "@/lib/dates";
 import { parseReceiptQr, receiptIsIncoming } from "@/lib/receipt-qr";
 import { decodeQrFromImage } from "@/lib/qr-decode";
 import {
+  findReceipt,
   useSaveOperation,
   isConflict,
+  type ReceiptMatch,
   type Operation,
   type OperationType,
 } from "@/api/operations";
@@ -98,6 +101,8 @@ export function CashDialog({
   // Reading a receipt's QR code: what happened last, for the line under the
   // button.
   const [receipt, setReceipt] = useState<"reading" | "filled" | "noCode" | "notReceipt" | null>(null);
+  // A row the same receipt was written to before, if any.
+  const [already, setAlready] = useState<ReceiptMatch | null>(null);
   const photo = useRef<HTMLInputElement>(null);
   const target = accounts?.find((a) => a.id === pickedId) ?? account;
 
@@ -112,6 +117,7 @@ export function CashDialog({
     setMemberId(editing?.member_id ?? null);
     setPickedId(account.id);
     setReceipt(null);
+    setAlready(null);
     createOperation.reset();
   });
 
@@ -140,6 +146,7 @@ export function CashDialog({
   const readReceipt = async (file: File | undefined) => {
     if (!file) return;
     setReceipt("reading");
+    setAlready(null);
     let text: string | null = null;
     try {
       text = await decodeQrFromImage(file);
@@ -162,6 +169,10 @@ export function CashDialog({
       setNote(t("cash.receipt.note", { date: formatDate(r.date), time: r.time, fn: r.fn, fd: r.fd }));
     }
     setReceipt("filled");
+    // Only a warning: a lookup that fails leaves the form as filled.
+    findReceipt(r.fn, r.fd)
+      .then((found) => setAlready(found[0] ?? null))
+      .catch(() => setAlready(null));
   };
 
   const submit = () => {
@@ -269,6 +280,14 @@ export function CashDialog({
                   data-testid="receipt-status"
                 >
                   {t(`cash.receipt.${receipt}`)}
+                </p>
+              )}
+              {already && (
+                <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="receipt-already">
+                  {t("cash.receipt.already", {
+                    date: formatDate(already.occurred_on),
+                    amount: formatMinor(Math.abs(already.amount_minor), already.currency),
+                  })}
                 </p>
               )}
             </div>
