@@ -625,7 +625,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Reads a CSV table of operations for the account and says, row by row, what importing it would do — and writes nothing. Without `mapping` the columns and the type values are guessed from the header; the answer carries the mapping it used, for the person to correct and send back. Rows already imported from a table (the same content, see ImportRow.verdict) are duplicates. The journal is asked about the new rows exactly as an import would ask it. 400 for a table that cannot be read at all or a mapping naming an operation type a table may not hold; 404 for an account not in this space. */
+        /** @description Reads a table of operations for the account — a CSV, an Excel workbook, or the export of Intelinvest, Snowball Income or Ghostfolio (see ImportTracker) — and says, row by row, what importing it would do — and writes nothing. Without `mapping` the columns and the type values are guessed from the header; the answer carries the mapping it used, for the person to correct and send back. Rows already imported from a table (the same content, see ImportRow.verdict) are duplicates. The journal is asked about the new rows exactly as an import would ask it. 400 for a table that cannot be read at all or a mapping naming an operation type a table may not hold; 404 for an account not in this space. */
         post: operations["previewTableImport"];
         delete?: never;
         options?: never;
@@ -660,6 +660,23 @@ export interface paths {
         };
         /** @description The account's journal as a CSV table, oldest first: `;` between cells, decimal commas, a byte-order mark, a header in the words the table import recognizes — so the same file reads back through POST .../imports (buys, sells, money and payments; transfers and corporate actions are written for the reader and not read back). Amounts are signed as the journal keeps them; the paper is named by its ISIN, or its ticker without one. */
         get: operations["exportJournal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A table to fill in by hand and import: the header in the words the import recognizes and example rows of each kind it takes. As `csv` (UTF-8 with a byte-order mark, `;` between cells, decimal commas) or `xlsx` (dates and numbers as Excel's own, with a sheet that explains the columns and the types). */
+        get: operations["tableImportTemplate"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1723,10 +1740,22 @@ export interface components {
             };
         };
         ImportPreviewRequest: {
-            /** @description The CSV text. ';', ',' or a tab between cells; at most 5000 rows. */
+            /** @description The file: for `text`, a CSV (';', ',' or a tab between cells) or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows. */
             content: string;
+            format?: components["schemas"]["ImportFileFormat"];
             mapping?: components["schemas"]["ImportMapping"];
         };
+        /**
+         * @description How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
+         * @default text
+         * @enum {string}
+         */
+        ImportFileFormat: "text" | "xlsx";
+        /**
+         * @description Another program whose export the file was recognized as, by its own columns: its rows are rearranged into this table's columns (date, type, paper, quantity, price, amount, currency, fee, note), each keeping its line, the type column keeping the program's own words.
+         * @enum {string}
+         */
+        ImportTracker: "intelinvest" | "snowball" | "ghostfolio";
         ImportedOperation: {
             type: components["schemas"]["OperationType"];
             /** @description Date YYYY-MM-DD */
@@ -1764,10 +1793,10 @@ export interface components {
             /** @description What the row reads as; null when it is unparsed */
             operation?: components["schemas"]["ImportedOperation"] | null;
         };
-        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words. */
+        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line. */
         ImportRowReason: {
             /** @enum {string} */
-            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused";
+            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused" | "paired";
             field: components["schemas"]["ImportField"] | null;
             value: string;
         };
@@ -1776,6 +1805,7 @@ export interface components {
             /** @description The header's cells; empty when the table has none */
             header: string[];
             rows: components["schemas"]["ImportRow"][];
+            tracker: components["schemas"]["ImportTracker"] | null;
         };
         ImportAddedPaper: {
             /** @description The code as the table named the paper */
@@ -1791,8 +1821,9 @@ export interface components {
             not_found: string[];
         };
         ImportTableRequest: {
-            /** @description The CSV text, as for the preview */
+            /** @description The file, as for the preview */
             content: string;
+            format?: components["schemas"]["ImportFileFormat"];
             mapping: components["schemas"]["ImportMapping"];
             /** @description The file's name, kept with the import for the person's own reference */
             file_name?: string;
@@ -5170,6 +5201,31 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    tableImportTemplate: {
+        parameters: {
+            query: {
+                format: "csv" | "xlsx";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     addImportPapers: {

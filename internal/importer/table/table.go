@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"babki.my/babki/internal/operation"
 )
 
 // MaxRows is the most rows one table may carry. A year of an active account
@@ -26,12 +28,22 @@ var ErrBadTable = errors.New("table: cannot read the table")
 // them, from 1, so a row can be named to the person who has the file open.
 type Table struct {
 	Rows []Line
+	// Tracker is the program whose export the table was read as and
+	// rearranged from; empty for a table read as it is.
+	Tracker Tracker
+	// words are that program's own names of operations, known as typeWords
+	// are.
+	words map[string]operation.Type
 }
 
 // Line is one non-empty line of the file.
 type Line struct {
 	Number int
 	Cells  []string
+	// PairedWith is the line of the operation whose money this row is, when
+	// an export writes that money as a row of its own: the operation moves
+	// it in the journal, so the row is shown and not imported.
+	PairedWith int
 }
 
 // Parse reads CSV text: the delimiter is whichever of ';', ',' and a tab

@@ -47,7 +47,7 @@ import { formatMinor } from "@/lib/money";
 import { useCategories } from "@/api/categories";
 import { categoryLabel } from "@/components/category-picker";
 import { formatDate } from "@/lib/dates";
-import { readTableFile } from "@/lib/read-table-file";
+import { isOldExcel, readUpload, type Upload } from "@/lib/read-table-file";
 import { cn } from "@/lib/utils";
 
 // The fields a column can mean, in the order a person reads a trade.
@@ -128,51 +128,53 @@ export function TableImport({ accountId }: { accountId: string }) {
   const account = accounts.data?.find((a) => a.id === accountId);
   const preview = usePreviewImport(accountId);
   const importTable = useImportTable(accountId);
-  const [content, setContent] = useState<string | null>(null);
+  const [upload, setUpload] = useState<Upload | null>(null);
+  const [oldExcel, setOldExcel] = useState(false);
   const [fileName, setFileName] = useState("");
   const [current, setCurrent] = useState<ImportPreview | null>(null);
 
   const imports = useTableImports(accountId);
 
-  const ask = (body: { content: string; mapping?: ImportMapping }) => {
+  const ask = (file: Upload, mapping?: ImportMapping) => {
     importTable.reset();
-    preview.mutate(body, { onSuccess: setCurrent });
+    preview.mutate({ ...file, mapping }, { onSuccess: setCurrent });
   };
 
   const chooseFile = async (file: File | undefined) => {
     if (!file) return;
-    const text = await readTableFile(file);
-    setContent(text);
-    setFileName(file.name);
     setCurrent(null);
+    setUpload(null);
     importTable.reset();
-    preview.mutate(
-      { content: text },
-      {
-        onSuccess: (guessed) => {
-          setCurrent(guessed);
-          // What the type column's words meant in this account's last import
-          // is what they mean now.
-          const remembered = rememberedTypes(guessed, imports.data?.[0]?.mapping);
-          if (remembered) ask({ content: text, mapping: remembered });
-        },
+    preview.reset();
+    setOldExcel(isOldExcel(file));
+    if (isOldExcel(file)) return;
+    const read = await readUpload(file);
+    setUpload(read);
+    setFileName(file.name);
+    preview.mutate(read, {
+      onSuccess: (guessed) => {
+        setCurrent(guessed);
+        // What the type column's words meant in this account's last import
+        // is what they mean now.
+        const remembered = rememberedTypes(guessed, imports.data?.[0]?.mapping);
+        if (remembered) ask(read, remembered);
       },
-    );
+    });
   };
 
   const remap = (mapping: ImportMapping) => {
-    if (content === null) return;
+    if (upload === null) return;
     setCurrent((c) => (c ? { ...c, mapping } : c));
-    ask({ content, mapping });
+    ask(upload, mapping);
   };
 
   const counts = { new: 0, duplicate: 0, unparsed: 0, refused: 0 };
   for (const row of current?.rows ?? []) counts[row.verdict]++;
 
   const runImport = () => {
-    if (content === null || !current) return;
+    if (upload === null || !current) return;
     importTable.mutate(
-      { content, mapping: current.mapping, file_name: fileName },
+      { ...upload, mapping: current.mapping, file_name: fileName },
       { onSuccess: (result) => setCurrent({ ...current, rows: result.rows }) },
     );
   };
@@ -196,11 +198,27 @@ export function TableImport({ accountId }: { accountId: string }) {
         <Input
           id="import-file"
           type="file"
-          accept=".csv,.txt,text/csv,text/plain"
+          accept=".csv,.txt,.xlsx,.xls,.json,text/csv,text/plain,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           onChange={(e) => void chooseFile(e.target.files?.[0])}
         />
         <p className="text-xs text-muted-foreground">{t("tableImport.fileHint")}</p>
+        <p className="text-xs text-muted-foreground">
+          {t("tableImport.template")}{" "}
+          <a className="underline" href="/api/v1/imports/template?format=xlsx" download>
+            Excel
+          </a>
+          {" · "}
+          <a className="underline" href="/api/v1/imports/template?format=csv" download>
+            CSV
+          </a>
+        </p>
       </div>
+
+      {oldExcel && (
+        <Alert variant="destructive">
+          <AlertDescription>{t("tableImport.oldExcel")}</AlertDescription>
+        </Alert>
+      )}
 
       {preview.isError && (
         <Alert variant="destructive">
@@ -208,14 +226,20 @@ export function TableImport({ accountId }: { accountId: string }) {
         </Alert>
       )}
 
+      {current?.tracker && (
+        <Alert data-testid="import-tracker">
+          <AlertDescription>{t(`tableImport.tracker.${current.tracker}`)}</AlertDescription>
+        </Alert>
+      )}
+
       {current && (
         <MappingEditor preview={current} onChange={remap} disabled={preview.isPending} />
       )}
 
-      {current && content !== null && !importTable.isSuccess && (
+      {current && upload !== null && !importTable.isSuccess && (
         <MissingPapers
           rows={current.rows}
-          onAdded={() => ask({ content, mapping: current.mapping })}
+          onAdded={() => ask(upload, current.mapping)}
         />
       )}
 

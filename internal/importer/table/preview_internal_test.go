@@ -71,7 +71,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 
 	first := &takesAll{}
 	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first, nil, nil, noCategories{})
-	p, err := svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
+	p, err := svc.Preview(t.Context(), uuid.New(), acc.ID, csv, FormatText, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 
 	again := &takesAll{}
 	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again, nil, nil, noCategories{})
-	p, err = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
+	p, err = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, FormatText, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	byHand := imported
 	byHand.Source = "manual"
 	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{}, nil, nil, noCategories{})
-	if p, _ = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil); p.Rows[0].Verdict != VerdictNew {
+	if p, _ = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, FormatText, nil); p.Rows[0].Verdict != VerdictNew {
 		t.Errorf("a hand entry made the row a duplicate: %s", p.Rows[0].Verdict)
 	}
 }

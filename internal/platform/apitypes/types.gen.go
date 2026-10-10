@@ -403,6 +403,24 @@ func (e ImportField) Valid() bool {
 	}
 }
 
+// Defines values for ImportFileFormat.
+const (
+	ImportFileFormatText ImportFileFormat = "text"
+	ImportFileFormatXlsx ImportFileFormat = "xlsx"
+)
+
+// Valid indicates whether the value is a known member of the ImportFileFormat enum.
+func (e ImportFileFormat) Valid() bool {
+	switch e {
+	case ImportFileFormatText:
+		return true
+	case ImportFileFormatXlsx:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ImportRowVerdict.
 const (
 	Duplicate ImportRowVerdict = "duplicate"
@@ -437,6 +455,7 @@ const (
 	ImportRowReasonCodeNoNumber      ImportRowReasonCode = "no_number"
 	ImportRowReasonCodeNoPaper       ImportRowReasonCode = "no_paper"
 	ImportRowReasonCodeNoType        ImportRowReasonCode = "no_type"
+	ImportRowReasonCodePaired        ImportRowReasonCode = "paired"
 	ImportRowReasonCodePaperNotFound ImportRowReasonCode = "paper_not_found"
 	ImportRowReasonCodeTooLarge      ImportRowReasonCode = "too_large"
 	ImportRowReasonCodeTooPrecise    ImportRowReasonCode = "too_precise"
@@ -462,6 +481,8 @@ func (e ImportRowReasonCode) Valid() bool {
 		return true
 	case ImportRowReasonCodeNoType:
 		return true
+	case ImportRowReasonCodePaired:
+		return true
 	case ImportRowReasonCodePaperNotFound:
 		return true
 	case ImportRowReasonCodeTooLarge:
@@ -469,6 +490,27 @@ func (e ImportRowReasonCode) Valid() bool {
 	case ImportRowReasonCodeTooPrecise:
 		return true
 	case ImportRowReasonCodeTypeNotMapped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImportTracker.
+const (
+	Ghostfolio  ImportTracker = "ghostfolio"
+	Intelinvest ImportTracker = "intelinvest"
+	Snowball    ImportTracker = "snowball"
+)
+
+// Valid indicates whether the value is a known member of the ImportTracker enum.
+func (e ImportTracker) Valid() bool {
+	switch e {
+	case Ghostfolio:
+		return true
+	case Intelinvest:
+		return true
+	case Snowball:
 		return true
 	default:
 		return false
@@ -1243,6 +1285,24 @@ func (e GetCapitalParamsStep) Valid() bool {
 	case Month:
 		return true
 	case Week:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TableImportTemplateParamsFormat.
+const (
+	TableImportTemplateParamsFormatCsv  TableImportTemplateParamsFormat = "csv"
+	TableImportTemplateParamsFormatXlsx TableImportTemplateParamsFormat = "xlsx"
+)
+
+// Valid indicates whether the value is a known member of the TableImportTemplateParamsFormat enum.
+func (e TableImportTemplateParamsFormat) Valid() bool {
+	switch e {
+	case TableImportTemplateParamsFormatCsv:
+		return true
+	case TableImportTemplateParamsFormatXlsx:
 		return true
 	default:
 		return false
@@ -2356,6 +2416,9 @@ type ImportAddedPaper struct {
 // ImportField `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled.
 type ImportField string
 
+// ImportFileFormat How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
+type ImportFileFormat string
+
 // ImportMapping defines model for ImportMapping.
 type ImportMapping struct {
 	// Columns Field name → 0-based column index. A field with no column is absent. `instrument` takes an ISIN or a ticker; a trade with no `amount` has it worked out from quantity × price.
@@ -2378,16 +2441,20 @@ type ImportPapersResult struct {
 // ImportPreview defines model for ImportPreview.
 type ImportPreview struct {
 	// Header The header's cells; empty when the table has none
-	Header  []string      `json:"header"`
-	Mapping ImportMapping `json:"mapping"`
-	Rows    []ImportRow   `json:"rows"`
+	Header  []string                         `json:"header"`
+	Mapping ImportMapping                    `json:"mapping"`
+	Rows    []ImportRow                      `json:"rows"`
+	Tracker nullable.Nullable[ImportTracker] `json:"tracker"`
 }
 
 // ImportPreviewRequest defines model for ImportPreviewRequest.
 type ImportPreviewRequest struct {
-	// Content The CSV text. ';', ',' or a tab between cells; at most 5000 rows.
-	Content string         `json:"content"`
-	Mapping *ImportMapping `json:"mapping,omitempty"`
+	// Content The file: for `text`, a CSV (';', ',' or a tab between cells) or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows.
+	Content string `json:"content"`
+
+	// Format How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
+	Format  *ImportFileFormat `json:"format,omitempty"`
+	Mapping *ImportMapping    `json:"mapping,omitempty"`
 }
 
 // ImportRow defines model for ImportRow.
@@ -2408,7 +2475,7 @@ type ImportRow struct {
 // ImportRowVerdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason.code` is `engine_refused` and `reason.value` the journal's own words.
 type ImportRowVerdict string
 
-// ImportRowReason Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words.
+// ImportRowReason Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line.
 type ImportRowReason struct {
 	Code  ImportRowReasonCode            `json:"code"`
 	Field nullable.Nullable[ImportField] `json:"field"`
@@ -2420,12 +2487,15 @@ type ImportRowReasonCode string
 
 // ImportTableRequest defines model for ImportTableRequest.
 type ImportTableRequest struct {
-	// Content The CSV text, as for the preview
+	// Content The file, as for the preview
 	Content string `json:"content"`
 
 	// FileName The file's name, kept with the import for the person's own reference
-	FileName *string       `json:"file_name,omitempty"`
-	Mapping  ImportMapping `json:"mapping"`
+	FileName *string `json:"file_name,omitempty"`
+
+	// Format How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
+	Format  *ImportFileFormat `json:"format,omitempty"`
+	Mapping ImportMapping     `json:"mapping"`
 }
 
 // ImportTableResult defines model for ImportTableResult.
@@ -2433,6 +2503,9 @@ type ImportTableResult struct {
 	Import nullable.Nullable[TableImport] `json:"import"`
 	Rows   []ImportRow                    `json:"rows"`
 }
+
+// ImportTracker Another program whose export the file was recognized as, by its own columns: its rows are rearranged into this table's columns (date, type, paper, quantity, price, amount, currency, fee, note), each keeping its line, the type column keeping the program's own words.
+type ImportTracker string
 
 // ImportedOperation defines model for ImportedOperation.
 type ImportedOperation struct {
@@ -3992,6 +4065,14 @@ type GetForecastParams struct {
 type AddImportPapersJSONBody struct {
 	Codes []string `json:"codes"`
 }
+
+// TableImportTemplateParams defines parameters for TableImportTemplate.
+type TableImportTemplateParams struct {
+	Format TableImportTemplateParamsFormat `form:"format" json:"format"`
+}
+
+// TableImportTemplateParamsFormat defines parameters for TableImportTemplate.
+type TableImportTemplateParamsFormat string
 
 // SearchInstrumentsParams defines parameters for SearchInstruments.
 type SearchInstrumentsParams struct {

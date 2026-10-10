@@ -37,6 +37,8 @@ type Preview struct {
 	Mapping Mapping
 	Header  []string
 	Rows    []Row
+	// Tracker is the program whose export the file was recognized as.
+	Tracker Tracker
 }
 
 type accounts interface {
@@ -84,15 +86,15 @@ func NewService(accounts accounts, papers Catalog, journal journal, ops writer, 
 	}
 }
 
-// Preview reads content against the account with mapping — or with one
-// guessed from the table when mapping is nil — and says what importing each
-// row would do. Nothing is written.
-func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, content string, mapping *Mapping) (Preview, error) {
+// Preview reads content (see Read) against the account with mapping — or
+// with one guessed from the table when mapping is nil — and says what
+// importing each row would do. Nothing is written.
+func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, content string, format Format, mapping *Mapping) (Preview, error) {
 	acc, err := s.accounts.ByID(ctx, spaceID, accountID)
 	if err != nil {
 		return Preview{}, err
 	}
-	t, err := Parse(content)
+	t, err := Read(content, format)
 	if err != nil {
 		return Preview{}, fmt.Errorf("%w: %v", family.ErrValidation, err)
 	}
@@ -107,7 +109,7 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 		}
 	}
 
-	out := Preview{Mapping: m}
+	out := Preview{Mapping: m, Tracker: t.Tracker}
 	if m.HasHeader && len(t.Rows) > 0 {
 		out.Header = t.Rows[0].Cells
 	}
