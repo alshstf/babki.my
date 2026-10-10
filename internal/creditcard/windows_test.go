@@ -244,12 +244,13 @@ func TestTheTariffsFeesAreToldAhead(t *testing.T) {
 	}
 
 	// August's minimum (500) missed by the 31st: on the 10th of September,
-	// ten days of 0.1% of it; September's own is not due yet. It counts the
-	// August fee the journal does not show: 500 + 590.
+	// ten days of 0.1% of it. September's own is not due yet — it counts
+	// the August fee the journal does not show, 500 + 590 — and the bank
+	// adds August's missed 500 to it, due at once.
 	late := []operation.Operation{spend("2026-07-03", 10_000)}
 	st = Work(gpb, late, "RUB", d("2026-09-10"), Kinds{})
-	if st.Penalty != 5_00 || st.MinimumMissed || st.Minimum != 1_090_00 {
-		t.Errorf("penalty %d, missed %v, minimum %d; want 5, not yet, 1 090", st.Penalty, st.MinimumMissed, st.Minimum)
+	if st.Penalty != 5_00 || st.MinimumMissed || st.Minimum != 1_590_00 || st.MinimumOverdue != 500_00 {
+		t.Errorf("penalty %d, missed %v, minimum %d (overdue %d); want 5, not yet, 1 590 (500)", st.Penalty, st.MinimumMissed, st.Minimum, st.MinimumOverdue)
 	}
 	// Paid, the overdue is gone and so is the penalty to come.
 	st = Work(gpb, append(late, repay("2026-09-12", 500)), "RUB", d("2026-09-14"), Kinds{})

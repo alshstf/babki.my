@@ -68,3 +68,26 @@ func TestARunningGraceIsSharedUntilTheDebtIsRepaid(t *testing.T) {
 		t.Error("a running grace with no start was accepted")
 	}
 }
+
+// ВТБ's minimum (#459): due by the 20th, the first after the statement; 3% of
+// the debt rounded up to 100.
+func TestTheMinimumIsDueByADayOfTheMonth(t *testing.T) {
+	terms := vtb110
+	terms.PayDay, terms.MinRoundUp = 20, 100_00
+	st := Work(terms, []operation.Operation{spend("2026-09-10", 10_150)}, "RUB", d("2026-10-05"), Kinds{})
+	if st.Minimum != 400_00 || day(st.MinimumOn) != "2026-10-20" {
+		t.Errorf("minimum = %d by %s, want 304,50 rounded up to 400 by 20.10", st.Minimum, day(st.MinimumOn))
+	}
+	// A statement on the 25th: due by the 20th of the next month; rounding
+	// never asks more than the debt.
+	terms.StatementDay = 25
+	st = Work(terms, []operation.Operation{spend("2026-09-10", 50)}, "RUB", d("2026-09-26"), Kinds{})
+	if day(st.MinimumOn) != "2026-10-20" || st.Minimum != 50_00 {
+		t.Errorf("minimum = %d by %s, want the whole 50 by 20.10", st.Minimum, day(st.MinimumOn))
+	}
+	both := terms
+	both.PayByPeriodEnd = true
+	if both.Validate() == nil {
+		t.Error("a day of the month and the period's end at once were accepted")
+	}
+}

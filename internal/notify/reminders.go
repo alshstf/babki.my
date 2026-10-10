@@ -39,6 +39,9 @@ func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 				Title: name, Body: body, URL: "/accounts/" + acc,
 			})
 		}
+		if st.MinimumOverdue > 0 && !st.MinimumMissed {
+			add("overdue:"+day(st.LastStatement), fmt.Sprintf("Просрочен обязательный платёж: %s — внесите сразу, банк начисляет неустойку.", amount(st.MinimumOverdue, cur)))
+		}
 		if st.MinimumMissed && st.Minimum > 0 {
 			add("min-missed:"+day(st.MinimumOn), fmt.Sprintf("Обязательный платёж %s не внесён до %s.", amount(st.Minimum, cur), short(st.MinimumOn)))
 		}
