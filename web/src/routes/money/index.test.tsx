@@ -83,6 +83,12 @@ beforeEach(() => {
       return json(answer);
     }
     if (url.pathname.endsWith("/categories")) return json(CATEGORIES);
+    if (url.pathname.endsWith("/recurring")) {
+      return json([
+        { name: "ИП Смирнова", cadence: "monthly", amount_minor: -45_000_00, currency: "RUB", account_id: "a-1", category_id: null, last_on: "2026-09-06", next_on: "2026-10-06", count: 4, overdue: true },
+        { name: "МТС", cadence: "monthly", amount_minor: -920_00, currency: "RUB", account_id: "a-1", category_id: null, last_on: "2026-09-12", next_on: "2026-10-12", count: 3, overdue: false },
+      ]);
+    }
     if (url.pathname.endsWith("/members")) {
       return json([{ id: "u-1", username: "alex", display_name: "Александр", role: "owner" }]);
     }
@@ -145,6 +151,15 @@ describe("MoneyPage", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Период" }), { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "Прошлый год" }));
     await waitFor(() => expect(asked.some((u) => u.searchParams.get("to")?.endsWith("-12-31"))).toBe(true));
+  });
+
+  it("lists the regular payments with when each is due", async () => {
+    renderPage();
+    const rows = await screen.findAllByTestId("recurring-row");
+    expect(rows[0]).toHaveTextContent("ИП Смирнова");
+    expect(rows[0]).toHaveTextContent("ожидался 06.10.2026");
+    expect(rows[1]).toHaveTextContent("каждый месяц");
+    expect(rows[1]).toHaveTextContent("12.10.2026");
   });
 
   it("says which rows were left out for want of a rate", async () => {
