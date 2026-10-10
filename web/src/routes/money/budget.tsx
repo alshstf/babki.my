@@ -14,7 +14,7 @@ import { useBudget, useSetBudgetLimit, type BudgetLine } from "@/api/budget";
 import { useCategories } from "@/api/categories";
 import { useSession } from "@/api/session";
 import { localToday } from "@/lib/dates";
-import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
+import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 // From this share of a limit spent the line warns.
@@ -77,16 +77,16 @@ export function BudgetCard() {
             <div className="grid grid-cols-3 gap-2" data-testid="budget-sums">
               <div>
                 <div className="text-sm text-muted-foreground">{t("budget.planned")}</div>
-                <div className="text-lg font-semibold tabular-nums">{formatMinor(b.planned_minor, c)}</div>
+                <div className="text-lg font-semibold tabular-nums">{formatMinorCompact(b.planned_minor, c)}</div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground">{t("budget.spent")}</div>
-                <div className="text-lg font-semibold tabular-nums">{formatMinor(b.spent_minor, c)}</div>
+                <div className="text-lg font-semibold tabular-nums">{formatMinorCompact(b.spent_minor, c)}</div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground">{t("budget.left")}</div>
                 <div className={cn("text-lg font-semibold tabular-nums", b.left_minor < 0 && "text-red-700 dark:text-red-400")}>
-                  {formatMinor(b.left_minor, c)}
+                  {formatMinorCompact(b.left_minor, c)}
                 </div>
               </div>
             </div>
@@ -117,7 +117,7 @@ export function BudgetCard() {
                         {l.rollover && (
                           <span className="text-xs text-muted-foreground">
                             {" · "}
-                            {l.carried_minor > 0 ? t("budget.kopilkaCarried", { amount: formatMinor(l.carried_minor, c) }) : t("budget.kopilka")}
+                            {l.carried_minor > 0 ? t("budget.kopilkaCarried", { amount: formatMinorCompact(l.carried_minor, c) }) : t("budget.kopilka")}
                           </span>
                         )}
                         <Progress
@@ -125,15 +125,15 @@ export function BudgetCard() {
                           className={cn("mt-1", share > 1 ? "[&>*]:bg-red-600" : share >= NEAR && "[&>*]:bg-amber-500")}
                         />
                       </TableCell>
-                      <TableCell className="hidden text-right tabular-nums sm:table-cell">{formatMinor(l.limit_minor, c)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatMinor(l.spent_minor, c)}</TableCell>
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">{formatMinorCompact(l.limit_minor, c)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatMinorCompact(l.spent_minor, c)}</TableCell>
                       <TableCell
                         className={cn(
                           "text-right tabular-nums",
                           l.left_minor < 0 ? "text-red-700 dark:text-red-400" : share >= NEAR && "text-amber-700 dark:text-amber-400",
                         )}
                       >
-                        {formatMinor(l.left_minor, c)}
+                        {formatMinorCompact(l.left_minor, c)}
                       </TableCell>
                     </TableRow>
                   );
@@ -141,7 +141,7 @@ export function BudgetCard() {
                 <TableRow data-testid="budget-unlimited">
                   <TableCell className="text-muted-foreground">{t("budget.unlimited")}</TableCell>
                   <TableCell className="hidden sm:table-cell" />
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatMinor(b.unlimited_minor, c)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatMinorCompact(b.unlimited_minor, c)}</TableCell>
                   <TableCell />
                 </TableRow>
               </TableBody>
