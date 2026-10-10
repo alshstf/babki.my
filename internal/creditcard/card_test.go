@@ -159,3 +159,39 @@ func abs(x int64) int64 {
 	}
 	return x
 }
+
+// A month of 30 000 on the card while own money earns 15% is about 370
+// roubles; the cashback is added and the bank's fee taken away. A charge filed
+// under «Проценты по кредитам» is a cost whatever its type.
+func TestTheCardIsWeighedAgainstOwnMoney(t *testing.T) {
+	own := decimal.NewFromInt(15)
+	terms := alfa
+	terms.OwnRate = &own
+	cashbackCat, interestCat := uuid.New(), uuid.New()
+	kinds := Kinds{Cashback: map[uuid.UUID]bool{cashbackCat: true}, Charges: map[uuid.UUID]bool{interestCat: true}}
+	ops := []operation.Operation{
+		spend("2026-09-01", 30_000),
+		{Type: operation.TypeDeposit, OccurredOn: d("2026-09-15"), AmountMinor: 300_00, Currency: "RUB", CategoryID: &cashbackCat},
+		{Type: operation.TypeFee, OccurredOn: d("2026-09-20"), AmountMinor: -99_00, Currency: "RUB"},
+		{Type: operation.TypeWithdrawal, OccurredOn: d("2026-09-25"), AmountMinor: -10_00, Currency: "RUB", CategoryID: &interestCat},
+		repay("2026-10-01", 30_109),
+	}
+	b := Weigh(terms, ops, "RUB", d("2026-10-10"), kinds)
+	if b.From.Format(time.DateOnly) != "2026-09-01" || !b.OwnRateKnown {
+		t.Errorf("benefit = %+v", b)
+	}
+	// 30 000 for the 1st to the 14th, 29 700 to the 19th, 29 799 to the 24th,
+	// 29 809 to the 30th: debt-days at 15% a year.
+	days := int64(30_000_00*14 + 29_700_00*5 + 29_799_00*5 + 29_809_00*6)
+	if want := days * 15 / 36500; abs(b.OwnEarned-want) > 1 {
+		t.Errorf("own money earned %d, want about %d", b.OwnEarned, want)
+	}
+	if b.Cashback != 300_00 || b.Costs != 109_00 || b.Total != b.OwnEarned+300_00-109_00 {
+		t.Errorf("cashback %d costs %d total %d", b.Cashback, b.Costs, b.Total)
+	}
+
+	terms.OwnRate = nil
+	if b := Weigh(terms, ops, "RUB", d("2026-10-10"), kinds); b.OwnRateKnown || b.OwnEarned != 0 || b.Total != 191_00 {
+		t.Errorf("without the own rate: %+v", b)
+	}
+}

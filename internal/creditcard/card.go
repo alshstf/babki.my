@@ -301,3 +301,85 @@ func ByBalance(t Terms, balance int64, today time.Time) Status {
 	}
 	return st
 }
+
+// Benefit weighs the card against the family's own money over a stretch: what
+// the own money earned meanwhile — at OwnRate, on the debt the card carried
+// each day, the money not taken from savings — plus the cashback, less the
+// interest and fees the bank charged, and less Pending: roughly the interest
+// the lost grace and the money moved off the card run up, not in the journal
+// yet. Without OwnRate the first part is nought and OwnRateKnown false.
+type Benefit struct {
+	From, To     time.Time
+	OwnRateKnown bool
+	OwnEarned    int64
+	Cashback     int64
+	Costs        int64
+	Pending      int64
+	Total        int64
+}
+
+// Kinds sorts the card's rows for Weigh: categories that mean cashback, and
+// categories that mean a charge (interest on credit, bank fees).
+type Kinds struct {
+	Cashback map[uuid.UUID]bool
+	Charges  map[uuid.UUID]bool
+}
+
+func (k Kinds) cashback(op operation.Operation) bool {
+	return op.AmountMinor > 0 && (op.Type == operation.TypeInterest || op.CategoryID != nil && k.Cashback[*op.CategoryID])
+}
+
+func (k Kinds) charge(op operation.Operation) bool {
+	if op.AmountMinor >= 0 {
+		return false
+	}
+	switch op.Type {
+	case operation.TypeFee, operation.TypeTax, operation.TypeInterest:
+		return true
+	}
+	return op.CategoryID != nil && k.Charges[*op.CategoryID]
+}
+
+// Weigh is the card's benefit over the year to today, or since its first row
+// when that is later.
+func Weigh(t Terms, ops []operation.Operation, currency string, today time.Time, kinds Kinds) Benefit {
+	rows := make([]operation.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op.Currency == currency && op.AmountMinor != 0 && !op.OccurredOn.After(today) {
+			rows = append(rows, op)
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b operation.Operation) int { return a.OccurredOn.Compare(b.OccurredOn) })
+	b := Benefit{From: today.AddDate(-1, 0, 0), To: today, OwnRateKnown: t.OwnRate != nil}
+	if len(rows) == 0 {
+		b.From = today
+		return b
+	}
+	if rows[0].OccurredOn.After(b.From) {
+		b.From = rows[0].OccurredOn
+	}
+	var debt int64
+	k := 0
+	for ; k < len(rows) && rows[k].OccurredOn.Before(b.From); k++ {
+		debt -= rows[k].AmountMinor
+	}
+	var debtDays int64
+	for day := b.From; !day.After(today); day = day.AddDate(0, 0, 1) {
+		for ; k < len(rows) && !rows[k].OccurredOn.After(day); k++ {
+			op := rows[k]
+			debt -= op.AmountMinor
+			switch {
+			case kinds.cashback(op):
+				b.Cashback += op.AmountMinor
+			case kinds.charge(op):
+				b.Costs -= op.AmountMinor
+			}
+		}
+		debtDays += max(debt, 0)
+	}
+	if t.OwnRate != nil {
+		b.OwnEarned, _ = money.Minor(decimal.NewFromInt(debtDays).Mul(*t.OwnRate).Div(decimal.NewFromInt(36500)))
+	}
+	b.Total = b.OwnEarned + b.Cashback - b.Costs
+	return b
+}

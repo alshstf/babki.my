@@ -112,6 +112,8 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
+      {data.benefit && <BenefitBlock benefit={data.benefit} currency={c} ownRate={data.terms.own_rate} />}
+
       <div className="text-xs text-muted-foreground">
         {t("card.termsLine", {
           day: data.terms.statement_day,
@@ -129,6 +131,44 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </Button>
       )}
       {editing && <TermsDialog account={account} card={data} onClose={() => setEditing(false)} />}
+    </div>
+  );
+}
+
+// BenefitBlock weighs the card against the family's own money over the last
+// year (decision Р-26): what the own money earned meanwhile, the cashback, the
+// bank's charges.
+function BenefitBlock({ benefit, currency, ownRate }: { benefit: NonNullable<CreditCard["benefit"]>; currency: string; ownRate: string | null }) {
+  const { t } = useTranslation();
+  const b = benefit;
+  return (
+    <div className="grid gap-1 rounded-md bg-muted/40 p-3 text-sm" data-testid="card-benefit">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-medium">{t("card.benefitTitle", { from: formatDate(b.from) })}</span>
+        <span
+          className={cn("text-lg font-semibold tabular-nums", b.total_minor >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400")}
+          data-testid="card-benefit-total"
+        >
+          {b.total_minor > 0 ? "+" : ""}
+          {formatMinor(b.total_minor, currency)}
+        </span>
+      </div>
+      {b.own_rate_known ? (
+        <div className="text-muted-foreground">
+          {t("card.benefitOwn", { amount: formatMinor(b.own_earned_minor, currency), rate: pct(ownRate ?? "0") })}
+        </div>
+      ) : (
+        <div className="text-muted-foreground">{t("card.benefitNoRate")}</div>
+      )}
+      <div className="text-muted-foreground">{t("card.benefitCashback", { amount: formatMinor(b.cashback_minor, currency) })}</div>
+      <div className="text-muted-foreground">
+        {b.costs_minor > 0 ? t("card.benefitCosts", { amount: formatMinor(b.costs_minor, currency) }) : t("card.benefitNoCosts")}
+      </div>
+      {b.pending_interest_minor > 0 && (
+        <div className="text-red-700 dark:text-red-400" data-testid="card-benefit-pending">
+          {t("card.benefitPending", { amount: formatMinor(b.pending_interest_minor, currency) })}
+        </div>
+      )}
     </div>
   );
 }

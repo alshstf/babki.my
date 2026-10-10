@@ -1748,10 +1748,38 @@ type CreateTinvestConnectionRequest struct {
 
 // CreditCard defines model for CreditCard.
 type CreditCard struct {
+	// Benefit The card weighed against own money over the last year; null when counted by its balance
+	Benefit nullable.Nullable[CreditCardBenefit] `json:"benefit"`
+
 	// ByJournal The status is worked out from the card's journal; false: from its last balance
 	ByJournal bool             `json:"by_journal"`
 	Status    CreditCardStatus `json:"status"`
 	Terms     CreditCardTerms  `json:"terms"`
+}
+
+// CreditCardBenefit defines model for CreditCardBenefit.
+type CreditCardBenefit struct {
+	// CashbackMinor Money in under a cashback category, and interest paid to the card
+	CashbackMinor int64 `json:"cashback_minor"`
+
+	// CostsMinor Fees, taxes, interest charged and rows under «Проценты по кредитам» or «Банковские комиссии», as a positive sum
+	CostsMinor int64 `json:"costs_minor"`
+
+	// From A year before today, or the card's first row when later
+	From string `json:"from"`
+
+	// OwnEarnedMinor What the family's own money earned at own_rate on the debt the card carried each day
+	OwnEarnedMinor int64 `json:"own_earned_minor"`
+
+	// OwnRateKnown The terms name own_rate; without it own_earned_minor is 0
+	OwnRateKnown bool `json:"own_rate_known"`
+
+	// PendingInterestMinor Roughly the interest the lost grace and the money moved off the card run up (CreditCardStatus lost and non_grace), not in the journal yet
+	PendingInterestMinor int64  `json:"pending_interest_minor"`
+	To                   string `json:"to"`
+
+	// TotalMinor own_earned + cashback − costs − pending_interest; below zero the card cost more than own money would have
+	TotalMinor int64 `json:"total_minor"`
 }
 
 // CreditCardDue defines model for CreditCardDue.

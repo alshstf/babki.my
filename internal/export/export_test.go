@@ -55,7 +55,7 @@ func newStack(t *testing.T) stack {
 	operation.NewHandler(operation.NewService(opStore), opStore, famStore, marketdata.NewConverter(md), auth, sm).Mount(srv)
 	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
 	loanSvc := loan.NewService(pool, accStore, operation.NewService(opStore), category.NewStore(pool))
-	cardSvc := creditcard.NewService(pool, accStore, opStore)
+	cardSvc := creditcard.NewService(pool, accStore, opStore, category.NewStore(pool))
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc, auth, sm).Mount(srv)

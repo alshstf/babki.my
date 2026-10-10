@@ -44,10 +44,10 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0, ...over,
 });
 
-const card = (over: Partial<CreditCardStatus> = {}, byJournal = true): CreditCard => ({
+const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
   terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
-    min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null },
-  status: status(over), by_journal: byJournal,
+    min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null },
+  status: status(over), by_journal: byJournal, benefit,
 });
 
 function answer(routes: Record<string, unknown>) {
@@ -115,6 +115,33 @@ describe("CreditCardPanel", () => {
     answer({ "/credit-card": card({ grace: [] }, false) });
     show(<CreditCardPanel account={account} canEdit />);
     expect(await screen.findByTestId("card-by-balance")).toBeTruthy();
+  });
+});
+
+describe("CreditCardPanel: the card weighed", () => {
+  it("adds what own money earned and the cashback, and takes the bank's charges away", async () => {
+    answer({ "/credit-card": card({}, true, {
+      from: "2025-10-10", to: "2026-10-10", own_rate_known: true, own_earned_minor: 9_000_00,
+      cashback_minor: 5_400_00, costs_minor: 1_290_00, pending_interest_minor: 0, total_minor: 13_110_00,
+    }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    const block = norm((await screen.findByTestId("card-benefit")).textContent ?? "");
+    expect(block).toContain("Выгода карты с 10.10.2025+13 110,00 ₽");
+    expect(block).toContain("≈ 9 000,00 ₽ (под 15 % годовых)");
+    expect(block).toContain("Кэшбэк: 5 400,00 ₽");
+    expect(block).toContain("Проценты и комиссии банка: −1 290,00 ₽");
+  });
+
+  it("asks for the own money's rate before counting what it earned", async () => {
+    answer({ "/credit-card": card({}, true, {
+      from: "2026-09-01", to: "2026-10-10", own_rate_known: false, own_earned_minor: 0,
+      cashback_minor: 0, costs_minor: 99_00, pending_interest_minor: 1_400_00, total_minor: -1_499_00,
+    }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    const block = norm((await screen.findByTestId("card-benefit")).textContent ?? "");
+    expect(block).toContain("Укажите в условиях, сколько приносят ваши деньги");
+    expect(norm(screen.getByTestId("card-benefit-pending").textContent ?? "")).toMatch(/≈ −1 400,00 ₽$/);
+    expect(norm(screen.getByTestId("card-benefit-total").textContent ?? "")).toBe("-1 499,00 ₽");
   });
 });
 
