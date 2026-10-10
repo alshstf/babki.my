@@ -580,7 +580,8 @@
       "foreignSplits": "Yahoo Finance — сплиты иностранных бумаг",
       "referencePrices": "FinEx, Т-Капитал и Yahoo Finance — СЧА фондов, стоимость паёв закрытых фондов и цены западных бирж",
       "dividendCalendar": "Yahoo Finance — календарь дивидендов, если брокер его не даёт",
-      "cryptoPrices": "CoinGecko — цены криптовалют (данные CoinGecko)"
+      "cryptoPrices": "CoinGecko — цены криптовалют (данные CoinGecko)",
+      "bondSchedules": "Графики купонов и погашений облигаций (Мосбиржа)"
     }
   },
   "instrumentPage": {

@@ -132,6 +132,11 @@ func NewWorkers(
 	river.AddWorker(workers, marketdata.NewDividendCalendarWorker(mdStore, operations, instruments,
 		references.Dividends, log))
 	river.AddWorker(workers, marketdata.NewCryptoPricesWorker(mdStore, operations, instruments, references.Crypto, log))
+	// Bonds' schedules come from the exchange, by the rule the gold and
+	// history workers follow.
+	if schedules, ok := quoteProvider.(marketdata.BondScheduleFeed); ok {
+		river.AddWorker(workers, marketdata.NewBondScheduleWorker(mdStore, operations, instruments, schedules, log))
+	}
 	return workers
 }
 
@@ -175,6 +180,7 @@ func Schedule() []jobs.Periodic {
 		{Every: referencePricesInterval, Args: marketdata.RefreshReferencePricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshDividendCalendarArgs{}},
 		{Every: referencePricesInterval, Args: marketdata.RefreshCryptoPricesArgs{}},
+		{Every: tinvestDividendsInterval, Args: marketdata.RefreshBondSchedulesArgs{}},
 	}
 }
 
@@ -194,6 +200,7 @@ var sources = []jobs.SourceKind{
 	{Kind: marketdata.RefreshReferencePricesArgs{}.Kind(), Every: referencePricesInterval},
 	{Kind: marketdata.RefreshDividendCalendarArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshCryptoPricesArgs{}.Kind(), Every: referencePricesInterval},
+	{Kind: marketdata.RefreshBondSchedulesArgs{}.Kind(), Every: tinvestDividendsInterval},
 }
 
 // Sources reads how each source's jobs last ended.
