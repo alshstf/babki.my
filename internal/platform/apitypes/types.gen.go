@@ -790,6 +790,54 @@ func (e PayoutKind) Valid() bool {
 	}
 }
 
+// Defines values for PayoutCheckKind.
+const (
+	PayoutCheckKindAmortization PayoutCheckKind = "amortization"
+	PayoutCheckKindCoupon       PayoutCheckKind = "coupon"
+	PayoutCheckKindDividend     PayoutCheckKind = "dividend"
+	PayoutCheckKindRedemption   PayoutCheckKind = "redemption"
+)
+
+// Valid indicates whether the value is a known member of the PayoutCheckKind enum.
+func (e PayoutCheckKind) Valid() bool {
+	switch e {
+	case PayoutCheckKindAmortization:
+		return true
+	case PayoutCheckKindCoupon:
+		return true
+	case PayoutCheckKindDividend:
+		return true
+	case PayoutCheckKindRedemption:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PayoutCheckStatus.
+const (
+	Awaited  PayoutCheckStatus = "awaited"
+	Missing  PayoutCheckStatus = "missing"
+	Received PayoutCheckStatus = "received"
+	Short    PayoutCheckStatus = "short"
+)
+
+// Valid indicates whether the value is a known member of the PayoutCheckStatus enum.
+func (e PayoutCheckStatus) Valid() bool {
+	switch e {
+	case Awaited:
+		return true
+	case Missing:
+		return true
+	case Received:
+		return true
+	case Short:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PriceSource.
 const (
 	PriceSourceForeign PriceSource = "foreign"
@@ -2765,6 +2813,41 @@ type Payout struct {
 // PayoutKind defines model for Payout.Kind.
 type PayoutKind string
 
+// PayoutCheck defines model for PayoutCheck.
+type PayoutCheck struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor What was due, gross, in currency; null for a floating coupon the source has no value for
+	AmountMinor nullable.Nullable[int64]  `json:"amount_minor"`
+	Currency    string                    `json:"currency"`
+	GotCurrency nullable.Nullable[string] `json:"got_currency"`
+
+	// GotMinor What the journal's rows come to, in got_currency; 0 when none
+	GotMinor int64 `json:"got_minor"`
+
+	// GotOn The first row's day
+	GotOn        nullable.Nullable[string] `json:"got_on"`
+	InstrumentId openapi_types.UUID        `json:"instrument_id"`
+	Kind         PayoutCheckKind           `json:"kind"`
+
+	// On Date YYYY-MM-DD the money was due
+	On      string                    `json:"on"`
+	PerUnit nullable.Nullable[string] `json:"per_unit"`
+
+	// Quantity Decimal as string: what the account held the day before the record day
+	Quantity string `json:"quantity"`
+
+	// RecordOn The record day held against
+	RecordOn string            `json:"record_on"`
+	Status   PayoutCheckStatus `json:"status"`
+}
+
+// PayoutCheckKind defines model for PayoutCheck.Kind.
+type PayoutCheckKind string
+
+// PayoutCheckStatus defines model for PayoutCheck.Status.
+type PayoutCheckStatus string
+
 // PayoutsForecast defines model for PayoutsForecast.
 type PayoutsForecast struct {
 	BaseCurrency string `json:"base_currency"`
@@ -3884,6 +3967,14 @@ type GetPayoutsParams struct {
 	AccountId *openapi_types.UUID `form:"account_id,omitempty" json:"account_id,omitempty"`
 
 	// InstrumentId Only this paper's
+	InstrumentId *openapi_types.UUID `form:"instrument_id,omitempty" json:"instrument_id,omitempty"`
+}
+
+// GetPayoutsReceivedParams defines parameters for GetPayoutsReceived.
+type GetPayoutsReceivedParams struct {
+	// Days How far back; 90 when absent
+	Days         *int                `form:"days,omitempty" json:"days,omitempty"`
+	AccountId    *openapi_types.UUID `form:"account_id,omitempty" json:"account_id,omitempty"`
 	InstrumentId *openapi_types.UUID `form:"instrument_id,omitempty" json:"instrument_id,omitempty"`
 }
 

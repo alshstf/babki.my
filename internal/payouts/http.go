@@ -29,6 +29,73 @@ func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handle
 func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/payouts", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleForecast)))))
+	srv.Mount("GET /api/v1/payouts/received", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleReceived)))))
+}
+
+// scopeOf reads account_id and instrument_id; false once it answered 400.
+func scopeOf(w http.ResponseWriter, r *http.Request) (Scope, bool) {
+	var scope Scope
+	q := r.URL.Query()
+	for _, f := range []struct {
+		name string
+		into **uuid.UUID
+	}{{"account_id", &scope.AccountID}, {"instrument_id", &scope.InstrumentID}} {
+		if raw := q.Get(f.name); raw != "" {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				httpjson.Error(w, http.StatusBadRequest, f.name+" must be a uuid")
+				return Scope{}, false
+			}
+			*f.into = &id
+		}
+	}
+	return scope, true
+}
+
+func (h *Handler) handleReceived(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	days := 90
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, "days must be a whole number")
+			return
+		}
+		days = n
+	}
+	scope, ok := scopeOf(w, r)
+	if !ok {
+		return
+	}
+	checks, err := h.svc.Received(r.Context(), p.SpaceID, days, scope)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := make([]apitypes.PayoutCheck, 0, len(checks))
+	for _, c := range checks {
+		item := apitypes.PayoutCheck{
+			On: c.On.Format(time.DateOnly), RecordOn: c.RecordOn.Format(time.DateOnly),
+			Kind: apitypes.PayoutCheckKind(c.Kind), InstrumentId: c.InstrumentID, AccountId: c.AccountID,
+			Quantity: c.Quantity.String(), PerUnit: nullable.NewNullNullable[string](),
+			AmountMinor: nullable.NewNullNullable[int64](), Currency: c.Currency,
+			Status: apitypes.PayoutCheckStatus(c.Status), GotMinor: c.Got,
+			GotCurrency: nullable.NewNullNullable[string](), GotOn: nullable.NewNullNullable[string](),
+		}
+		if c.PerUnit != nil {
+			item.PerUnit = nullable.NewNullableWithValue(c.PerUnit.String())
+		}
+		if c.Amount != nil {
+			item.AmountMinor = nullable.NewNullableWithValue(*c.Amount)
+		}
+		if c.GotOn != nil {
+			item.GotOn = nullable.NewNullableWithValue(c.GotOn.Format(time.DateOnly))
+			item.GotCurrency = nullable.NewNullableWithValue(c.GotCurrency)
+		}
+		out = append(out, item)
+	}
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 func (h *Handler) handleForecast(w http.ResponseWriter, r *http.Request) {
@@ -43,19 +110,9 @@ func (h *Handler) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 		months = n
 	}
-	var scope Scope
-	for _, f := range []struct {
-		name string
-		into **uuid.UUID
-	}{{"account_id", &scope.AccountID}, {"instrument_id", &scope.InstrumentID}} {
-		if raw := q.Get(f.name); raw != "" {
-			id, err := uuid.Parse(raw)
-			if err != nil {
-				httpjson.Error(w, http.StatusBadRequest, f.name+" must be a uuid")
-				return
-			}
-			*f.into = &id
-		}
+	scope, ok := scopeOf(w, r)
+	if !ok {
+		return
 	}
 	f, err := h.svc.Forecast(r.Context(), p.SpaceID, months, scope)
 	if err != nil {
