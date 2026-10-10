@@ -29,6 +29,12 @@ const (
 	// Long: each period's purchases are free for a stretch of days from the
 	// period's start — «120 дней» (СберКарта), a year (Альфа's first month).
 	Long GraceKind = "long"
+	// Windows: the purchases of WindowMonths periods in a row, counted from
+	// the period the card's contract was made in, are free until the end of
+	// the GraceMonths-th period from the window's start — «180 дней»
+	// Газпромбанка: two months of purchases, paid by the end of the sixth
+	// (decision Р-28).
+	Windows GraceKind = "windows"
 )
 
 // Terms are a card's terms. Limit and MinFloor are in minor units of the
@@ -46,6 +52,25 @@ type Terms struct {
 	// OwnRate is what the family's own money would earn instead, for
 	// weighing the card; nil until named.
 	OwnRate *decimal.Decimal
+	// WindowMonths, GraceMonths and OpenedOn are a Windows grace's: the
+	// periods of purchases in a window, the periods from its start to its
+	// deadline, and the day the contract was made, whose period the windows
+	// count from.
+	WindowMonths int
+	GraceMonths  int
+	OpenedOn     *time.Time
+	// GraceAllLost: a deadline missed takes the grace off the whole debt,
+	// the later periods' purchases too, and the purchases made after it are
+	// charged from their day — until the purchases are repaid in full; a
+	// minimum missed does the same until the whole debt is.
+	GraceAllLost bool
+	// PayByPeriodEnd: the minimum is due by the last day of the period after
+	// the statement, not PaymentDays after it.
+	PayByPeriodEnd bool
+	// ChargesInFull: the minimum is MinPercent of the debt for purchases,
+	// cash and transfers (not less than MinFloor) plus the interest and fees
+	// charged, in full.
+	ChargesInFull bool
 }
 
 var hundred, thousand = decimal.NewFromInt(100), decimal.NewFromInt(1000)
@@ -60,10 +85,16 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: the statement day is 1 to 31", family.ErrValidation)
 	case t.PaymentDays < 0 || t.PaymentDays > 60:
 		return fmt.Errorf("%w: the days to pay after a statement are 0 to 60", family.ErrValidation)
-	case t.GraceKind != FromStatement && t.GraceKind != Long:
-		return fmt.Errorf("%w: the grace runs from the statement or long", family.ErrValidation)
+	case t.GraceKind != FromStatement && t.GraceKind != Long && t.GraceKind != Windows:
+		return fmt.Errorf("%w: the grace runs from the statement, long or in windows", family.ErrValidation)
 	case t.GraceKind == Long && (t.GraceDays < 1 || t.GraceDays > 1100):
 		return fmt.Errorf("%w: a long grace is 1 to 1100 days", family.ErrValidation)
+	case t.GraceKind == Windows && (t.WindowMonths < 1 || t.WindowMonths > 12):
+		return fmt.Errorf("%w: a window is 1 to 12 periods of purchases", family.ErrValidation)
+	case t.GraceKind == Windows && (t.GraceMonths < t.WindowMonths || t.GraceMonths > 36):
+		return fmt.Errorf("%w: a window's purchases are paid by the end of its own last period or a later one, at most the 36th", family.ErrValidation)
+	case t.GraceKind == Windows && t.OpenedOn == nil:
+		return fmt.Errorf("%w: windows count from the day the card's contract was made", family.ErrValidation)
 	case t.MinPercent.IsNegative() || t.MinPercent.GreaterThan(hundred):
 		return fmt.Errorf("%w: the minimum payment is 0 to 100 percent of the debt", family.ErrValidation)
 	case t.MinFloor < 0:
@@ -95,13 +126,55 @@ func (t Terms) period(d time.Time) (start, end time.Time) {
 	return start, t.statementOn(next.Year(), next.Month())
 }
 
+// statementAfter is the statement n periods after the one on day s.
+func (t Terms) statementAfter(s time.Time, n int) time.Time {
+	m := time.Date(s.Year(), s.Month()+time.Month(n), 1, 0, 0, 0, 0, time.UTC)
+	return t.statementOn(m.Year(), m.Month())
+}
+
+// dueOn is the day a statement on day s is to be paid by: PaymentDays after
+// it, or the last day of the period it opens.
+func (t Terms) dueOn(s time.Time) time.Time {
+	if t.PayByPeriodEnd {
+		return t.statementAfter(s, 1).AddDate(0, 0, -1)
+	}
+	return s.AddDate(0, 0, t.PaymentDays)
+}
+
+// window is the window of periods a day's purchases belong to, counted from
+// the period of OpenedOn.
+func (t Terms) window(d time.Time) (start, end time.Time) {
+	first, _ := t.period(*t.OpenedOn)
+	at, _ := t.period(d)
+	n := (at.Year()-first.Year())*12 + int(at.Month()-first.Month())
+	k := n / t.WindowMonths
+	if n < 0 && n%t.WindowMonths != 0 {
+		k--
+	}
+	start = t.statementAfter(first, k*t.WindowMonths)
+	return start, t.statementAfter(start, t.WindowMonths)
+}
+
+// group is the purchases that share a deadline with a day's: its period, or
+// its window.
+func (t Terms) group(d time.Time) (from, to time.Time) {
+	if t.GraceKind == Windows {
+		return t.window(d)
+	}
+	return t.period(d)
+}
+
 // deadline is the last day a purchase on day d is free of interest.
 func (t Terms) deadline(d time.Time) time.Time {
 	start, end := t.period(d)
-	if t.GraceKind == Long {
+	switch t.GraceKind {
+	case Long:
 		return start.AddDate(0, 0, t.GraceDays-1)
+	case Windows:
+		start, _ = t.window(d)
+		return t.statementAfter(start, t.GraceMonths).AddDate(0, 0, -1)
 	}
-	return end.AddDate(0, 0, t.PaymentDays)
+	return t.dueOn(end)
 }
 
 // Due is an amount to pay by a day.
@@ -110,14 +183,17 @@ type Due struct {
 	Amount int64
 }
 
-// Lost is the part of a period's purchases still owed after its grace ran
-// out, and roughly the interest on it so far — the bank counts by its own
-// rules; this is the yearly rate from each purchase's day.
+// Lost is the part of a period's (or a window's) purchases still owed after
+// its grace ran out, and roughly the interest on it so far — the bank counts
+// by its own rules; this is the yearly rate from each purchase's day. Early:
+// the grace was taken off before its own deadline, by an earlier one missed
+// (Terms.GraceAllLost).
 type Lost struct {
 	From, To time.Time
 	Deadline time.Time
 	Amount   int64
 	Interest int64
+	Early    bool
 }
 
 // Status is where a card stands on a day. Debt is positive when owed; a
@@ -144,27 +220,53 @@ type Status struct {
 	// owed — interest from its first day — with roughly that interest.
 	NonGrace         int64
 	NonGraceInterest int64
+	// GraceOffSince is the day a missed deadline — or, GraceOffByMinimum, a
+	// missed minimum — took the grace off the whole debt
+	// (Terms.GraceAllLost); zero while the grace holds. ToRestore is what is
+	// left to repay for the purchases to come to have it again: the
+	// purchases, or after a missed minimum the whole debt.
+	GraceOffSince     time.Time
+	GraceOffByMinimum bool
+	ToRestore         int64
 }
 
-// item is one debit still (partly) owed.
+// item is one debit still (partly) owed: a purchase the grace covers, a
+// charge of the bank's, or money moved off the card. A lost purchase is
+// charged from its day.
 type item struct {
-	on    time.Time
-	left  int64
-	grace bool
+	on       time.Time
+	left     int64
+	grace    bool
+	charge   bool
+	deadline time.Time
+	lost     bool
+	early    bool
 }
 
 // purchase says whether a journal row is spending the grace covers: a
-// withdrawal that is not one half of a move to the family's own account.
-// Fees, interest charged and money moved off the card are owed from day one.
-func purchase(op operation.Operation) bool {
-	return op.Type == operation.TypeWithdrawal && op.TransferGroupID == nil
+// withdrawal that is not one half of a move to the family's own account, nor
+// a charge of the bank's. Fees, interest charged and money moved off the card
+// are owed from day one.
+func purchase(op operation.Operation, kinds Kinds) bool {
+	return op.Type == operation.TypeWithdrawal && op.TransferGroupID == nil && !kinds.charge(op)
 }
 
 // Work works out the card's status on today from its journal, rows in the
-// card's currency only. Payments clear the oldest debt first.
-func Work(t Terms, ops []operation.Operation, currency string, today time.Time) Status {
-	rows := slices.Clone(ops)
+// card's currency only; kinds tell the bank's charges by their categories.
+// Payments clear the oldest debt first. The journal is walked day by day, so
+// that a deadline missed (with Terms.GraceAllLost) takes the grace off what
+// was owed then and off the purchases made until the purchases are repaid.
+func Work(t Terms, ops []operation.Operation, currency string, today time.Time, kinds Kinds) Status {
+	rows := make([]operation.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op.Currency == currency && op.AmountMinor != 0 && !op.OccurredOn.After(today) {
+			rows = append(rows, op)
+		}
+	}
 	slices.SortStableFunc(rows, func(a, b operation.Operation) int { return a.OccurredOn.Compare(b.OccurredOn) })
+
+	var st Status
+	st.LastStatement, st.NextStatement = t.period(today)
 	var items []*item
 	var credit int64
 	pay := func(amount int64) {
@@ -178,29 +280,120 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time) 
 		}
 		credit += amount
 	}
-	for _, op := range rows {
-		if op.Currency != currency || op.AmountMinor == 0 || op.OccurredOn.After(today) {
-			continue
+	owedOf := func(which func(*item) bool) int64 {
+		var sum int64
+		for _, it := range items {
+			if which(it) {
+				sum += it.left
+			}
 		}
-		if op.AmountMinor > 0 {
-			pay(op.AmountMinor)
-			continue
+		return sum
+	}
+	isPurchase := func(it *item) bool { return it.grace }
+	isCharge := func(it *item) bool { return it.charge }
+	anything := func(*item) bool { return true }
+	// takeOff takes the grace off from day: off what is owed now, and off
+	// the purchases to come until what restores it is repaid.
+	off := false
+	takeOff := func(day time.Time, byMinimum bool) {
+		if !off {
+			off, st.GraceOffSince = true, day
 		}
-		owed := -op.AmountMinor
-		take := min(credit, owed)
-		credit -= take
-		if owed -= take; owed > 0 {
-			items = append(items, &item{on: op.OccurredOn, left: owed, grace: purchase(op)})
+		st.GraceOffByMinimum = st.GraceOffByMinimum || byMinimum
+		for _, it := range items {
+			if it.grace && !it.lost && it.left > 0 {
+				it.lost, it.early = true, true
+			}
+		}
+	}
+	// miss loses the purchases whose deadline is before day; with
+	// GraceAllLost one missed takes the grace off the rest.
+	miss := func(day time.Time) {
+		var missed time.Time
+		for _, it := range items {
+			if it.grace && !it.lost && it.left > 0 && it.deadline.Before(day) {
+				it.lost = true
+				if missed.IsZero() || it.deadline.Before(missed) {
+					missed = it.deadline
+				}
+			}
+		}
+		if t.GraceAllLost && !missed.IsZero() {
+			takeOff(missed.AddDate(0, 0, 1), false)
+		}
+	}
+	// The minimum of each statement on the way, and what was paid toward it,
+	// for a minimum missed; the charges the last statement showed, for
+	// ChargesInFull.
+	var charges, minimumDue, paidToward int64
+	var minimumBy time.Time
+	stated := false
+	first := today
+	if len(rows) > 0 {
+		first = rows[0].OccurredOn
+	}
+	k := 0
+	for day := first; !day.After(today); day = day.AddDate(0, 0, 1) {
+		if t.GraceAllLost && !minimumBy.IsZero() && minimumBy.Before(day) {
+			if paidToward < minimumDue {
+				takeOff(minimumBy.AddDate(0, 0, 1), true)
+			}
+			minimumBy = time.Time{}
+		}
+		if start, _ := t.period(day); start.Equal(day) {
+			debt := owedOf(anything) - credit
+			minimumDue, minimumBy, paidToward = t.minimum(debt, owedOf(isCharge)), t.dueOn(day), 0
+			if day.Equal(st.LastStatement) {
+				charges, stated = owedOf(isCharge), true
+			}
+		}
+		miss(day)
+		// What restores the grace repaid, the purchases from the next day
+		// keep it again.
+		restored := false
+		for ; k < len(rows) && rows[k].OccurredOn.Equal(day); k++ {
+			op := rows[k]
+			if op.AmountMinor > 0 {
+				pay(op.AmountMinor)
+				paidToward += op.AmountMinor
+				restore := isPurchase
+				if st.GraceOffByMinimum {
+					restore = anything
+				}
+				restored = restored || off && owedOf(restore) == 0
+				continue
+			}
+			owed := -op.AmountMinor
+			take := min(credit, owed)
+			credit -= take
+			if owed -= take; owed > 0 {
+				it := &item{on: day, left: owed, grace: purchase(op, kinds), charge: kinds.charge(op)}
+				if it.grace {
+					it.deadline = t.deadline(day)
+					it.lost, it.early = off, off
+				}
+				items = append(items, it)
+			}
+		}
+		if restored {
+			off, st.GraceOffSince, st.GraceOffByMinimum = false, time.Time{}, false
+		}
+	}
+	if !stated {
+		charges = owedOf(isCharge)
+	}
+	if off {
+		st.ToRestore = owedOf(isPurchase)
+		if st.GraceOffByMinimum {
+			st.ToRestore = max(owedOf(anything)-credit, 0)
 		}
 	}
 
-	var st Status
 	for _, it := range items {
 		st.Debt += it.left
 	}
 	st.Debt -= credit
 	st.Available = t.Limit - max(st.Debt, 0)
-	st.LastStatement, st.NextStatement = t.period(today)
 
 	rate := t.AnnualRate.Div(hundred)
 	interest := func(amount int64, from time.Time) int64 {
@@ -219,17 +412,17 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time) 
 			st.NonGraceInterest += interest(it.left, it.on)
 			continue
 		}
-		d := t.deadline(it.on)
-		if !d.Before(today) {
-			grace[d] += it.left
+		if !it.lost {
+			grace[it.deadline] += it.left
 			continue
 		}
-		from, to := t.period(it.on)
+		from, to := t.group(it.on)
 		l, ok := lost[from]
 		if !ok {
-			l = &Lost{From: from, To: to.AddDate(0, 0, -1), Deadline: d}
+			l = &Lost{From: from, To: to.AddDate(0, 0, -1), Deadline: it.deadline, Early: true}
 			lost[from] = l
 		}
+		l.Early = l.Early && it.early
 		l.Amount += it.left
 		l.Interest += interest(it.left, it.on)
 	}
@@ -255,32 +448,38 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time) 
 			paidSince += op.AmountMinor
 		}
 	}
-	st.MinimumOn = st.LastStatement.AddDate(0, 0, t.PaymentDays)
-	if minimum := t.minimum(atStatement); minimum > paidSince {
+	st.MinimumOn = t.dueOn(st.LastStatement)
+	if minimum := t.minimum(atStatement, charges); minimum > paidSince {
 		st.Minimum = minimum - paidSince
 		st.MinimumMissed = st.MinimumOn.Before(today)
 	}
 	if st.Minimum == 0 && st.MinimumOn.Before(today) {
-		st.nextMinimum(t)
+		st.nextMinimum(t, owedOf(isCharge))
 	}
 	return st
 }
 
-// nextMinimum is the next statement's minimum, from today's debt.
-func (st *Status) nextMinimum(t Terms) {
-	st.MinimumOn = st.NextStatement.AddDate(0, 0, t.PaymentDays)
-	st.Minimum = t.minimum(st.Debt)
+// nextMinimum is the next statement's minimum, from today's debt and the
+// charges in it.
+func (st *Status) nextMinimum(t Terms, charges int64) {
+	st.MinimumOn = t.dueOn(st.NextStatement)
+	st.Minimum = t.minimum(st.Debt, charges)
 	st.MinimumEstimate = true
 }
 
 // minimum is the minimum payment on a debt: MinPercent of it, not less than
-// MinFloor, never more than the debt itself.
-func (t Terms) minimum(debt int64) int64 {
+// MinFloor — of the debt less the charges, and the charges on top, with
+// ChargesInFull — never more than the debt itself.
+func (t Terms) minimum(debt, charges int64) int64 {
 	if debt <= 0 {
 		return 0
 	}
-	share, _ := money.Minor(decimal.NewFromInt(debt).Mul(t.MinPercent).Div(hundred))
-	return min(max(share, t.MinFloor), debt)
+	if !t.ChargesInFull {
+		charges = 0
+	}
+	charges = min(max(charges, 0), debt)
+	share, _ := money.Minor(decimal.NewFromInt(debt - charges).Mul(t.MinPercent).Div(hundred))
+	return min(max(share, t.MinFloor)+charges, debt)
 }
 
 // ByBalance is the status of a card known only by its balance: the debt, the
@@ -293,11 +492,11 @@ func ByBalance(t Terms, balance int64, today time.Time) Status {
 	// The balance may already hold payments made since the last statement, so
 	// its minimum is an estimate either way: the last statement's while its
 	// day is ahead, else the next one's.
-	st.MinimumOn = st.LastStatement.AddDate(0, 0, t.PaymentDays)
-	st.Minimum = t.minimum(st.Debt)
+	st.MinimumOn = t.dueOn(st.LastStatement)
+	st.Minimum = t.minimum(st.Debt, 0)
 	st.MinimumEstimate = true
 	if st.MinimumOn.Before(today) {
-		st.nextMinimum(t)
+		st.nextMinimum(t, 0)
 	}
 	return st
 }

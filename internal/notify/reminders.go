@@ -27,7 +27,7 @@ const soonDays = 3
 // CardReminders are the pushes the cards call for today: three days before a
 // payment day and on it — what keeps the grace, then the minimum, unless the
 // grace's sum on the same day covers it — and at once when the minimum was
-// missed or a grace lost.
+// missed, a grace lost, or the grace taken off the whole debt.
 func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 	var out []Reminder
 	for _, c := range cards {
@@ -43,8 +43,16 @@ func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 			add("min-missed:"+day(st.MinimumOn), fmt.Sprintf("Обязательный платёж %s не внесён до %s.", amount(st.Minimum, cur), short(st.MinimumOn)))
 		}
 		for _, l := range st.Lost {
+			// Taken off with the rest, it is in the message below.
+			if l.Early {
+				continue
+			}
 			add("lost:"+day(l.From), fmt.Sprintf("Льгота по покупкам %s–%s сгорела, осталось %s. Погасите как можно скорее.",
 				short(l.From), short(l.To), amount(l.Amount, cur)))
+		}
+		if !st.GraceOffSince.IsZero() && st.ToRestore > 0 {
+			add("grace-off:"+day(st.GraceOffSince), fmt.Sprintf("Льгота снята со всего долга с %s: проценты идут и на покупки, сделанные потом. Чтобы вернуть её, погасите %s.",
+				short(st.GraceOffSince), amount(st.ToRestore, cur)))
 		}
 		var graceDay time.Time
 		var graceSum int64

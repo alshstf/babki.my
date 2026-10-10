@@ -3008,13 +3008,26 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
-        payment_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement)" }
-        grace_kind: { type: string, enum: [statement, long] }
+        payment_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end" }
+        grace_kind:
+          type: string
+          enum: [statement, long, windows]
+          description: >-
+            statement: a period's purchases are free until its payment day; long: for grace_days from
+            the period's start; windows: the purchases of window_months periods in a row, counted from
+            the period of opened_on, are free until the end of the grace_months-th period from the
+            window's start (Газпромбанк «180 дней»: 2 and 6).
         grace_days: { type: integer, minimum: 0, maximum: 1100, description: "For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise" }
+        window_months: { type: integer, minimum: 0, maximum: 12, description: "For grace_kind windows: the periods of purchases in a window; 0 otherwise" }
+        grace_months: { type: integer, minimum: 0, maximum: 36, description: "For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise" }
+        opened_on: { type: string, nullable: true, description: "For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise" }
+        grace_all_lost: { type: boolean, description: "A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is" }
+        pay_by_period_end: { type: boolean, description: "The minimum is due by the last day of the period after the statement, not payment_days after it" }
+        charges_in_full: { type: boolean, description: "The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full" }
         min_percent: { type: string, description: "The minimum payment, percent of the debt the statement shows (decimal)" }
         min_floor_minor: { type: integer, format: int64, minimum: 0, description: "The smallest minimum payment" }
         annual_rate: { type: string, description: "Percent a year charged once the grace is lost (decimal)" }
@@ -3027,16 +3040,17 @@ components:
         amount_minor: { type: integer, format: int64 }
     CreditCardLost:
       type: object
-      required: [from, to, deadline, amount_minor, interest_minor]
+      required: [from, to, deadline, amount_minor, interest_minor, early]
       properties:
         from: { type: string, description: "The statement period's first day" }
         to: { type: string, description: "Its last day" }
         deadline: { type: string, description: "The day its purchases had to be paid by" }
         amount_minor: { type: integer, format: int64, description: "What is still owed of them" }
         interest_minor: { type: integer, format: int64, description: "Roughly the interest on it so far, at annual_rate from each purchase's day; the bank counts by its own rules" }
+        early: { type: boolean, description: "The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)" }
     CreditCardStatus:
       type: object
-      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor]
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor]
       properties:
         debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
         available_minor: { type: integer, format: int64, description: "What is left of the limit" }
@@ -3050,6 +3064,9 @@ components:
         lost: { type: array, items: { $ref: "#/components/schemas/CreditCardLost" } }
         non_grace_minor: { type: integer, format: int64, description: "Money moved off the card, fees and interest charged still owed: interest from their day" }
         non_grace_interest_minor: { type: integer, format: int64 }
+        grace_off_since: { type: string, nullable: true, description: "The day a missed deadline (or, grace_off_by_minimum, a missed minimum) took the grace off the whole debt (grace_all_lost); null while the grace holds" }
+        grace_off_by_minimum: { type: boolean }
+        to_restore_minor: { type: integer, format: int64, description: "While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise" }
     CreditCardBenefit:
       type: object
       required: [from, to, own_rate_known, own_earned_minor, cashback_minor, costs_minor, pending_interest_minor, total_minor]

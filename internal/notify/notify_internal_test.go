@@ -101,6 +101,21 @@ func TestTheCardsCallForTheirReminders(t *testing.T) {
 	if got := CardReminders([]creditcard.Card{soon}, d("2026-10-21")); len(got) != 1 || !strings.HasSuffix(got[0].Key, ":today") {
 		t.Errorf("on the day = %+v", got)
 	}
+
+	// The grace taken off the whole debt: the window that missed, and one
+	// message for the rest — not one per window.
+	off := cardWith(nil, creditcard.Status{
+		Lost: []creditcard.Lost{
+			{From: d("2026-07-01"), To: d("2026-08-31"), Amount: 6_385_00},
+			{From: d("2026-09-01"), To: d("2026-10-31"), Amount: 15_000_00, Early: true},
+		},
+		GraceOffSince: d("2027-01-01"), ToRestore: 21_385_00,
+	})
+	got = CardReminders([]creditcard.Card{off}, d("2027-01-02"))
+	if len(got) != 2 || !strings.HasSuffix(got[0].Key, ":lost:2026-07-01") || !strings.HasSuffix(got[1].Key, ":grace-off:2027-01-01") ||
+		!strings.Contains(got[1].Body, amount(21_385_00, "RUB")) {
+		t.Errorf("grace off = %+v", got)
+	}
 }
 
 func TestAmountsAreWrittenTheRussianWay(t *testing.T) {

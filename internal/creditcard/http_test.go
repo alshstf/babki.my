@@ -92,6 +92,25 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		t.Errorf("list = %+v", list)
 	}
 
+	// Газпромбанк's windows: stated with the day of the contract, read back
+	// as stated; without that day they are refused.
+	windows := `{"limit_minor":30000000,"statement_day":1,"payment_days":0,"grace_kind":"windows","grace_days":0,
+		"window_months":2,"grace_months":6,"opened_on":%s,"grace_all_lost":true,"pay_by_period_end":true,"charges_in_full":true,
+		"min_percent":"3","min_floor_minor":50000,"annual_rate":"59.99","own_rate":null}`
+	if r := apitest.Do(t, c, "PUT", path, fmt.Sprintf(windows, "null")); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("windows with no contract day = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path, fmt.Sprintf(windows, `"2026-07-10"`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("windows = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if opened, _ := got.Terms.OpenedOn.Get(); got.Terms.GraceKind != "windows" || got.Terms.WindowMonths != 2 || got.Terms.GraceMonths != 6 ||
+		opened != "2026-07-10" || !got.Terms.GraceAllLost || !got.Terms.PayByPeriodEnd || !got.Terms.ChargesInFull ||
+		len(got.Status.Grace) != 1 || !got.Status.GraceOffSince.IsNull() {
+		t.Errorf("windows card = %+v", got)
+	}
+
 	if r := apitest.Do(t, c, "DELETE", path, ""); r.StatusCode != http.StatusNoContent {
 		t.Errorf("delete = %d", r.StatusCode)
 	}

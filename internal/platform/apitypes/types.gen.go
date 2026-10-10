@@ -305,6 +305,7 @@ func (e CostBasisPerimeter) Valid() bool {
 const (
 	Long      CreditCardTermsGraceKind = "long"
 	Statement CreditCardTermsGraceKind = "statement"
+	Windows   CreditCardTermsGraceKind = "windows"
 )
 
 // Valid indicates whether the value is a known member of the CreditCardTermsGraceKind enum.
@@ -313,6 +314,8 @@ func (e CreditCardTermsGraceKind) Valid() bool {
 	case Long:
 		return true
 	case Statement:
+		return true
+	case Windows:
 		return true
 	default:
 		return false
@@ -1986,6 +1989,9 @@ type CreditCardLost struct {
 	// Deadline The day its purchases had to be paid by
 	Deadline string `json:"deadline"`
 
+	// Early The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)
+	Early bool `json:"early"`
+
 	// From The statement period's first day
 	From string `json:"from"`
 
@@ -2005,7 +2011,11 @@ type CreditCardStatus struct {
 	DebtMinor int64 `json:"debt_minor"`
 
 	// Grace What to pay by which day so that purchases stay free of interest, soonest first; empty when counted by balance
-	Grace []CreditCardDue `json:"grace"`
+	Grace             []CreditCardDue `json:"grace"`
+	GraceOffByMinimum bool            `json:"grace_off_by_minimum"`
+
+	// GraceOffSince The day a missed deadline (or, grace_off_by_minimum, a missed minimum) took the grace off the whole debt (grace_all_lost); null while the grace holds
+	GraceOffSince nullable.Nullable[string] `json:"grace_off_since"`
 
 	// LastStatement The latest statement day on or before today
 	LastStatement string           `json:"last_statement"`
@@ -2025,6 +2035,9 @@ type CreditCardStatus struct {
 
 	// NonGraceMinor Money moved off the card, fees and interest charged still owed: interest from their day
 	NonGraceMinor int64 `json:"non_grace_minor"`
+
+	// ToRestoreMinor While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise
+	ToRestoreMinor int64 `json:"to_restore_minor"`
 }
 
 // CreditCardSummary defines model for CreditCardSummary.
@@ -2041,10 +2054,21 @@ type CreditCardTerms struct {
 	// AnnualRate Percent a year charged once the grace is lost (decimal)
 	AnnualRate string `json:"annual_rate"`
 
+	// ChargesInFull The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full
+	ChargesInFull bool `json:"charges_in_full"`
+
+	// GraceAllLost A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is
+	GraceAllLost bool `json:"grace_all_lost"`
+
 	// GraceDays For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise
-	GraceDays  int                      `json:"grace_days"`
-	GraceKind  CreditCardTermsGraceKind `json:"grace_kind"`
-	LimitMinor int64                    `json:"limit_minor"`
+	GraceDays int `json:"grace_days"`
+
+	// GraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6).
+	GraceKind CreditCardTermsGraceKind `json:"grace_kind"`
+
+	// GraceMonths For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise
+	GraceMonths int   `json:"grace_months"`
+	LimitMinor  int64 `json:"limit_minor"`
 
 	// MinFloorMinor The smallest minimum payment
 	MinFloorMinor int64 `json:"min_floor_minor"`
@@ -2052,17 +2076,26 @@ type CreditCardTerms struct {
 	// MinPercent The minimum payment, percent of the debt the statement shows (decimal)
 	MinPercent string `json:"min_percent"`
 
+	// OpenedOn For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise
+	OpenedOn nullable.Nullable[string] `json:"opened_on"`
+
 	// OwnRate Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named
 	OwnRate nullable.Nullable[string] `json:"own_rate"`
 
-	// PaymentDays Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement)
+	// PayByPeriodEnd The minimum is due by the last day of the period after the statement, not payment_days after it
+	PayByPeriodEnd bool `json:"pay_by_period_end"`
+
+	// PaymentDays Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end
 	PaymentDays int `json:"payment_days"`
 
 	// StatementDay The day of the month the bank closes a statement period; a short month's last day stands for a later one
 	StatementDay int `json:"statement_day"`
+
+	// WindowMonths For grace_kind windows: the periods of purchases in a window; 0 otherwise
+	WindowMonths int `json:"window_months"`
 }
 
-// CreditCardTermsGraceKind defines model for CreditCardTerms.GraceKind.
+// CreditCardTermsGraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6).
 type CreditCardTermsGraceKind string
 
 // CurrencyAmount One amount in one currency. Used where a figure cannot be added across currencies and is published per currency instead.
