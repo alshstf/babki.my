@@ -34,8 +34,10 @@ func (h *Handler) familyReturn(ctx context.Context, spaceID uuid.UUID, base stri
 	out := ReturnBasis{Complete: true}
 	counted := 0
 	for _, a := range accounts {
+		// A card's money in and out is spending and earning, not an
+		// investment's; it is left out even when kept by its operations.
 		v, ok := vals[a.ID]
-		if !ok || !v.byJournal {
+		if !ok || !v.byJournal || v.everyday {
 			continue
 		}
 		counted++

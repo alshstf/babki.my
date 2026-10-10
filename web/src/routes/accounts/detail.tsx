@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSession } from "@/api/session";
-import { useAccounts } from "@/api/accounts";
+import { useAccounts, useUpdateAccount } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
 import { useScreenCurrencies } from "@/lib/screen-currencies";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
@@ -31,6 +31,7 @@ import { ArrivalDialog } from "./arrival-dialog";
 import { PurchasePriceDialog, type PricedPaper } from "./purchase-price-dialog";
 import { StatePriceDialog, type QuotedPaper } from "./state-price-dialog";
 import { OpeningBalanceDialog } from "./opening-balance-dialog";
+import { EverydayBalance } from "./everyday-balance";
 import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
@@ -80,6 +81,8 @@ export function AccountDetailPage() {
     ...(baseCurrency ? [baseCurrency] : []),
   ]);
 
+  const keep = useUpdateAccount();
+
   const accountsState = queryState(accounts);
   if (accountsState !== "ready") return <QueryGate state={accountsState} />;
   const positionsState = queryState(positions);
@@ -99,6 +102,12 @@ export function AccountDetailPage() {
       </div>
     );
   }
+
+  // A card, a current account, a deposit, a credit card, a loan or cash: its
+  // money is shown as a balance, not as a broker's holdings and earnings —
+  // unless papers somehow sit on it.
+  const everyday = account.type !== "brokerage";
+  const holdsPapers = (positions.data?.positions.length ?? 0) > 0;
 
   return (
     <div className="grid gap-6">
@@ -123,12 +132,12 @@ export function AccountDetailPage() {
         </div>
         {/* The biggest number answers «сколько я тут заработал»; the free cash
            sits with the holdings below. */}
-        {positions.data && (
+        {positions.data && !everyday && (
           <AccountTotal total={positions.data.account_total} mode={mode} />
         )}
         {/* The closed deals' part of the figure above, final; nothing at all
            for an account with no deals and no withholding. */}
-        {positions.data && (
+        {positions.data && !everyday && (
           <RealizedTotal total={positions.data.realized_total} mode={mode} />
         )}
         {account.type === "brokerage" && <AccountReturn accountId={accountId} />}
@@ -143,7 +152,9 @@ export function AccountDetailPage() {
       <div className="grid gap-2">
         <div className="flex items-center justify-between">
           <div className="flex flex-wrap items-baseline gap-x-3">
-            <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
+            <h2 className="text-lg font-semibold">
+              {everyday && !holdsPapers ? t("everyday.title") : t("positions.title")}
+            </h2>
           </div>
           {!readOnly && (
             <DropdownMenu>
@@ -200,6 +211,15 @@ export function AccountDetailPage() {
         <RefreshFailedNotice show={refreshFailed(accounts, positions)} />
         {positionsState !== "ready" ? (
           <QueryGate state={positionsState} />
+        ) : everyday && !holdsPapers ? (
+          <EverydayBalance
+            account={account}
+            cash={positions.data?.cash ?? []}
+            onKeep={readOnly ? undefined : (byOperations) =>
+              keep.mutate({ id: account.id, body: { kept_by_operations: byOperations } })}
+            pending={keep.isPending}
+            onOpeningBalance={readOnly ? undefined : setOpening}
+          />
         ) : positions.data &&
           // Money counts as something to show, or a cash-only account read
           // «пусто».

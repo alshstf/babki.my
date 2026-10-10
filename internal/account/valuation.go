@@ -85,17 +85,30 @@ type valuation struct {
 	journal        *JournalValue
 	byJournal      bool
 	reconciliation *apitypes.AccountReconciliation
+	// everyday is an account other than a broker's: kept by its balance
+	// unless the family says otherwise, and never part of the family's return.
+	everyday bool
 }
 
-// valuations values the active brokerage accounts that have a journal and
-// reconciles each with its latest balance. Others are counted by balance.
+// countedByJournal is whether the total counts a's journal rather than its
+// balance: a broker's account unless pinned to its balance, an everyday one
+// only when the family keeps it by its operations.
+func countedByJournal(a Account) bool {
+	if a.Type == TypeBrokerage {
+		return !a.ValuedByBalance
+	}
+	return a.KeptByOperations
+}
+
+// valuations values the active accounts that have a journal and reconciles
+// each with its latest balance. Others are counted by balance.
 func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []WithBalance, baseCurrency string, now time.Time, rates *marketdata.RateMemo) (map[uuid.UUID]valuation, error) {
 	out := make(map[uuid.UUID]valuation)
 	if h.journals == nil {
 		return out, nil
 	}
 	for _, a := range accounts {
-		if a.Type != TypeBrokerage || a.Status != StatusActive {
+		if a.Status != StatusActive {
 			continue
 		}
 		v, err := h.journals.ValueFromJournal(ctx, spaceID, a.ID)
@@ -109,7 +122,10 @@ func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []
 		if err != nil {
 			return nil, err
 		}
-		out[a.ID] = valuation{journal: &v, byJournal: !a.ValuedByBalance, reconciliation: rec}
+		out[a.ID] = valuation{
+			journal: &v, byJournal: countedByJournal(a.Account), reconciliation: rec,
+			everyday: a.Type != TypeBrokerage,
+		}
 	}
 	return out, nil
 }
@@ -250,7 +266,11 @@ func journalSummary(vals map[uuid.UUID]valuation) (apitypes.SummaryJournal, erro
 	)
 	for id, v := range vals {
 		if !v.byJournal {
-			out.PinnedToBalance++
+			// An everyday account kept by its balance is the usual way, not a
+			// broker's journal set aside.
+			if !v.everyday {
+				out.PinnedToBalance++
+			}
 			continue
 		}
 		out.Accounts++

@@ -453,3 +453,55 @@ func TestTheFamilysReturnIsReckonedOverItsJournals(t *testing.T) {
 		t.Error("an account valued only in part left the family's period complete")
 	}
 }
+
+// An everyday account is counted by its balance until the family keeps it by
+// its operations; then its journal counts, a credit card's as a debt, it is
+// reconciled with the bank's balance, and it stays out of the family's return.
+func TestAnEverydayAccountIsKeptByItsOperationsWhenAsked(t *testing.T) {
+	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, periods: map[string]account.ReturnBasis{}}
+	url, c, _ := newAPIWithJournals(t, journals)
+	today := time.Now().UTC()
+
+	card := createAccount(t, url, c, "Кредитка", "credit_card", "RUB")
+	balanceOn(t, url, c, card, today, -3_000_000)
+	journals.byAccount[card] = account.JournalValue{
+		Currency: "RUB", Minor: -2_990_000, ByCurrency: map[string]int64{"RUB": -2_990_000},
+		Operations: 17, NegativeCash: []string{"RUB"}, FullMinor: -2_990_000,
+	}
+	journals.periods[card] = account.ReturnBasis{
+		Start: account.JournalValue{Minor: 0}, End: account.JournalValue{Minor: -2_990_000}, Complete: true,
+	}
+
+	var rows []journalRow
+	getJSON(t, c, url+"/api/v1/accounts", &rows)
+	if r := rowOf(t, rows, card); r.CountedBy != "balance" || r.Journal == nil || r.Journal.AmountMinor != -2_990_000 {
+		t.Errorf("before = %+v, want counted by its balance with its journal beside it", r)
+	}
+	var sum journalSummary
+	getJSON(t, c, url+"/api/v1/summary", &sum)
+	if sum.Journal.PinnedToBalance != 0 || sum.Journal.Accounts != 0 {
+		t.Errorf("summary before = %+v, want nothing pinned: kept by balance is an everyday account's way", sum.Journal)
+	}
+
+	resp := apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+card, `{"kept_by_operations":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("keep by operations = %d", resp.StatusCode)
+	}
+	getJSON(t, c, url+"/api/v1/accounts", &rows)
+	if r := rowOf(t, rows, card); r.CountedBy != "journal" || r.Journal.Reconciliation == nil ||
+		r.Journal.Reconciliation.Status != "agrees" || r.Journal.Reconciliation.DifferenceMinor != 10_000 {
+		t.Errorf("after = %+v, want counted by a journal agreeing with the bank, 100 ₽ apart", r)
+	}
+	getJSON(t, c, url+"/api/v1/summary", &sum)
+	if sum.TotalInBaseMinor == nil || *sum.TotalInBaseMinor != -2_990_000 ||
+		len(sum.Totals) != 1 || sum.Totals[0].LiabilitiesMinor != -2_990_000 || sum.Journal.Accounts != 1 {
+		t.Errorf("summary after = %+v, want the journal's debt", sum)
+	}
+	var ret struct {
+		Accounts int `json:"accounts"`
+	}
+	getJSON(t, c, url+"/api/v1/return?from=2025-12-31&to=2026-09-30", &ret)
+	if ret.Accounts != 0 {
+		t.Errorf("the family's return counted %d accounts, want none: a card is not an investment", ret.Accounts)
+	}
+}
