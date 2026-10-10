@@ -129,3 +129,43 @@ export function useDeleteBankFigures(accountId: string) {
     },
   });
 }
+
+export type CreditCardCatalogProduct = components["schemas"]["CreditCardCatalogProduct"];
+export type CreditCardCatalogVersion = components["schemas"]["CreditCardCatalogVersion"];
+
+// The catalog of tariffs built into the program (decision Р-32).
+export function useCardCatalog(enabled = true) {
+  return useQuery({
+    queryKey: ["credit-card-catalog"],
+    enabled,
+    staleTime: Infinity,
+    queryFn: async (): Promise<CreditCardCatalogProduct[]> => {
+      const { data, error, response } = await api.GET("/api/v1/credit-cards/catalog");
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+// mergeTerms lays a catalog version's fields over a card's terms, the nested
+// ones (fees, cashback, installment) field by field.
+export function mergeTerms(base: CreditCardTerms, over: Record<string, unknown>): CreditCardTerms {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const into = out[k];
+    out[k] =
+      v && typeof v === "object" && !Array.isArray(v) && into && typeof into === "object"
+        ? { ...(into as Record<string, unknown>), ...(v as Record<string, unknown>) }
+        : v;
+  }
+  return out as CreditCardTerms;
+}
+
+// versionFor is the version of a catalog card for a contract made on day
+// (YYYY-MM-DD): the one whose bounds hold it; with no day, the only one.
+export function versionFor(product: CreditCardCatalogProduct, day: string): CreditCardCatalogVersion | undefined {
+  if (!day) return product.versions.length === 1 ? product.versions[0] : undefined;
+  return product.versions.find(
+    (v) => (v.contracts_from === null || v.contracts_from <= day) && (v.contracts_to === null || day <= v.contracts_to),
+  );
+}

@@ -206,6 +206,27 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		t.Errorf("take out of installments = %d", r.StatusCode)
 	}
 
+	// The catalog of tariffs; terms taken from it remember their version.
+	var catalog []apitypes.CreditCardCatalogProduct
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/credit-cards/catalog", ""), &catalog)
+	if len(catalog) < 4 || len(catalog[0].Versions) == 0 {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+	fromCatalog := `{"limit_minor":15000000,"statement_day":1,"payment_days":20,"grace_kind":"statement","grace_days":0,
+		"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":null,
+		"catalog":{"product":%q,"contracts_from":null,"revision":"2026-09-30"}}`
+	if r := apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "no-such-card")); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a card not in the catalog = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "tbank-platinum"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("terms from the catalog = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if ref, err := got.Terms.Catalog.Get(); err != nil || ref.Product != "tbank-platinum" || ref.Revision != "2026-09-30" || !got.CatalogUpdate.IsNull() {
+		t.Errorf("catalog ref = %+v (%v), update %+v", ref, err, got.CatalogUpdate)
+	}
+
 	// What the bank says: stated, shown against the reckoning, forgotten.
 	ahead := time.Now().UTC().AddDate(0, 0, 10).Format(time.DateOnly)
 	if r := apitest.Do(t, c, "PUT", path+"/bank", fmt.Sprintf(`{"stated_on":%q,"grace":null,"minimum":null}`, today)); r.StatusCode != http.StatusBadRequest {

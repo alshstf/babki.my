@@ -142,6 +142,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/credit-cards/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The catalog of tariffs built into the program (decision Р-32): banks' cards, each with its tariff by the dates of contracts — the fields of the card's terms it sets, the bank's documents and the day it was checked against them. */
+        get: operations["creditCardCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/credit-card/bank": {
         parameters: {
             query?: never;
@@ -2340,6 +2357,8 @@ export interface components {
             transfer_categories: string[];
             fees: components["schemas"]["CreditCardFees"];
             cashback: components["schemas"]["CreditCardCashback"];
+            /** @description The catalog's version the terms were taken from (GET /credit-cards/catalog); null when stated by hand */
+            catalog: components["schemas"]["CreditCardCatalogRef"] | null;
             /** @description Every purchase of the card in installments when months is above 0 — a card of installments («Халва»); 0 months otherwise */
             installment: components["schemas"]["CreditCardInstallmentPlan"];
             /** @description The minimum payment, percent of the debt the statement shows (decimal) */
@@ -2368,6 +2387,51 @@ export interface components {
             points: boolean;
             /** @description Days after the period's statement it comes in */
             credit_days: number;
+        };
+        CreditCardCatalogRef: {
+            /** @description The catalog product's id */
+            product: string;
+            /** @description The version's first contract day; null for a version with no bound */
+            contracts_from: string | null;
+            /** @description The tariff's revision the terms were taken at, YYYY-MM-DD */
+            revision: string;
+        };
+        CreditCardCatalogVersion: {
+            /** @description For contracts made from this day; null for no bound */
+            contracts_from: string | null;
+            /** @description …to this one; null for no bound */
+            contracts_to: string | null;
+            /** @description The tariff's revision */
+            revision: string;
+            /** @description When it was checked against the bank's documents */
+            checked_on: string;
+            sources: string[];
+            notes: string;
+            /** @description The fields of CreditCardTerms the tariff sets, named as there */
+            terms: {
+                [key: string]: unknown;
+            };
+        };
+        CreditCardCatalogProduct: {
+            id: string;
+            bank: string;
+            card: string;
+            versions: components["schemas"]["CreditCardCatalogVersion"][];
+        };
+        CreditCardCatalogChange: {
+            /** @description As CreditCardTerms names it; a nested one as fees.cash_percent */
+            field: string;
+            ours: string;
+            theirs: string;
+        };
+        CreditCardCatalogUpdate: {
+            product: string;
+            bank: string;
+            card: string;
+            /** @description The catalog's newer revision */
+            revision: string;
+            sources: string[];
+            changes: components["schemas"]["CreditCardCatalogChange"][];
         };
         CreditCardBankFigures: {
             /** @description The day they were read, YYYY-MM-DD; not later than today */
@@ -2609,6 +2673,8 @@ export interface components {
         };
         CreditCard: {
             terms: components["schemas"]["CreditCardTerms"];
+            /** @description The catalog has a newer revision of the version the terms were taken from, changing these fields: offered, never applied by itself; null otherwise */
+            catalog_update: components["schemas"]["CreditCardCatalogUpdate"] | null;
             status: components["schemas"]["CreditCardStatus"];
             /** @description The status is worked out from the card's journal; false: from its last balance */
             by_journal: boolean;
@@ -4336,6 +4402,27 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    creditCardCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog, by bank and card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditCardCatalogProduct"][];
+                };
+            };
             401: components["responses"]["Error"];
         };
     };

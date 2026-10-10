@@ -227,6 +227,21 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/PayoutCheck" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/credit-cards/catalog:
+    get:
+      tags: [credit-cards]
+      operationId: creditCardCatalog
+      description: >-
+        The catalog of tariffs built into the program (decision Р-32): banks' cards, each with its
+        tariff by the dates of contracts — the fields of the card's terms it sets, the bank's
+        documents and the day it was checked against them.
+      responses:
+        "200":
+          description: The catalog, by bank and card
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/CreditCardCatalogProduct" } }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/credit-card/bank:
     put:
       tags: [credit-cards]
@@ -3089,7 +3104,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback, installment]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback, installment, catalog]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3122,6 +3137,11 @@ components:
           description: "The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family"
         fees: { $ref: "#/components/schemas/CreditCardFees" }
         cashback: { $ref: "#/components/schemas/CreditCardCashback" }
+        catalog:
+          nullable: true
+          description: "The catalog's version the terms were taken from (GET /credit-cards/catalog); null when stated by hand"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardCatalogRef"
         installment:
           allOf:
             - $ref: "#/components/schemas/CreditCardInstallmentPlan"
@@ -3144,6 +3164,49 @@ components:
         monthly_cap_minor: { type: integer, format: int64, minimum: 0, description: "The most a period earns; 0 for no cap" }
         points: { type: boolean, description: "It comes as the bank's points, not money: shown, kept out of the money forecast" }
         credit_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the period's statement it comes in" }
+    CreditCardCatalogRef:
+      type: object
+      required: [product, contracts_from, revision]
+      properties:
+        product: { type: string, description: "The catalog product's id" }
+        contracts_from: { type: string, nullable: true, description: "The version's first contract day; null for a version with no bound" }
+        revision: { type: string, description: "The tariff's revision the terms were taken at, YYYY-MM-DD" }
+    CreditCardCatalogVersion:
+      type: object
+      required: [contracts_from, contracts_to, revision, checked_on, sources, notes, terms]
+      properties:
+        contracts_from: { type: string, nullable: true, description: "For contracts made from this day; null for no bound" }
+        contracts_to: { type: string, nullable: true, description: "…to this one; null for no bound" }
+        revision: { type: string, description: "The tariff's revision" }
+        checked_on: { type: string, description: "When it was checked against the bank's documents" }
+        sources: { type: array, items: { type: string } }
+        notes: { type: string }
+        terms: { type: object, additionalProperties: true, description: "The fields of CreditCardTerms the tariff sets, named as there" }
+    CreditCardCatalogProduct:
+      type: object
+      required: [id, bank, card, versions]
+      properties:
+        id: { type: string }
+        bank: { type: string }
+        card: { type: string }
+        versions: { type: array, items: { $ref: "#/components/schemas/CreditCardCatalogVersion" } }
+    CreditCardCatalogChange:
+      type: object
+      required: [field, ours, theirs]
+      properties:
+        field: { type: string, description: "As CreditCardTerms names it; a nested one as fees.cash_percent" }
+        ours: { type: string }
+        theirs: { type: string }
+    CreditCardCatalogUpdate:
+      type: object
+      required: [product, bank, card, revision, sources, changes]
+      properties:
+        product: { type: string }
+        bank: { type: string }
+        card: { type: string }
+        revision: { type: string, description: "The catalog's newer revision" }
+        sources: { type: array, items: { type: string } }
+        changes: { type: array, items: { $ref: "#/components/schemas/CreditCardCatalogChange" } }
     CreditCardBankFigures:
       type: object
       required: [stated_on, grace, minimum]
@@ -3291,9 +3354,14 @@ components:
         total_minor: { type: integer, format: int64, description: "own_earned + cashback − costs − pending_interest; below zero the card cost more than own money would have" }
     CreditCard:
       type: object
-      required: [terms, status, by_journal, benefit]
+      required: [terms, status, by_journal, benefit, catalog_update]
       properties:
         terms: { $ref: "#/components/schemas/CreditCardTerms" }
+        catalog_update:
+          nullable: true
+          description: "The catalog has a newer revision of the version the terms were taken from, changing these fields: offered, never applied by itself; null otherwise"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardCatalogUpdate"
         status: { $ref: "#/components/schemas/CreditCardStatus" }
         by_journal: { type: boolean, description: "The status is worked out from the card's journal; false: from its last balance" }
         benefit:

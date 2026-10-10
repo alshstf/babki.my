@@ -120,6 +120,9 @@ type Terms struct {
 	// Installment: every purchase of the card in installments when Months
 	// is above 0 — a card of installments («Халва», decision Р-33).
 	Installment Plan
+	// Catalog is the catalog's version the terms were taken from; nil when
+	// they were stated by hand.
+	Catalog *CatalogRef
 }
 
 // Plan is a purchase in installments: Months equal parts, one with each
