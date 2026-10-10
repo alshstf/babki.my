@@ -41,6 +41,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/accounts/{accountId}/credit-card", edit(h.handlePut))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card", edit(h.handleDelete))
 	srv.Mount("PUT /api/v1/accounts/{accountId}/credit-card/installments/{operationId}", edit(h.handlePutInstallment))
+	srv.Mount("PUT /api/v1/accounts/{accountId}/credit-card/bank", edit(h.handlePutBank))
+	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card/bank", edit(h.handleDeleteBank))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card/installments/{operationId}", edit(h.handleDeleteInstallment))
 	srv.Mount("GET /api/v1/credit-cards", view(h.handleList))
 }
@@ -183,6 +185,93 @@ func (h *Handler) handleDeleteInstallment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handlePutBank(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := accountID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.CreditCardBankFigures
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	b, err := bankFromAPI(req)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.svc.SetBankFigures(r.Context(), p.SpaceID, id, b); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	c, err := h.svc.Card(r.Context(), p.SpaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, cardAPI(c))
+}
+
+func (h *Handler) handleDeleteBank(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := accountID(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteBankFigures(r.Context(), p.SpaceID, id); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// bankFromAPI reads what the bank said.
+func bankFromAPI(in apitypes.CreditCardBankFigures) (BankFigures, error) {
+	var b BankFigures
+	var err error
+	if b.StatedOn, err = time.Parse(time.DateOnly, in.StatedOn); err != nil {
+		return BankFigures{}, fmt.Errorf("stated_on must be a date YYYY-MM-DD")
+	}
+	due := func(name string, d nullable.Nullable[apitypes.CreditCardDue]) (*Due, error) {
+		if !d.IsSpecified() || d.IsNull() {
+			return nil, nil
+		}
+		v := d.MustGet()
+		on, err := time.Parse(time.DateOnly, v.On)
+		if err != nil {
+			return nil, fmt.Errorf("%s.on must be a date YYYY-MM-DD", name)
+		}
+		return &Due{On: on, Amount: v.AmountMinor}, nil
+	}
+	if b.Grace, err = due("grace", in.Grace); err != nil {
+		return BankFigures{}, err
+	}
+	if b.Minimum, err = due("minimum", in.Minimum); err != nil {
+		return BankFigures{}, err
+	}
+	return b, nil
+}
+
+func bankAPI(v *BankView) nullable.Nullable[apitypes.CreditCardBankView] {
+	if v == nil {
+		return nullable.NewNullNullable[apitypes.CreditCardBankView]()
+	}
+	one := func(d *BankDue) nullable.Nullable[apitypes.CreditCardBankDue] {
+		if d == nil {
+			return nullable.NewNullNullable[apitypes.CreditCardBankDue]()
+		}
+		out := apitypes.CreditCardBankDue{
+			On: date(d.On), AmountMinor: d.Amount, LeftMinor: d.Left, Agrees: d.Agrees,
+			Ours: nullable.NewNullNullable[apitypes.CreditCardDue](),
+		}
+		if d.Ours != nil {
+			out.Ours = nullable.NewNullableWithValue(apitypes.CreditCardDue{On: date(d.Ours.On), AmountMinor: d.Ours.Amount})
+		}
+		return nullable.NewNullableWithValue(out)
+	}
+	return nullable.NewNullableWithValue(apitypes.CreditCardBankView{StatedOn: date(v.StatedOn), Grace: one(v.Grace), Minimum: one(v.Minimum)})
 }
 
 func planFromAPI(in apitypes.CreditCardInstallmentPlan) (Plan, error) {
@@ -366,6 +455,7 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
 		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty, MinimumOverdueMinor: st.MinimumOverdue,
 		InstallmentsDueMinor: st.InstallmentsDue, Installments: make([]apitypes.CreditCardInstallment, 0, len(st.Installments)),
+		Bank:                  bankAPI(st.Bank),
 		CashbackExpectedMinor: st.CashbackExpected, CashbackOn: nullable.NewNullNullable[string](),
 	}
 	for _, in := range st.Installments {

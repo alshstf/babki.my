@@ -53,7 +53,7 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
   grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0,
   cashback_expected_minor: 0, cashback_on: null, minimum_overdue_minor: 0,
-  installments: [], installments_due_minor: 0, ...over,
+  installments: [], installments_due_minor: 0, bank: null, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
@@ -210,6 +210,39 @@ describe("CreditCardPanel", () => {
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(new URL(put.url).pathname).toBe("/api/v1/accounts/card-1/credit-card/installments/op-tv");
     expect(await put.json()).toEqual({ months: 12, monthly_fee_percent: "0", fee_minor: 0 });
+  });
+
+  it("puts what the bank says over the reckoning, and tells a gap", async () => {
+    answer({ "/credit-card": card({
+      bank: {
+        stated_on: inDays(-2),
+        grace: { on: inDays(5), amount_minor: 52_300_00, left_minor: 52_300_00, ours: { on: inDays(5), amount_minor: 52_300_00 }, agrees: true },
+        minimum: { on: inDays(11), amount_minor: 1_700_00, left_minor: 1_700_00, ours: { on: inDays(11), amount_minor: 1_569_00 }, agrees: false },
+      },
+    }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    expect(norm((await screen.findByTestId("card-minimum")).textContent ?? "")).toBe("1 700,00 ₽");
+    expect(screen.getByText("Обязательный платёж (по банку)")).toBeTruthy();
+    const bank = norm(screen.getByTestId("card-bank").textContent ?? "");
+    expect(bank).toContain("Наш расчёт совпадает.");
+    expect(bank).toContain("Наш расчёт: 1 569,00 ₽");
+    expect(bank).toContain("Напоминания идут по данным банка");
+  });
+
+  it("asks what the bank says", async () => {
+    answer({ "/credit-card": card() });
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Что пишет банк" }));
+    const dialog = await screen.findByTestId("card-bank-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Обязательный платёж, RUB"), { target: { value: "1700" } });
+    fireEvent.change(within(dialog).getByLabelText("Когда посмотрели"), { target: { value: "2026-10-02" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(new URL(put.url).pathname).toBe("/api/v1/accounts/card-1/credit-card/bank");
+    expect(await put.json()).toEqual({
+      stated_on: "2026-10-02", grace: null, minimum: { on: inDays(11), amount_minor: 1_700_00 },
+    });
   });
 
   it("says which part of the minimum is overdue from before", async () => {

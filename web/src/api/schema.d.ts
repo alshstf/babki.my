@@ -142,6 +142,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/credit-card/bank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description States what the bank itself says is due on the card (decision Р-32), over what it said before: the payment that keeps the grace and the minimum, each with its day, as read on stated_on. Until their day they stand over the card's own reckoning — in status.bank and in the reminders. 400 for a figure with no day, a later stated_on, or nothing stated; 404 for a card with no terms. */
+        put: operations["setCardBankFigures"];
+        post?: never;
+        /** @description Forgets what the bank said; the card counts by its own reckoning. */
+        delete: operations["deleteCardBankFigures"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/credit-card/installments/{operationId}": {
         parameters: {
             query?: never;
@@ -2351,6 +2369,36 @@ export interface components {
             /** @description Days after the period's statement it comes in */
             credit_days: number;
         };
+        CreditCardBankFigures: {
+            /** @description The day they were read, YYYY-MM-DD; not later than today */
+            stated_on: string;
+            /** @description The payment the bank says keeps the grace, and its day */
+            grace: components["schemas"]["CreditCardDue"] | null;
+            /** @description The minimum the bank says is due, and its day */
+            minimum: components["schemas"]["CreditCardDue"] | null;
+        };
+        CreditCardBankDue: {
+            on: string;
+            /**
+             * Format: int64
+             * @description As the bank said
+             */
+            amount_minor: number;
+            /**
+             * Format: int64
+             * @description Less the card's payments since stated_on
+             */
+            left_minor: number;
+            /** @description What the card's own reckoning says for the same; null when it says nothing */
+            ours: components["schemas"]["CreditCardDue"] | null;
+            /** @description Same day, and the sums within a rouble or a percent */
+            agrees: boolean;
+        };
+        CreditCardBankView: {
+            stated_on: string;
+            grace: components["schemas"]["CreditCardBankDue"] | null;
+            minimum: components["schemas"]["CreditCardBankDue"] | null;
+        };
         CreditCardInstallmentPlan: {
             /** @description Equal parts, one with each statement after the purchase; 1 to 60 for a purchase, 0 on the card for none */
             months: number;
@@ -2517,6 +2565,8 @@ export interface components {
              * @description The installments' parts shown and not yet paid; in minimum_minor
              */
             installments_due_minor: number;
+            /** @description What the bank itself says is due, while it is ahead (PUT .../credit-card/bank); null when nothing it said is */
+            bank: components["schemas"]["CreditCardBankView"] | null;
             /**
              * Format: int64
              * @description The cashback this period's purchases so far bring by the card's rules, capped
@@ -4287,6 +4337,59 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    setCardBankFigures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditCardBankFigures"];
+            };
+        };
+        responses: {
+            /** @description The card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditCard"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteCardBankFigures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     setCardInstallment: {

@@ -227,6 +227,44 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/PayoutCheck" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/credit-card/bank:
+    put:
+      tags: [credit-cards]
+      operationId: setCardBankFigures
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        States what the bank itself says is due on the card (decision Р-32), over what it said before:
+        the payment that keeps the grace and the minimum, each with its day, as read on stated_on.
+        Until their day they stand over the card's own reckoning — in status.bank and in the
+        reminders. 400 for a figure with no day, a later stated_on, or nothing stated; 404 for a card
+        with no terms.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreditCardBankFigures" }
+      responses:
+        "200":
+          description: The card
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditCard" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [credit-cards]
+      operationId: deleteCardBankFigures
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: Forgets what the bank said; the card counts by its own reckoning.
+      responses:
+        "204": { description: Forgotten }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/credit-card/installments/{operationId}:
     put:
       tags: [credit-cards]
@@ -3106,6 +3144,47 @@ components:
         monthly_cap_minor: { type: integer, format: int64, minimum: 0, description: "The most a period earns; 0 for no cap" }
         points: { type: boolean, description: "It comes as the bank's points, not money: shown, kept out of the money forecast" }
         credit_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the period's statement it comes in" }
+    CreditCardBankFigures:
+      type: object
+      required: [stated_on, grace, minimum]
+      properties:
+        stated_on: { type: string, description: "The day they were read, YYYY-MM-DD; not later than today" }
+        grace:
+          nullable: true
+          description: "The payment the bank says keeps the grace, and its day"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardDue"
+        minimum:
+          nullable: true
+          description: "The minimum the bank says is due, and its day"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardDue"
+    CreditCardBankDue:
+      type: object
+      required: [on, amount_minor, left_minor, ours, agrees]
+      properties:
+        on: { type: string }
+        amount_minor: { type: integer, format: int64, description: "As the bank said" }
+        left_minor: { type: integer, format: int64, description: "Less the card's payments since stated_on" }
+        ours:
+          nullable: true
+          description: "What the card's own reckoning says for the same; null when it says nothing"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardDue"
+        agrees: { type: boolean, description: "Same day, and the sums within a rouble or a percent" }
+    CreditCardBankView:
+      type: object
+      required: [stated_on, grace, minimum]
+      properties:
+        stated_on: { type: string }
+        grace:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CreditCardBankDue"
+        minimum:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CreditCardBankDue"
     CreditCardInstallmentPlan:
       type: object
       required: [months, monthly_fee_percent, fee_minor]
@@ -3169,7 +3248,7 @@ components:
         early: { type: boolean, description: "The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)" }
     CreditCardStatus:
       type: object
-      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, minimum_overdue_minor, installments, installments_due_minor, cashback_expected_minor, cashback_on]
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, minimum_overdue_minor, installments, installments_due_minor, bank, cashback_expected_minor, cashback_on]
       properties:
         debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
         available_minor: { type: integer, format: int64, description: "What is left of the limit" }
@@ -3191,6 +3270,11 @@ components:
         minimum_overdue_minor: { type: integer, format: int64, description: "The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once" }
         installments: { type: array, items: { $ref: "#/components/schemas/CreditCardInstallment" }, description: "The purchases in installments still being shown, oldest first" }
         installments_due_minor: { type: integer, format: int64, description: "The installments' parts shown and not yet paid; in minimum_minor" }
+        bank:
+          nullable: true
+          description: "What the bank itself says is due, while it is ahead (PUT .../credit-card/bank); null when nothing it said is"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardBankView"
         cashback_expected_minor: { type: integer, format: int64, description: "The cashback this period's purchases so far bring by the card's rules, capped" }
         cashback_on: { type: string, nullable: true, description: "The day it comes; null when the card names no cashback rules" }
     CreditCardBenefit:

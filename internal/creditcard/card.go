@@ -428,6 +428,9 @@ type Status struct {
 	// InstallmentsDue the parts shown and not yet paid — in Minimum.
 	Installments    []Installment
 	InstallmentsDue int64
+	// Bank is what the bank itself says is due, while it is ahead (Work's
+	// bank figures); nil when nothing it said is.
+	Bank *BankView
 	// CashbackExpected is the cashback this period's purchases so far bring
 	// by the card's rules, capped; it comes on CashbackOn (zero time when
 	// the card names no rules).

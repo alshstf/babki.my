@@ -334,12 +334,18 @@ func (s *Service) today() time.Time {
 // counted by its balance).
 func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, t Terms, k Kinds) (Card, []operation.Operation, error) {
 	today := s.today()
+	bank, err := s.BankFigures(ctx, spaceID, a.ID)
+	if err != nil {
+		return Card{}, nil, err
+	}
 	if !account.CountedByJournal(a.Account) {
 		var balance int64
 		if a.Balance != nil {
 			balance = a.Balance.AmountMinor
 		}
-		return Card{Account: a, Terms: t, Status: ByBalance(t, balance, today)}, nil, nil
+		st := ByBalance(t, balance, today)
+		st.WithBank(bank, nil, a.Currency, today)
+		return Card{Account: a, Terms: t, Status: st}, nil, nil
 	}
 	ops, err := s.journal.ListForEngine(ctx, spaceID, a.ID)
 	if err != nil {
@@ -351,7 +357,75 @@ func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBal
 	if k.Installments, err = s.Installments(ctx, spaceID, a.ID); err != nil {
 		return Card{}, nil, err
 	}
-	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today, k), ByJournal: true}, ops, nil
+	st := Work(t, ops, a.Currency, today, k)
+	st.WithBank(bank, ops, a.Currency, today)
+	return Card{Account: a, Terms: t, Status: st, ByJournal: true}, ops, nil
+}
+
+// BankFigures are what the bank last said is due on the card; nil when
+// nothing is stated.
+func (s *Service) BankFigures(ctx context.Context, spaceID, accountID uuid.UUID) (*BankFigures, error) {
+	var b BankFigures
+	var grace, minimum *int64
+	var graceOn, minimumOn *time.Time
+	err := s.db.QueryRow(ctx, `SELECT stated_on, grace_minor, grace_on, minimum_minor, minimum_on
+		FROM card_bank_figures WHERE space_id = $1 AND account_id = $2`, spaceID, accountID).
+		Scan(&b.StatedOn, &grace, &graceOn, &minimum, &minimumOn)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("credit card: bank figures: %w", err)
+	}
+	if grace != nil && graceOn != nil {
+		b.Grace = &Due{On: *graceOn, Amount: *grace}
+	}
+	if minimum != nil && minimumOn != nil {
+		b.Minimum = &Due{On: *minimumOn, Amount: *minimum}
+	}
+	return &b, nil
+}
+
+// SetBankFigures states what the bank says is due on the card, over what
+// it said before.
+func (s *Service) SetBankFigures(ctx context.Context, spaceID, accountID uuid.UUID, b BankFigures) error {
+	if err := b.Validate(s.today()); err != nil {
+		return err
+	}
+	if _, err := s.Terms(ctx, spaceID, accountID); err != nil {
+		return err
+	}
+	var grace, minimum *int64
+	var graceOn, minimumOn *time.Time
+	if b.Grace != nil {
+		grace, graceOn = &b.Grace.Amount, &b.Grace.On
+	}
+	if b.Minimum != nil {
+		minimum, minimumOn = &b.Minimum.Amount, &b.Minimum.On
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO card_bank_figures (account_id, space_id, stated_on, grace_minor, grace_on, minimum_minor, minimum_on)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (account_id) DO UPDATE SET stated_on = EXCLUDED.stated_on, grace_minor = EXCLUDED.grace_minor,
+			grace_on = EXCLUDED.grace_on, minimum_minor = EXCLUDED.minimum_minor, minimum_on = EXCLUDED.minimum_on,
+			updated_at = now()`,
+		accountID, spaceID, b.StatedOn, grace, graceOn, minimum, minimumOn)
+	if err != nil {
+		return fmt.Errorf("credit card: set bank figures: %w", err)
+	}
+	return nil
+}
+
+// DeleteBankFigures forgets what the bank said.
+func (s *Service) DeleteBankFigures(ctx context.Context, spaceID, accountID uuid.UUID) error {
+	ct, err := s.db.Exec(ctx, `DELETE FROM card_bank_figures WHERE space_id = $1 AND account_id = $2`, spaceID, accountID)
+	if err != nil {
+		return fmt.Errorf("credit card: delete bank figures: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("credit card: bank figures: %w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 // cashOut is the card's rows that took cash out: money moved to one of the

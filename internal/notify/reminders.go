@@ -57,10 +57,22 @@ func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 			add("grace-off:"+day(st.GraceOffSince), fmt.Sprintf("Льгота снята со всего долга с %s: проценты идут и на покупки, сделанные потом. Чтобы вернуть её, погасите %s.",
 				short(st.GraceOffSince), amount(st.ToRestore, cur)))
 		}
+		// What the bank itself said is due stands over the card's reckoning
+		// until its day.
+		grace := st.Grace
+		minimum, minimumOn := st.Minimum, st.MinimumOn
+		if b := st.Bank; b != nil {
+			if b.Grace != nil {
+				grace = []creditcard.Due{{On: b.Grace.On, Amount: b.Grace.Left}}
+			}
+			if b.Minimum != nil {
+				minimum, minimumOn = b.Minimum.Left, b.Minimum.On
+			}
+		}
 		var graceDay time.Time
 		var graceSum int64
-		if len(st.Grace) > 0 {
-			g := st.Grace[0]
+		if len(grace) > 0 && grace[0].Amount > 0 {
+			g := grace[0]
 			graceDay, graceSum = g.On, g.Amount
 			switch d := daysBetween(today, g.On); {
 			case d == 0:
@@ -69,13 +81,13 @@ func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 				add("grace:"+day(g.On)+":soon", fmt.Sprintf("%s до %s, чтобы не платить проценты.", amount(g.Amount, cur), short(g.On)))
 			}
 		}
-		coveredByGrace := graceDay.Equal(st.MinimumOn) && graceSum >= st.Minimum
-		if st.Minimum > 0 && !st.MinimumMissed && !coveredByGrace {
-			switch d := daysBetween(today, st.MinimumOn); {
+		coveredByGrace := graceDay.Equal(minimumOn) && graceSum >= minimum
+		if minimum > 0 && !st.MinimumMissed && !coveredByGrace {
+			switch d := daysBetween(today, minimumOn); {
 			case d == 0:
-				add("min:"+day(st.MinimumOn)+":today", fmt.Sprintf("Сегодня последний день обязательного платежа: %s.", amount(st.Minimum, cur)))
+				add("min:"+day(minimumOn)+":today", fmt.Sprintf("Сегодня последний день обязательного платежа: %s.", amount(minimum, cur)))
 			case d > 0 && d <= soonDays:
-				add("min:"+day(st.MinimumOn)+":soon", fmt.Sprintf("Обязательный платёж %s до %s.", amount(st.Minimum, cur), short(st.MinimumOn)))
+				add("min:"+day(minimumOn)+":soon", fmt.Sprintf("Обязательный платёж %s до %s.", amount(minimum, cur), short(minimumOn)))
 			}
 		}
 	}

@@ -206,6 +206,23 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		t.Errorf("take out of installments = %d", r.StatusCode)
 	}
 
+	// What the bank says: stated, shown against the reckoning, forgotten.
+	ahead := time.Now().UTC().AddDate(0, 0, 10).Format(time.DateOnly)
+	if r := apitest.Do(t, c, "PUT", path+"/bank", fmt.Sprintf(`{"stated_on":%q,"grace":null,"minimum":null}`, today)); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("bank figures with nothing said = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path+"/bank", fmt.Sprintf(`{"stated_on":%q,"grace":null,"minimum":{"on":%q,"amount_minor":150000}}`, today, ahead))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bank figures = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if b, err := got.Status.Bank.Get(); err != nil || !b.Grace.IsNull() || b.Minimum.MustGet().AmountMinor != 150_000 || b.Minimum.MustGet().On != ahead {
+		t.Errorf("bank = %+v (%v)", b, err)
+	}
+	if r := apitest.Do(t, c, "DELETE", path+"/bank", ""); r.StatusCode != http.StatusNoContent {
+		t.Errorf("forget bank figures = %d", r.StatusCode)
+	}
+
 	if r := apitest.Do(t, c, "DELETE", path, ""); r.StatusCode != http.StatusNoContent {
 		t.Errorf("delete = %d", r.StatusCode)
 	}
