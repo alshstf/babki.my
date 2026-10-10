@@ -8,7 +8,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { AccountWithBalance } from "@/api/accounts";
-import { useCreditCard, useSetCreditCard, type CreditCard, type CreditCardTerms } from "@/api/credit-cards";
+import {
+  useCreditCard,
+  useDeleteInstallment,
+  useSetCreditCard,
+  useSetInstallment,
+  type CreditCard,
+  type CreditCardTerms,
+} from "@/api/credit-cards";
+import { useOperations } from "@/api/operations";
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { SOON_DAYS, daysUntil } from "@/lib/card-due";
@@ -152,6 +160,10 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
+      {data.by_journal && (st.installments.length > 0 || canEdit) && (
+        <InstallmentsBlock account={account} card={data} canEdit={canEdit} />
+      )}
+
       {data.benefit && <BenefitBlock benefit={data.benefit} currency={c} ownRate={data.terms.own_rate} />}
 
       <div className="text-xs text-muted-foreground">
@@ -180,6 +192,138 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       )}
       {editing && <TermsDialog account={account} card={data} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+// InstallmentsBlock is the card's purchases in installments (decision Р-33):
+// what is left of each and its next part, the parts due now, and a way to put
+// a purchase in installments.
+function InstallmentsBlock({ account, card, canEdit }: { account: AccountWithBalance; card: CreditCard; canEdit: boolean }) {
+  const { t } = useTranslation();
+  const remove = useDeleteInstallment(account.id);
+  const [adding, setAdding] = useState(false);
+  const st = card.status;
+  const c = account.currency;
+  return (
+    <div className="grid gap-1 text-sm" data-testid="card-installments">
+      {st.installments.length > 0 && <div className="font-medium">{t("card.installmentsTitle")}</div>}
+      {st.installments.map((i) => (
+        <div key={i.operation_id} className="flex flex-wrap items-baseline justify-between gap-2" data-testid="card-installment">
+          <span>
+            {t("card.installmentLine", {
+              date: formatDate(i.on),
+              what: i.note || t("card.installmentPurchase"),
+              amount: formatMinor(i.amount_minor, c),
+              months: i.plan.months,
+              left: formatMinor(i.left_minor, c),
+              next: formatMinor(i.next_minor, c),
+            })}
+          </span>
+          {canEdit && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label={t("card.installmentRemove")}
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(i.operation_id)}
+            >
+              ×
+            </Button>
+          )}
+        </div>
+      ))}
+      {st.installments_due_minor > 0 && (
+        <div className="text-muted-foreground">{t("card.installmentsDue", { amount: formatMinor(st.installments_due_minor, c) })}</div>
+      )}
+      {canEdit && (
+        <Button type="button" size="sm" variant="outline" className="justify-self-start" onClick={() => setAdding(true)}>
+          {t("card.installmentAdd")}
+        </Button>
+      )}
+      {adding && <InstallmentDialog account={account} card={card} onClose={() => setAdding(false)} />}
+    </div>
+  );
+}
+
+function InstallmentDialog({ account, card, onClose }: { account: AccountWithBalance; card: CreditCard; onClose: () => void }) {
+  const { t } = useTranslation();
+  const save = useSetInstallment(account.id);
+  // The purchases of the last four months, worked out once.
+  const [since] = useState(() => new Date(Date.now() - 120 * 86_400_000).toISOString().slice(0, 10));
+  const ops = useOperations(account.id, 200, { type: "withdrawal", from: since });
+  const taken = new Set(card.status.installments.map((i) => i.operation_id));
+  const purchases = (ops.data?.pages[0]?.operations ?? []).filter(
+    (o) => o.amount_minor < 0 && !o.transfer_group_id && !taken.has(o.id),
+  );
+  const [operationId, setOperationId] = useState("");
+  const [months, setMonths] = useState(String(card.terms.installment.months || 6));
+  const [feePercent, setFeePercent] = useState(card.terms.installment.monthly_fee_percent || "0");
+  const [fee, setFee] = useState(minorToInput(card.terms.installment.fee_minor));
+  const feeMinor = parseToMinor(fee.trim() === "" ? "0" : fee);
+  const valid =
+    operationId !== "" && /^\d+$/.test(months) && Number(months) >= 1 && Number(months) <= 60 &&
+    !Number.isNaN(Number(feePercent.replace(",", "."))) && feeMinor !== null && feeMinor >= 0;
+  const submit = () => {
+    if (!valid || feeMinor === null) return;
+    save.mutate(
+      { operationId, plan: { months: Number(months), monthly_fee_percent: String(Number(feePercent.replace(",", "."))), fee_minor: feeMinor } },
+      { onSuccess: onClose },
+    );
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md" data-testid="card-installment-dialog">
+        <DialogHeader>
+          <DialogTitle>{t("card.installmentAdd")}</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-1">
+            <Label>{t("card.installmentWhich")}</Label>
+            <Select value={operationId} onValueChange={setOperationId}>
+              <SelectTrigger aria-label={t("card.installmentWhich")}>
+                <SelectValue placeholder={purchases.length ? t("card.installmentPick") : t("card.installmentNone")} />
+              </SelectTrigger>
+              <SelectContent className="max-h-80">
+                {purchases.map((o) => (
+                  <SelectItem key={o.id} value={o.id}>
+                    {formatDate(o.occurred_on)} · {formatMinor(-o.amount_minor, account.currency)}
+                    {o.note || o.counterparty ? ` · ${o.note || o.counterparty}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="inst-months">{t("card.installmentMonths")}</Label>
+            <Input id="inst-months" inputMode="numeric" value={months} onChange={(e) => setMonths(e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-1">
+              <Label htmlFor="inst-fee-percent">{t("card.installmentFeePercent")}</Label>
+              <Input id="inst-fee-percent" inputMode="decimal" value={feePercent} onChange={(e) => setFeePercent(e.target.value)} />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="inst-fee">{t("card.installmentFee", { currency: account.currency })}</Label>
+              <Input id="inst-fee" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} />
+            </div>
+          </div>
+          {save.isError && (
+            <Alert variant="destructive">
+              <AlertDescription>{t("card.failed")}</AlertDescription>
+            </Alert>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!valid || save.isPending} onClick={submit}>
+            {t("common.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -256,6 +400,12 @@ const PRESETS: Record<string, Partial<Form>> = {
   statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT },
   sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3", ...LENIENT, chargesInFull: true },
   year: { kind: "long", graceDays: "365", paymentDays: "20", minPercent: "3", ...LENIENT },
+  // «Халва» (decision Р-33): every purchase in installments, 99 ₽ with the
+  // first part; no interest; the payment is the parts.
+  halva: {
+    kind: "statement", paymentDays: "15", statementDay: "1", minPercent: "0", minFloor: "0", rate: "0", ...LENIENT,
+    installMonths: "3", installFeePercent: "0", installFee: "99",
+  },
   // ВТБ «Карта возможностей» (#457): one grace of 110 days from the 1st of
   // the first purchase's month, renewed once the debt is repaid; the minimum
   // by the 20th.
@@ -304,6 +454,9 @@ interface Form {
   cashbackDays: string;
   cashbackPoints: boolean;
   cashbackCategories: { id: string; percent: string }[];
+  installMonths: string;
+  installFeePercent: string;
+  installFee: string;
 }
 
 function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
@@ -342,6 +495,9 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     cashbackDays: terms ? String(terms.cashback.credit_days) : "0",
     cashbackPoints: terms?.cashback.points ?? false,
     cashbackCategories: (terms?.cashback.categories ?? []).map((c) => ({ id: c.category_id, percent: c.percent })),
+    installMonths: terms ? String(terms.installment.months) : "0",
+    installFeePercent: terms?.installment.monthly_fee_percent ?? "0",
+    installFee: terms ? minorToInput(terms.installment.fee_minor) : "0",
   });
   const categories = useCategories();
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
@@ -372,7 +528,8 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
     decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000)) &&
-    feesValid && cashbackValid;
+    feesValid && cashbackValid && int(f.installMonths || "0", 0, 60) && decimalOk(f.installFeePercent || "0", 100) &&
+    money(f.installFee) !== null;
 
   const submit = () => {
     if (!valid || limit === null || floor === null) return;
@@ -401,6 +558,11 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           transfer_percent: String(num(f.transferPercent || "0")),
           transfer_fixed_minor: fees.transfer_fixed_minor ?? 0,
           penalty_daily_percent: String(num(f.penaltyDaily || "0")),
+        },
+        installment: {
+          months: Number(f.installMonths || "0"),
+          monthly_fee_percent: String(num(f.installFeePercent || "0")),
+          fee_minor: money(f.installFee) ?? 0,
         },
         cashback: {
           base_percent: String(num(f.cashbackBase || "0")),
@@ -449,6 +611,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     year: t("card.presets.year"),
     gpb180: t("card.presets.gpb180"),
     vtb110: t("card.presets.vtb110"),
+    halva: t("card.presets.halva"),
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -569,6 +732,14 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
               {field("transferFixed", t("card.feeFixedTransfer", { currency: account.currency }))}
             </div>
             {field("penaltyDaily", t("card.penaltyDaily"))}
+          </fieldset>
+          <fieldset className="grid gap-2 rounded-md border p-3" data-testid="card-installment-rules">
+            <legend className="px-1 text-sm font-medium">{t("card.installmentTitle")}</legend>
+            {field("installMonths", t("card.installAll"), t("card.installAllHint"))}
+            <div className="grid grid-cols-2 gap-2">
+              {field("installFeePercent", t("card.installmentFeePercent"))}
+              {field("installFee", t("card.installmentFee", { currency: account.currency }))}
+            </div>
           </fieldset>
           <fieldset className="grid gap-2 rounded-md border p-3" data-testid="card-cashback-rules">
             <legend className="px-1 text-sm font-medium">{t("card.cashbackTitle")}</legend>

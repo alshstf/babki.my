@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/creditcard"
@@ -176,6 +178,32 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		cb.Categories[0].CategoryId.String() != spending || cb.MonthlyCapMinor != 500_000 || !cb.Points || cb.CreditDays != 3 ||
 		got.Status.CashbackOn.IsNull() {
 		t.Errorf("cashback = %+v, status on %v", cb, got.Status.CashbackOn)
+	}
+
+	// A purchase in installments: three parts; not one of the card's rows
+	// is a 404, and taken out it is a purchase again.
+	var phone struct {
+		ID string `json:"id"`
+	}
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/operations",
+		fmt.Sprintf(`{"account_id":%q,"type":"withdrawal","occurred_on":%q,"amount_minor":-1200000,"currency":"RUB"}`, card, yesterday)), &phone)
+	plan := `{"months":3,"monthly_fee_percent":"4","fee_minor":0}`
+	if r := apitest.Do(t, c, "PUT", path+"/installments/"+uuid.NewString(), plan); r.StatusCode != http.StatusNotFound {
+		t.Errorf("installment of no row = %d, want 404", r.StatusCode)
+	}
+	if r := apitest.Do(t, c, "PUT", path+"/installments/"+phone.ID, `{"months":0,"monthly_fee_percent":"0","fee_minor":0}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("installment of 0 months = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path+"/installments/"+phone.ID, plan)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("installment = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if len(got.Status.Installments) != 1 || got.Status.Installments[0].AmountMinor != 1_200_000 || got.Status.Installments[0].Plan.Months != 3 {
+		t.Errorf("installments = %+v", got.Status.Installments)
+	}
+	if r := apitest.Do(t, c, "DELETE", path+"/installments/"+phone.ID, ""); r.StatusCode != http.StatusNoContent {
+		t.Errorf("take out of installments = %d", r.StatusCode)
 	}
 
 	if r := apitest.Do(t, c, "DELETE", path, ""); r.StatusCode != http.StatusNoContent {

@@ -142,6 +142,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/credit-card/installments/{operationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Puts a purchase on the card in installments, or restates its plan (decision Р-33): months equal parts, one with each statement after it, its fees on top; the parts go in the minimum and the purchase is kept apart from the grace. The purchase is a spending of the card's own journal (400 otherwise); 404 for a card with no terms or a row not on it. */
+        put: operations["setCardInstallment"];
+        post?: never;
+        /** @description Takes the purchase out of installments. */
+        delete: operations["deleteCardInstallment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/credit-card": {
         parameters: {
             query?: never;
@@ -1955,6 +1973,8 @@ export interface components {
             withheld_stated: components["schemas"]["ExportWithheldStated"][];
             /** @description A loan's prepayments (POST /accounts/{accountId}/loan/prepayments), oldest first; empty on every other account */
             loan_prepayments: components["schemas"]["LoanPrepayment"][];
+            /** @description A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account */
+            credit_card_installments: components["schemas"]["ExportCardInstallment"][];
             /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
             loan: components["schemas"]["LoanTerms"] | null;
             /** @description A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account */
@@ -2300,6 +2320,8 @@ export interface components {
             transfer_categories: string[];
             fees: components["schemas"]["CreditCardFees"];
             cashback: components["schemas"]["CreditCardCashback"];
+            /** @description Every purchase of the card in installments when months is above 0 — a card of installments («Халва»); 0 months otherwise */
+            installment: components["schemas"]["CreditCardInstallmentPlan"];
             /** @description The minimum payment, percent of the debt the statement shows (decimal) */
             min_percent: string;
             /**
@@ -2326,6 +2348,47 @@ export interface components {
             points: boolean;
             /** @description Days after the period's statement it comes in */
             credit_days: number;
+        };
+        CreditCardInstallmentPlan: {
+            /** @description Equal parts, one with each statement after the purchase; 1 to 60 for a purchase, 0 on the card for none */
+            months: number;
+            /** @description Percent of the sum a month on top (ВТБ: 4), decimal, 0 to 99.999 */
+            monthly_fee_percent: string;
+            /**
+             * Format: int64
+             * @description Once, with the first part («Халва»: 99 ₽)
+             */
+            fee_minor: number;
+        };
+        ExportCardInstallment: {
+            /** Format: uuid */
+            operation_id: string;
+            plan: components["schemas"]["CreditCardInstallmentPlan"];
+        };
+        CreditCardInstallment: {
+            /** Format: uuid */
+            operation_id: string;
+            /** @description The purchase's day */
+            on: string;
+            /**
+             * Format: int64
+             * @description The sum in installments
+             */
+            amount_minor: number;
+            plan: components["schemas"]["CreditCardInstallmentPlan"];
+            /** @description The parts the statements have shown */
+            billed: number;
+            /**
+             * Format: int64
+             * @description Of the sum, what is still to be shown
+             */
+            left_minor: number;
+            /**
+             * Format: int64
+             * @description The next part with its fees
+             */
+            next_minor: number;
+            note: string;
         };
         CreditCardCashbackCategory: {
             /**
@@ -2445,6 +2508,13 @@ export interface components {
              * @description The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once
              */
             minimum_overdue_minor: number;
+            /** @description The purchases in installments still being shown, oldest first */
+            installments: components["schemas"]["CreditCardInstallment"][];
+            /**
+             * Format: int64
+             * @description The installments' parts shown and not yet paid; in minimum_minor
+             */
+            installments_due_minor: number;
             /**
              * Format: int64
              * @description The cashback this period's purchases so far bring by the card's rules, capped
@@ -4215,6 +4285,61 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    setCardInstallment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditCardInstallmentPlan"];
+            };
+        };
+        responses: {
+            /** @description The card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditCard"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteCardInstallment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Taken out */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getCreditCard: {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,7 +164,7 @@ const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, 
 	grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, monthly_fee_minor, cash_free_minor,
 	cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor, penalty_daily_percent,
 	cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points, cashback_credit_days,
-	grace_run_from, pay_day, min_round_up_minor`
+	grace_run_from, pay_day, min_round_up_minor, installment_months, installment_fee_percent, installment_fee_minor`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
@@ -173,7 +174,7 @@ func scan(row pgx.Row) (Terms, error) {
 		&t.GraceAllLost, &t.PayByPeriodEnd, &t.ChargesInFull, &t.TransferCategories, &t.Fees.Monthly, &t.Fees.CashFree,
 		&t.Fees.CashPercent, &t.Fees.CashFixed, &t.Fees.TransferPercent, &t.Fees.TransferFixed, &t.Fees.PenaltyDaily,
 		&t.Cashback.BasePercent, &t.Cashback.Categories, &t.Cashback.MonthlyCap, &t.Cashback.Points, &t.Cashback.CreditDays,
-		&t.RunFrom, &t.PayDay, &t.MinRoundUp)
+		&t.RunFrom, &t.PayDay, &t.MinRoundUp, &t.Installment.Months, &t.Installment.MonthlyFeePercent, &t.Installment.Fee)
 	if own.Valid {
 		t.OwnRate = &own.Decimal
 	}
@@ -230,9 +231,10 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, monthly_fee_minor,
 			cash_free_minor, cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor,
 			penalty_daily_percent, cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points,
-			cashback_credit_days, grace_run_from, pay_day, min_round_up_minor)
+			cashback_credit_days, grace_run_from, pay_day, min_round_up_minor, installment_months,
+			installment_fee_percent, installment_fee_minor)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
+			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
@@ -249,13 +251,15 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			cashback_base_percent = EXCLUDED.cashback_base_percent, cashback_categories = EXCLUDED.cashback_categories,
 			cashback_cap_minor = EXCLUDED.cashback_cap_minor, cashback_points = EXCLUDED.cashback_points,
 			cashback_credit_days = EXCLUDED.cashback_credit_days, grace_run_from = EXCLUDED.grace_run_from,
-			pay_day = EXCLUDED.pay_day, min_round_up_minor = EXCLUDED.min_round_up_minor, updated_at = now()`,
+			pay_day = EXCLUDED.pay_day, min_round_up_minor = EXCLUDED.min_round_up_minor,
+			installment_months = EXCLUDED.installment_months, installment_fee_percent = EXCLUDED.installment_fee_percent,
+			installment_fee_minor = EXCLUDED.installment_fee_minor, updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
 		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
 		t.GraceAllLost, t.PayByPeriodEnd, t.ChargesInFull, t.TransferCategories, t.Fees.Monthly, t.Fees.CashFree,
 		t.Fees.CashPercent, t.Fees.CashFixed, t.Fees.TransferPercent, t.Fees.TransferFixed, t.Fees.PenaltyDaily,
 		t.Cashback.BasePercent, t.Cashback.Categories, t.Cashback.MonthlyCap, t.Cashback.Points, t.Cashback.CreditDays,
-		t.RunFrom, t.PayDay, t.MinRoundUp)
+		t.RunFrom, t.PayDay, t.MinRoundUp, t.Installment.Months, t.Installment.MonthlyFeePercent, t.Installment.Fee)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}
@@ -340,6 +344,9 @@ func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBal
 	if k.Cash, err = s.cashOut(ctx, spaceID, ops); err != nil {
 		return Card{}, nil, err
 	}
+	if k.Installments, err = s.Installments(ctx, spaceID, a.ID); err != nil {
+		return Card{}, nil, err
+	}
 	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today, k), ByJournal: true}, ops, nil
 }
 
@@ -376,6 +383,74 @@ func (s *Service) cashOut(ctx context.Context, spaceID uuid.UUID, ops []operatio
 		}
 	}
 	return out, nil
+}
+
+// Installments are the card's purchases in installments by their row.
+func (s *Service) Installments(ctx context.Context, spaceID, accountID uuid.UUID) (map[uuid.UUID]Plan, error) {
+	rows, err := s.db.Query(ctx, `SELECT operation_id, months, monthly_fee_percent, fee_minor FROM card_installments
+		WHERE space_id = $1 AND account_id = $2`, spaceID, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("credit card: installments: %w", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]Plan{}
+	for rows.Next() {
+		var id uuid.UUID
+		var p Plan
+		if err := rows.Scan(&id, &p.Months, &p.MonthlyFeePercent, &p.Fee); err != nil {
+			return nil, fmt.Errorf("credit card: installments: %w", err)
+		}
+		out[id] = p
+	}
+	return out, rows.Err()
+}
+
+// SetInstallment puts a purchase on the card in installments, or restates
+// its plan. The purchase is a spending of the card's own journal.
+func (s *Service) SetInstallment(ctx context.Context, spaceID, accountID, operationID uuid.UUID, p Plan) error {
+	if p.Months < 1 {
+		return fmt.Errorf("%w: installments are 1 to 60 months", family.ErrValidation)
+	}
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if _, err := s.Terms(ctx, spaceID, accountID); err != nil {
+		return err
+	}
+	ops, err := s.journal.ListForEngine(ctx, spaceID, accountID)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(ops, func(o operation.Operation) bool { return o.ID == operationID })
+	if i < 0 {
+		return fmt.Errorf("credit card: installment: %w", pgx.ErrNoRows)
+	}
+	if op := ops[i]; op.Type != operation.TypeWithdrawal || op.TransferGroupID != nil || op.AmountMinor >= 0 {
+		return fmt.Errorf("%w: only a purchase on the card goes in installments", family.ErrValidation)
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO card_installments (operation_id, account_id, space_id, months, monthly_fee_percent, fee_minor)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (operation_id) DO UPDATE SET months = EXCLUDED.months,
+			monthly_fee_percent = EXCLUDED.monthly_fee_percent, fee_minor = EXCLUDED.fee_minor`,
+		operationID, accountID, spaceID, p.Months, p.MonthlyFeePercent, p.Fee)
+	if err != nil {
+		return fmt.Errorf("credit card: set installment: %w", err)
+	}
+	return nil
+}
+
+// DeleteInstallment takes a purchase out of installments.
+func (s *Service) DeleteInstallment(ctx context.Context, spaceID, accountID, operationID uuid.UUID) error {
+	ct, err := s.db.Exec(ctx, `DELETE FROM card_installments WHERE space_id = $1 AND account_id = $2 AND operation_id = $3`,
+		spaceID, accountID, operationID)
+	if err != nil {
+		return fmt.Errorf("credit card: delete installment: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("credit card: installment: %w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 // AllTerms is every card's terms in the space.

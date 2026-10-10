@@ -113,6 +113,58 @@ type Terms struct {
 	TransferCategories []uuid.UUID
 	Fees               Fees
 	Cashback           Cashback
+	// Installment: every purchase of the card in installments when Months
+	// is above 0 — a card of installments («Халва», decision Р-33).
+	Installment Plan
+}
+
+// Plan is a purchase in installments: Months equal parts, one with each
+// statement after it, the last taking what rounding left; MonthlyFeePercent
+// of its sum a month on top (ВТБ), and Fee once with the first part
+// («Халва»).
+type Plan struct {
+	Months            int
+	MonthlyFeePercent decimal.Decimal
+	Fee               int64
+}
+
+// Validate refuses a plan no parts can be worked out from.
+func (p Plan) Validate() error {
+	switch {
+	case p.Months < 0 || p.Months > 60:
+		return fmt.Errorf("%w: installments are 1 to 60 months", family.ErrValidation)
+	case p.MonthlyFeePercent.IsNegative() || p.MonthlyFeePercent.GreaterThanOrEqual(hundred) || p.Fee < 0:
+		return fmt.Errorf("%w: an installment's fee is 0 to 99.999 percent a month, and not below zero", family.ErrValidation)
+	}
+	return nil
+}
+
+// Installment is where a purchase in installments stands: the parts the
+// statements have shown, what of its sum is still to be shown, and the next
+// part with its fee.
+type Installment struct {
+	OperationID uuid.UUID
+	On          time.Time
+	Amount      int64
+	Plan        Plan
+	Billed      int
+	Left        int64
+	Next        int64
+	Note        string
+}
+
+// part is the installment's next part and its fee.
+func (in *Installment) part() (principal, fee int64) {
+	months := int64(in.Plan.Months)
+	principal = in.Amount / months
+	if in.Billed == in.Plan.Months-1 {
+		principal = in.Amount - principal*(months-1)
+	}
+	fee = percentOf(in.Amount, in.Plan.MonthlyFeePercent)
+	if in.Billed == 0 {
+		fee += in.Plan.Fee
+	}
+	return principal, fee
 }
 
 // Cashback is the card's cashback rules (decision Р-31), to tell it before
@@ -221,6 +273,8 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: the penalty is 0 to 9.9999 percent a day", family.ErrValidation)
 	case !share(t.Cashback.BasePercent) || slices.ContainsFunc(t.Cashback.Categories, func(c CategoryPercent) bool { return !share(c.Percent) }):
 		return fmt.Errorf("%w: a cashback is 0 to 99.999 percent", family.ErrValidation)
+	case t.Installment.Validate() != nil:
+		return t.Installment.Validate()
 	case t.Cashback.MonthlyCap < 0 || t.Cashback.CreditDays < 0 || t.Cashback.CreditDays > 60:
 		return fmt.Errorf("%w: the cashback's cap cannot be below zero, and it comes 0 to 60 days after the statement", family.ErrValidation)
 	}
@@ -366,6 +420,10 @@ type Status struct {
 	// MinimumOverdue is the part of Minimum that is earlier minimums missed:
 	// the bank adds them to the next one, and they are due at once.
 	MinimumOverdue int64
+	// Installments are the purchases in installments still being shown;
+	// InstallmentsDue the parts shown and not yet paid — in Minimum.
+	Installments    []Installment
+	InstallmentsDue int64
 	// CashbackExpected is the cashback this period's purchases so far bring
 	// by the card's rules, capped; it comes on CashbackOn (zero time when
 	// the card names no rules).
@@ -474,6 +532,10 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	}
 	// The running grace the purchases now share, while the card is in debt.
 	var run *item
+	// The purchases in installments, kept apart from the grace; the parts
+	// shown and not yet paid, which a payment goes to first.
+	var plans []*Installment
+	var partsUnpaid, partsAtLast, debtAtLast int64
 	// The minimum of each statement on the way, and what was paid toward it,
 	// for a minimum missed; what is overdue of the minimums missed, paid
 	// first, and the penalty it runs up while overdue; the charges the last
@@ -497,10 +559,22 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			minimumBy = time.Time{}
 		}
 		if start, _ := t.period(day); start.Equal(day) {
+			// The statement shows the next part of each installment.
+			var parts int64
+			for _, in := range plans {
+				if in.Billed < in.Plan.Months && in.On.Before(day) {
+					principal, fee := in.part()
+					in.Billed++
+					in.Left -= principal
+					parts += principal + fee
+				}
+			}
+			partsUnpaid += parts
 			debt := owedOf(anything) - credit
-			minimumDue, minimumBy, paidToward = t.minimum(debt, owedOf(isCharge)), t.dueOn(day), 0
+			minimumDue, minimumBy, paidToward = t.minimum(debt, owedOf(isCharge))+parts, t.dueOn(day), 0
 			if day.Equal(st.LastStatement) {
 				charges, stated = owedOf(isCharge), true
+				partsAtLast, debtAtLast = parts, debt
 			}
 		}
 		miss(day)
@@ -510,7 +584,9 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		for ; k < len(rows) && rows[k].OccurredOn.Equal(day); k++ {
 			op := rows[k]
 			if op.AmountMinor > 0 {
-				pay(op.AmountMinor)
+				toParts := min(partsUnpaid, op.AmountMinor)
+				partsUnpaid -= toParts
+				pay(op.AmountMinor - toParts)
 				toOverdue := min(overdue, op.AmountMinor)
 				overdue -= toOverdue
 				paidToward += op.AmountMinor - toOverdue
@@ -528,6 +604,11 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			owed := -op.AmountMinor
 			take := min(credit, owed)
 			credit -= take
+			if plan, ok := installmentPlan(t, op, kinds); ok && owed > take {
+				owed -= take
+				plans = append(plans, &Installment{OperationID: op.ID, On: day, Amount: owed, Plan: plan, Left: owed, Note: op.Note})
+				continue
+			}
 			if owed -= take; owed > 0 {
 				it := &item{on: day, left: owed, grace: purchase(op, kinds), charge: kinds.charge(op)}
 				it.from, it.to = t.group(day)
@@ -573,6 +654,20 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		st.Debt += it.left
 	}
 	st.Debt -= credit
+	st.InstallmentsDue = partsUnpaid
+	var nextParts int64
+	for _, in := range plans {
+		st.Debt += in.Left
+		if in.Left > 0 {
+			principal, fee := in.part()
+			in.Next = principal + fee
+			if in.On.Before(st.NextStatement) {
+				nextParts += in.Next
+			}
+			st.Installments = append(st.Installments, *in)
+		}
+	}
+	st.Debt += partsUnpaid
 	st.Available = t.Limit - max(st.Debt, 0)
 
 	rate := t.AnnualRate.Div(hundred)
@@ -651,12 +746,13 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		fee = t.Fees.Monthly
 	}
 	st.MinimumOn = t.dueOn(st.LastStatement)
-	// Since the statement, payments go to the minimums missed first.
-	paid := paidSince
+	// Since the statement, payments go to the minimums missed first; the
+	// statement's debt is the walk's, purchases in installments apart.
+	paid, base := paidSince, atStatement
 	if stated {
-		paid = paidToward
+		paid, base = paidToward, debtAtLast
 	}
-	if minimum := t.minimum(atStatement+fee, charges+fee); minimum > paid {
+	if minimum := t.minimum(base+fee, charges+fee) + partsAtLast; minimum > paid {
 		st.Minimum = minimum - paid
 		st.MinimumMissed = st.MinimumOn.Before(today)
 	}
@@ -673,9 +769,34 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		if !chargedNow {
 			fee = t.Fees.Monthly
 		}
-		st.nextMinimum(t, st.Debt+fee, owedOf(isCharge)+fee)
+		st.nextMinimum(t, st.Debt-instLeft(plans)-partsUnpaid+fee, owedOf(isCharge)+fee)
+		st.Minimum += nextParts
 	}
 	return st
+}
+
+// installmentPlan is the plan a purchase is in, if any: its own, or the
+// card's for every purchase.
+func installmentPlan(t Terms, op operation.Operation, kinds Kinds) (Plan, bool) {
+	if op.Type != operation.TypeWithdrawal || op.TransferGroupID != nil || kinds.charge(op) {
+		return Plan{}, false
+	}
+	if p, ok := kinds.Installments[op.ID]; ok && p.Months > 0 {
+		return p, true
+	}
+	if t.Installment.Months > 0 && purchase(op, kinds) {
+		return t.Installment, true
+	}
+	return Plan{}, false
+}
+
+// instLeft is what of the installments' sums is still to be shown.
+func instLeft(plans []*Installment) int64 {
+	var sum int64
+	for _, in := range plans {
+		sum += in.Left
+	}
+	return sum
 }
 
 // cashback is what this period's purchases bring by the card's rules: each
@@ -779,6 +900,9 @@ type Kinds struct {
 	// Earns is the card's cashback percent by category, its subcategories
 	// with it (Terms.Cashback.Categories).
 	Earns map[uuid.UUID]decimal.Decimal
+	// Installments are the card's purchases in installments by their row,
+	// over Terms.Installment.
+	Installments map[uuid.UUID]Plan
 }
 
 func (k Kinds) cashback(op operation.Operation) bool {

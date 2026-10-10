@@ -54,3 +54,41 @@ export function useCreditCards() {
     },
   });
 }
+
+export type CreditCardInstallmentPlan = components["schemas"]["CreditCardInstallmentPlan"];
+
+// Puts a purchase on the card in installments, or restates its plan
+// (decision Р-33).
+export function useSetInstallment(accountId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ operationId, plan }: { operationId: string; plan: CreditCardInstallmentPlan }): Promise<CreditCard> => {
+      const { data, error, response } = await api.PUT("/api/v1/accounts/{accountId}/credit-card/installments/{operationId}", {
+        params: { path: { accountId, operationId } },
+        body: plan,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["credit-card", accountId] });
+      void queryClient.invalidateQueries({ queryKey: ["credit-cards"] });
+    },
+  });
+}
+
+export function useDeleteInstallment(accountId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (operationId: string): Promise<void> => {
+      const { error, response } = await api.DELETE("/api/v1/accounts/{accountId}/credit-card/installments/{operationId}", {
+        params: { path: { accountId, operationId } },
+      });
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["credit-card", accountId] });
+      void queryClient.invalidateQueries({ queryKey: ["credit-cards"] });
+    },
+  });
+}

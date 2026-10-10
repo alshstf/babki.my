@@ -3,6 +3,8 @@ package creditcard
 import (
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -38,6 +40,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/accounts/{accountId}/credit-card", view(h.handleGet))
 	srv.Mount("PUT /api/v1/accounts/{accountId}/credit-card", edit(h.handlePut))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card", edit(h.handleDelete))
+	srv.Mount("PUT /api/v1/accounts/{accountId}/credit-card/installments/{operationId}", edit(h.handlePutInstallment))
+	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card/installments/{operationId}", edit(h.handleDeleteInstallment))
 	srv.Mount("GET /api/v1/credit-cards", view(h.handleList))
 }
 
@@ -106,6 +110,10 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if t.Installment, err = planFromAPI(req.Installment); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.OwnRate.IsSpecified() && !req.OwnRate.IsNull() {
 		own, err := decimal.NewFromString(req.OwnRate.MustGet())
 		if err != nil {
@@ -124,6 +132,85 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, cardAPI(c))
+}
+
+func (h *Handler) handlePutInstallment(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := accountID(w, r)
+	if !ok {
+		return
+	}
+	op, err := uuid.Parse(r.PathValue("operationId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid operationId")
+		return
+	}
+	var req apitypes.CreditCardInstallmentPlan
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	plan, err := planFromAPI(req)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.svc.SetInstallment(r.Context(), p.SpaceID, id, op, plan); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	c, err := h.svc.Card(r.Context(), p.SpaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, cardAPI(c))
+}
+
+func (h *Handler) handleDeleteInstallment(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := accountID(w, r)
+	if !ok {
+		return
+	}
+	op, err := uuid.Parse(r.PathValue("operationId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid operationId")
+		return
+	}
+	if err := h.svc.DeleteInstallment(r.Context(), p.SpaceID, id, op); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func planFromAPI(in apitypes.CreditCardInstallmentPlan) (Plan, error) {
+	p := Plan{Months: in.Months, Fee: in.FeeMinor}
+	if in.MonthlyFeePercent != "" {
+		v, err := decimal.NewFromString(in.MonthlyFeePercent)
+		if err != nil {
+			return Plan{}, fmt.Errorf("monthly_fee_percent must be a decimal")
+		}
+		p.MonthlyFeePercent = v
+	}
+	return p, nil
+}
+
+func planAPI(p Plan) apitypes.CreditCardInstallmentPlan {
+	return apitypes.CreditCardInstallmentPlan{Months: p.Months, MonthlyFeePercent: p.MonthlyFeePercent.String(), FeeMinor: p.Fee}
+}
+
+// InstallmentsExport is the card's purchases in installments as the export
+// writes them, by their row.
+func InstallmentsExport(plans map[uuid.UUID]Plan) []apitypes.ExportCardInstallment {
+	out := make([]apitypes.ExportCardInstallment, 0, len(plans))
+	for id, p := range plans {
+		out = append(out, apitypes.ExportCardInstallment{OperationId: id, Plan: planAPI(p)})
+	}
+	slices.SortFunc(out, func(a, b apitypes.ExportCardInstallment) int {
+		return strings.Compare(a.OperationId.String(), b.OperationId.String())
+	})
+	return out
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +331,8 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 			CashFixedMinor: t.Fees.CashFixed, TransferPercent: t.Fees.TransferPercent.String(),
 			TransferFixedMinor: t.Fees.TransferFixed, PenaltyDailyPercent: t.Fees.PenaltyDaily.String(),
 		},
-		Cashback: cashbackAPI(t.Cashback),
+		Cashback:    cashbackAPI(t.Cashback),
+		Installment: planAPI(t.Installment),
 	}
 	if out.TransferCategories == nil {
 		out.TransferCategories = []uuid.UUID{}
@@ -275,7 +363,14 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		Grace: make([]apitypes.CreditCardDue, 0, len(st.Grace)), Lost: make([]apitypes.CreditCardLost, 0, len(st.Lost)),
 		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
 		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty, MinimumOverdueMinor: st.MinimumOverdue,
+		InstallmentsDueMinor: st.InstallmentsDue, Installments: make([]apitypes.CreditCardInstallment, 0, len(st.Installments)),
 		CashbackExpectedMinor: st.CashbackExpected, CashbackOn: nullable.NewNullNullable[string](),
+	}
+	for _, in := range st.Installments {
+		out.Installments = append(out.Installments, apitypes.CreditCardInstallment{
+			OperationId: in.OperationID, On: date(in.On), AmountMinor: in.Amount, Plan: planAPI(in.Plan),
+			Billed: in.Billed, LeftMinor: in.Left, NextMinor: in.Next, Note: in.Note,
+		})
 	}
 	if !st.CashbackOn.IsZero() {
 		out.CashbackOn = nullable.NewNullableWithValue(date(st.CashbackOn))
