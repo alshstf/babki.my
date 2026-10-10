@@ -3008,20 +3008,24 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
         payment_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end" }
         grace_kind:
           type: string
-          enum: [statement, long, windows]
+          enum: [statement, long, windows, running]
           description: >-
             statement: a period's purchases are free until its payment day; long: for grace_days from
             the period's start; windows: the purchases of window_months periods in a row, counted from
             the period of opened_on, are free until the end of the grace_months-th period from the
-            window's start (Газпромбанк «180 дней»: 2 and 6).
-        grace_days: { type: integer, minimum: 0, maximum: 1100, description: "For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise" }
+            window's start (Газпромбанк «180 дней»: 2 and 6); running: one grace of grace_days for
+            every purchase while the card is in debt, from the first purchase (grace_run_from), a new
+            one only once the debt is repaid in full, a deadline missed taking it off the whole debt
+            until then (ВТБ «110 дней»).
+        grace_days: { type: integer, minimum: 0, maximum: 1100, description: "For grace_kind long: the days a period's purchases stay free from the period's start; for running: the grace's length; 0 otherwise" }
+        grace_run_from: { type: string, enum: [purchase, next_day, month_start], description: "For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise" }
         window_months: { type: integer, minimum: 0, maximum: 12, description: "For grace_kind windows: the periods of purchases in a window; 0 otherwise" }
         grace_months: { type: integer, minimum: 0, maximum: 36, description: "For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise" }
         opened_on: { type: string, nullable: true, description: "For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise" }

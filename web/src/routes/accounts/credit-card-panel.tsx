@@ -196,6 +196,8 @@ function graceLine(t: (key: string, values?: Record<string, unknown>) => string,
       return t("card.graceLong", { days: terms.grace_days });
     case "windows":
       return t("card.graceWindows", { window: terms.window_months, months: terms.grace_months });
+    case "running":
+      return t("card.graceRunning", { days: terms.grace_days });
     default:
       return t("card.graceStatement");
   }
@@ -245,6 +247,13 @@ const PRESETS: Record<string, Partial<Form>> = {
   statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT },
   sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3", ...LENIENT, chargesInFull: true },
   year: { kind: "long", graceDays: "365", paymentDays: "20", minPercent: "3", ...LENIENT },
+  // ВТБ «Карта возможностей» (#457): one grace of 110 days from the 1st of
+  // the first purchase's month, renewed once the debt is repaid; the minimum
+  // by the 20th.
+  vtb110: {
+    kind: "running", graceDays: "110", runFrom: "month_start", statementDay: "1", paymentDays: "19", minPercent: "3",
+    minFloor: "0", ...LENIENT,
+  },
   // Газпромбанк «180 дней» (decision Р-28): two months of purchases, paid by
   // the end of the sixth; the minimum by the end of the next month.
   gpb180: {
@@ -263,6 +272,7 @@ interface Form {
   windowMonths: string;
   graceMonths: string;
   openedOn: string;
+  runFrom: CreditCardTerms["grace_run_from"];
   minPercent: string;
   minFloor: string;
   rate: string;
@@ -294,7 +304,8 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     statementDay: terms ? String(terms.statement_day) : "1",
     paymentDays: terms ? String(terms.payment_days) : "25",
     kind: terms?.grace_kind ?? "statement",
-    graceDays: terms && terms.grace_kind === "long" ? String(terms.grace_days) : "120",
+    graceDays: terms && (terms.grace_kind === "long" || terms.grace_kind === "running") ? String(terms.grace_days) : "120",
+    runFrom: terms?.grace_run_from ?? "purchase",
     windowMonths: terms && terms.grace_kind === "windows" ? String(terms.window_months) : "2",
     graceMonths: terms && terms.grace_kind === "windows" ? String(terms.grace_months) : "6",
     openedOn: terms?.opened_on ?? "",
@@ -343,7 +354,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
   const valid =
     limit !== null && limit >= 0 && floor !== null && floor >= 0 &&
     int(f.statementDay, 1, 31) && (f.payByPeriodEnd || int(f.paymentDays, 0, 60)) &&
-    (f.kind !== "long" || int(f.graceDays, 1, 1100)) &&
+    ((f.kind !== "long" && f.kind !== "running") || int(f.graceDays, 1, 1100)) &&
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
     decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000)) &&
@@ -357,7 +368,8 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
         statement_day: Number(f.statementDay),
         payment_days: int(f.paymentDays, 0, 60) ? Number(f.paymentDays) : 0,
         grace_kind: f.kind,
-        grace_days: f.kind === "long" ? Number(f.graceDays) : 0,
+        grace_days: f.kind === "long" || f.kind === "running" ? Number(f.graceDays) : 0,
+        grace_run_from: f.kind === "running" ? f.runFrom : "purchase",
         window_months: f.kind === "windows" ? Number(f.windowMonths) : 0,
         grace_months: f.kind === "windows" ? Number(f.graceMonths) : 0,
         opened_on: f.kind === "windows" ? f.openedOn : null,
@@ -420,6 +432,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     sber120: t("card.presets.sber120"),
     year: t("card.presets.year"),
     gpb180: t("card.presets.gpb180"),
+    vtb110: t("card.presets.vtb110"),
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -453,10 +466,27 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
                 <SelectItem value="statement">{t("card.kindStatement")}</SelectItem>
                 <SelectItem value="long">{t("card.kindLong")}</SelectItem>
                 <SelectItem value="windows">{t("card.kindWindows")}</SelectItem>
+                <SelectItem value="running">{t("card.kindRunning")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          {f.kind === "long" && field("graceDays", t("card.graceDays"))}
+          {(f.kind === "long" || f.kind === "running") && field("graceDays", t("card.graceDays"))}
+          {f.kind === "running" && (
+            <div className="grid gap-1">
+              <Label>{t("card.runFrom")}</Label>
+              <Select value={f.runFrom} onValueChange={(v) => set({ runFrom: v as Form["runFrom"] })}>
+                <SelectTrigger aria-label={t("card.runFrom")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="purchase">{t("card.runFromPurchase")}</SelectItem>
+                  <SelectItem value="next_day">{t("card.runFromNextDay")}</SelectItem>
+                  <SelectItem value="month_start">{t("card.runFromMonthStart")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{t("card.runFromHint")}</p>
+            </div>
+          )}
           {f.kind === "windows" && (
             <>
               {field("windowMonths", t("card.windowMonths"))}

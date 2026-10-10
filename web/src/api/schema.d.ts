@@ -2266,12 +2266,17 @@ export interface components {
             /** @description Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end */
             payment_days: number;
             /**
-             * @description statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6).
+             * @description statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6); running: one grace of grace_days for every purchase while the card is in debt, from the first purchase (grace_run_from), a new one only once the debt is repaid in full, a deadline missed taking it off the whole debt until then (ВТБ «110 дней»).
              * @enum {string}
              */
-            grace_kind: "statement" | "long" | "windows";
-            /** @description For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise */
+            grace_kind: "statement" | "long" | "windows" | "running";
+            /** @description For grace_kind long: the days a period's purchases stay free from the period's start; for running: the grace's length; 0 otherwise */
             grace_days: number;
+            /**
+             * @description For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise
+             * @enum {string}
+             */
+            grace_run_from: "purchase" | "next_day" | "month_start";
             /** @description For grace_kind windows: the periods of purchases in a window; 0 otherwise */
             window_months: number;
             /** @description For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise */

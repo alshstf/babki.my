@@ -54,7 +54,7 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
-  terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
+  terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0, grace_run_from: "purchase",
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
     transfer_categories: [], fees: noFees, cashback: noCashback },
@@ -102,10 +102,25 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toEqual({
-      limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120,
+      limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120, grace_run_from: "purchase",
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
       transfer_categories: [], fees: noFees, cashback: noCashback,
+    });
+  });
+
+  it("states ВТБ's grace from the first purchase from its preset", async () => {
+    answer({});
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Указать условия карты" }));
+    fireEvent.click(await screen.findByRole("button", { name: "110 дней (ВТБ)" }));
+    fireEvent.change(screen.getByLabelText(/Кредитный лимит/), { target: { value: "300000" } });
+    fireEvent.change(screen.getByLabelText(/Ставка без льготы/), { target: { value: "49,9" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({
+      grace_kind: "running", grace_days: 110, grace_run_from: "month_start", statement_day: 1, payment_days: 19,
     });
   });
 

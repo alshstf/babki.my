@@ -78,6 +78,7 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
 		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
 		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
+		RunFrom:        RunFrom(req.GraceRunFrom),
 		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
 	}
 	var err error
@@ -235,6 +236,7 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		MinPercent: t.MinPercent.String(), MinFloorMinor: t.MinFloor,
 		AnnualRate: t.AnnualRate.String(), OwnRate: own,
 		WindowMonths: t.WindowMonths, GraceMonths: t.GraceMonths, OpenedOn: opened,
+		GraceRunFrom: apitypes.CreditCardTermsGraceRunFrom(t.RunFrom),
 		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
 		TransferCategories: t.TransferCategories,
 		Fees: apitypes.CreditCardFees{
