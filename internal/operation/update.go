@@ -48,6 +48,9 @@ func (s *Service) Update(ctx context.Context, spaceID, id uuid.UUID, op Operatio
 		if err := st.checkCategory(ctx, spaceID, op, &old); err != nil {
 			return err
 		}
+		if err := st.checkMember(ctx, spaceID, op); err != nil {
+			return err
+		}
 		op.ID, op.SpaceID, op.Source, op.CreatedAt = old.ID, old.SpaceID, old.Source, old.CreatedAt
 		if op.OccurredOn.Equal(old.OccurredOn) {
 			op.OccurredAt = old.OccurredAt
@@ -105,11 +108,11 @@ func (s *Store) update(ctx context.Context, spaceID uuid.UUID, op Operation) (Op
 			instrument_id = $3, occurred_on = $4, settled_on = $5, quantity = $6,
 			price = $7, amount_minor = $8, currency = $9, fee_minor = $10,
 			note = $11, split_ratio = $12, face_before_minor = $13,
-			category_id = $14, counterparty = $15,
+			category_id = $14, counterparty = $15, member_id = $16,
 			occurred_at = CASE WHEN occurred_on = $4 THEN occurred_at END
 		WHERE space_id = $1 AND id = $2
 		RETURNING `+cols,
 		spaceID, op.ID, op.InstrumentID, op.OccurredOn, op.SettledOn, op.Quantity,
 		op.Price, op.AmountMinor, op.Currency, op.FeeMinor, op.Note, op.SplitRatio, op.FaceBeforeMinor,
-		op.CategoryID, op.Counterparty))
+		op.CategoryID, op.Counterparty, op.MemberID))
 }

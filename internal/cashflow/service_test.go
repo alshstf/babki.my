@@ -228,3 +228,50 @@ func TestTheReportRefusesABadPeriod(t *testing.T) {
 		}
 	}
 }
+
+// A row naming a member is theirs, wherever it sits; a row naming nobody is
+// the account owner's, the family's on a shared account.
+func TestARowNamingAMemberIsTheirs(t *testing.T) {
+	f := newFamily(t)
+	partner := uuid.New()
+	ours := f.account("Общая карта", account.TypeChecking, "RUB", false)
+	mine := f.account("Моя карта", account.TypeChecking, "RUB", true)
+	f.op(t, ours, "2026-09-01", operation.TypeWithdrawal, -300_00, "RUB", "expense/Продукты")
+	f.op(t, mine, "2026-09-01", operation.TypeWithdrawal, -100_00, "RUB", "expense/Продукты")
+	named := func(memberID uuid.UUID) {
+		op := operation.Operation{
+			AccountID: ours, Type: operation.TypeWithdrawal, OccurredOn: day(t, "2026-09-02"),
+			AmountMinor: -50_00, Currency: "RUB", MemberID: &memberID,
+		}
+		if _, err := f.ops.Create(f.ctx, f.space, op); err != nil {
+			t.Fatalf("a row naming %s: %v", memberID, err)
+		}
+	}
+	named(f.owner)
+	// Only a member of the family can be named.
+	op := operation.Operation{
+		AccountID: ours, Type: operation.TypeWithdrawal, OccurredOn: day(t, "2026-09-02"),
+		AmountMinor: -50_00, Currency: "RUB", MemberID: &partner,
+	}
+	if _, err := f.ops.Create(f.ctx, f.space, op); err == nil {
+		t.Error("a stranger was named on a row")
+	}
+
+	for name, c := range map[string]struct {
+		whose cashflow.Whose
+		want  int64
+	}{
+		"mine":   {cashflow.Whose{UserID: &f.owner}, 100_00 + 50_00},
+		"shared": {cashflow.Whose{Shared: true}, 300_00},
+	} {
+		r, err := f.report.Report(f.ctx, f.space, day(t, "2026-09-01"), day(t, "2026-09-30"), c.whose)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The named row is unfiled: it counts in «не разнесено», not spending.
+		got := r.Expense.Total + r.UnfiledOut.Total
+		if got != c.want {
+			t.Errorf("%s: %d, want %d", name, got, c.want)
+		}
+	}
+}

@@ -97,7 +97,7 @@ func (s *Store) withAccountsLocked(ctx context.Context, spaceID uuid.UUID, accou
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
 	trading_mode, transfer_group_id, split_ratio, source, external_id, created_at,
-	occurred_at, face_before_minor, category_id, counterparty`
+	occurred_at, face_before_minor, category_id, counterparty, member_id`
 
 func scan(row pgx.Row) (Operation, error) {
 	var o Operation
@@ -105,7 +105,7 @@ func scan(row pgx.Row) (Operation, error) {
 		&o.OccurredOn, &o.SettledOn, &o.Quantity, &o.Price, &o.AmountMinor,
 		&o.Currency, &o.FeeMinor, &o.Note, &o.TradingMode, &o.TransferGroupID,
 		&o.SplitRatio, &o.Source, &o.ExternalID, &o.CreatedAt, &o.OccurredAt, &o.FaceBeforeMinor,
-		&o.CategoryID, &o.Counterparty)
+		&o.CategoryID, &o.Counterparty, &o.MemberID)
 	return o, err
 }
 
@@ -121,9 +121,9 @@ const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
 		fee_minor, note, trading_mode, transfer_group_id, split_ratio, source,
-		external_id, created_at, occurred_at, face_before_minor, category_id, counterparty)
+		external_id, created_at, occurred_at, face_before_minor, category_id, counterparty, member_id)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19, $20, $21, $22
+		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19, $20, $21, $22, $23
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
@@ -135,7 +135,7 @@ func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
 		op.FeeMinor, op.Note, op.TradingMode, op.TransferGroupID, op.SplitRatio,
 		op.Source, op.ExternalID, createdAt, op.OccurredAt, op.FaceBeforeMinor,
-		op.CategoryID, op.Counterparty,
+		op.CategoryID, op.Counterparty, op.MemberID,
 	}
 }
 
@@ -392,12 +392,14 @@ func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operati
 	return stored, tx.Commit(ctx)
 }
 
-// keepCategories hands a corrected broker record the category the family gave
-// the record it replaces: the same account, external id and type. Without it a
-// correction would quietly take a filed spending out of the family's report.
+// keepCategories hands a corrected broker record the category and member the
+// family gave the record it replaces: the same account, external id and type.
+// Without it a correction would quietly take a filed spending out of the
+// family's report.
 func keepCategories(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Operation, removeIDs []uuid.UUID) ([]Operation, error) {
-	rows, err := tx.Query(ctx, `SELECT account_id, external_id, type, category_id FROM operations
-		WHERE space_id = $1 AND id = ANY($2) AND external_id IS NOT NULL AND category_id IS NOT NULL`, spaceID, removeIDs)
+	rows, err := tx.Query(ctx, `SELECT account_id, external_id, type, category_id, member_id FROM operations
+		WHERE space_id = $1 AND id = ANY($2) AND external_id IS NOT NULL
+			AND (category_id IS NOT NULL OR member_id IS NOT NULL)`, spaceID, removeIDs)
 	if err != nil {
 		return nil, fmt.Errorf("apply delta: categories of replaced rows: %w", err)
 	}
@@ -406,15 +408,16 @@ func keepCategories(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Ope
 		externalID string
 		typ        Type
 	}
-	filed := map[key]uuid.UUID{}
+	type filing struct{ category, member *uuid.UUID }
+	filed := map[key]filing{}
 	for rows.Next() {
 		var k key
-		var categoryID uuid.UUID
-		if err := rows.Scan(&k.account, &k.externalID, &k.typ, &categoryID); err != nil {
+		var f filing
+		if err := rows.Scan(&k.account, &k.externalID, &k.typ, &f.category, &f.member); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("apply delta: categories of replaced rows: %w", err)
 		}
-		filed[k] = categoryID
+		filed[k] = f
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("apply delta: categories of replaced rows: %w", err)
@@ -424,11 +427,18 @@ func keepCategories(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Ope
 	}
 	out := slices.Clone(add)
 	for i, op := range out {
-		if op.CategoryID != nil || op.ExternalID == nil || !Categorizable(op) {
+		if op.ExternalID == nil || !Categorizable(op) {
 			continue
 		}
-		if categoryID, ok := filed[key{op.AccountID, *op.ExternalID, op.Type}]; ok {
-			out[i].CategoryID = &categoryID
+		f, ok := filed[key{op.AccountID, *op.ExternalID, op.Type}]
+		if !ok {
+			continue
+		}
+		if op.CategoryID == nil {
+			out[i].CategoryID = f.category
+		}
+		if op.MemberID == nil {
+			out[i].MemberID = f.member
 		}
 	}
 	return out, nil

@@ -94,6 +94,16 @@ beforeEach(() => {
     if (url.pathname.endsWith("/category-rules") && input.method === "GET") return json(RULES);
     if (url.pathname.endsWith("/category-rules")) return json({ id: "r-new", position: 1, ...JSON.parse(text) }, 201);
     if (url.pathname.endsWith("/file-by-rules")) return json({ filed: 2 });
+    if (url.pathname.endsWith("/members")) {
+      return json([
+        { id: "u-1", username: "alex", display_name: "Александр", role: "owner" },
+        { id: "u-2", username: "anna", display_name: "Анна", role: "editor" },
+      ]);
+    }
+    if (url.pathname.endsWith("/member")) {
+      const body = JSON.parse(text) as { member_id: string | null };
+      return json({ ...journal[0], member_id: body.member_id });
+    }
     if (url.pathname.endsWith("/category")) {
       const body = JSON.parse(text) as { category_id: string | null };
       return json({ ...journal[0], category_id: body.category_id });
@@ -266,5 +276,29 @@ describe("filing rules", () => {
     await pick(screen.getByRole("combobox", { name: "Категория" }), "Без категории");
     fireEvent.click(await screen.findByRole("button", { name: "Разнести по правилам" }));
     expect(await screen.findByText("Разнесено строк: 2")).toBeTruthy();
+  });
+});
+
+describe("whose a row is", () => {
+  it("names the member who spent from a shared card", async () => {
+    renderTable();
+    fireEvent.click(await screen.findByTestId("operation-member"));
+    const list = await screen.findByRole("listbox", { name: "Чья операция" });
+    fireEvent.click(within(list).getByRole("option", { name: "Анна" }));
+    await waitFor(() => expect(sent.some((s) => s.method === "PUT" && s.path.endsWith("/member"))).toBe(true));
+    expect(sent.find((s) => s.path.endsWith("/member"))?.body).toEqual({ member_id: "u-2" });
+  });
+
+  it("enters a spending as one member's", async () => {
+    render(
+      <QueryClientProvider client={client()}>
+        <CashDialog open onOpenChange={() => {}} account={card} preset="expense" />
+      </QueryClientProvider>,
+    );
+    fireEvent.change(screen.getByLabelText(/Сумма/), { target: { value: "300" } });
+    await pick(await screen.findByRole("combobox", { name: "Чья" }), "Анна");
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(sent.filter((s) => s.method === "POST")).toHaveLength(1));
+    expect(sent.find((s) => s.method === "POST")?.body).toMatchObject({ member_id: "u-2" });
   });
 });

@@ -444,7 +444,8 @@
     "presetMenu": {
       "expense": "Расход",
       "income": "Доход"
-    }
+    },
+    "member": "Чья"
   },
   "openingBalance": {
     "title": "Начальный остаток · {{currency}}",
@@ -1159,8 +1160,8 @@
     },
     "whose": "Чьи счета",
     "everyone": "Вся семья",
-    "shared": "Общие счета",
-    "personal": "Личные: {{name}}",
+    "shared": "Общее",
+    "personal": "{{name}}",
     "income": "Доходы",
     "expense": "Расходы",
     "saved": "Осталось",
@@ -1239,5 +1240,11 @@
     "countedByBank": "В «Итого» семьи счёт входит по остатку банка.",
     "keepByOperations": "Вести по операциям",
     "keepByBank": "Вести по остатку банка"
+  },
+  "memberPicker": {
+    "owner": "Владельца счёта",
+    "whose": "чья?",
+    "title": "Чья операция",
+    "family": "Общая (семьи)"
   }
 }

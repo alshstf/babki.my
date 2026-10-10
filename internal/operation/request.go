@@ -79,6 +79,11 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		v := req.CategoryId.MustGet()
 		categoryID = &v
 	}
+	var memberID *uuid.UUID
+	if req.MemberId.IsSpecified() && !req.MemberId.IsNull() {
+		v := req.MemberId.MustGet()
+		memberID = &v
+	}
 	counterparty := ""
 	if req.Counterparty != nil {
 		counterparty = strings.TrimSpace(*req.Counterparty)
@@ -100,6 +105,7 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		FaceBeforeMinor: faceBefore,
 		CategoryID:      categoryID,
 		Counterparty:    counterparty,
+		MemberID:        memberID,
 	}, nil
 }
 

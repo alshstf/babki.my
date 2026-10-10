@@ -87,6 +87,59 @@ func (s *Store) checkCategory(ctx context.Context, spaceID uuid.UUID, op Operati
 	return nil
 }
 
+// checkMember holds op's member to the rules: whose a row is says something
+// only of money that came or went (Categorizable), and only a member of the
+// family can be named.
+func (s *Store) checkMember(ctx context.Context, spaceID uuid.UUID, op Operation) error {
+	if op.MemberID == nil {
+		return nil
+	}
+	if !Categorizable(op) {
+		return fmt.Errorf("%w: whose a row is goes on money that came or went (deposit, withdrawal, interest, fee, tax), not on %s or a transfer between accounts",
+			family.ErrValidation, op.Type)
+	}
+	members, err := family.NewStore(s.db).ListMembers(ctx, spaceID)
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		if m.ID == *op.MemberID {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: member_id is not a member of this family", family.ErrValidation)
+}
+
+// SetMember says whose a row is, or that it is the account's owner's (nil).
+// Like a category, it is the family's reading of the row and works on a
+// broker's too; nothing the engine reads changes.
+func (s *Service) SetMember(ctx context.Context, spaceID, id uuid.UUID, memberID *uuid.UUID) (Operation, error) {
+	tx, err := s.store.db.Begin(ctx)
+	if err != nil {
+		return Operation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	st := NewStore(tx)
+	old, err := st.ByID(ctx, spaceID, id)
+	if err != nil {
+		return Operation{}, err
+	}
+	op := old
+	op.MemberID = memberID
+	if memberID == nil && !Categorizable(old) {
+		return Operation{}, notCategorizable(old)
+	}
+	if err := st.checkMember(ctx, spaceID, op); err != nil {
+		return Operation{}, err
+	}
+	stored, err := scan(tx.QueryRow(ctx, `UPDATE operations SET member_id = $3 WHERE space_id = $1 AND id = $2 RETURNING `+cols,
+		spaceID, id, memberID))
+	if err != nil {
+		return Operation{}, err
+	}
+	return stored, tx.Commit(ctx)
+}
+
 // SetCategory files a row under a category, or takes it out of one (nil). It
 // works on any categorizable row, a broker's included: the category is the
 // family's reading of the row, not a fact the importer reported, and an

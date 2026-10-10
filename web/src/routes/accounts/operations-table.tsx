@@ -43,6 +43,7 @@ import {
   useOperations,
   useDeleteOperation,
   useSetOperationCategory,
+  useSetOperationMember,
   useFileByRules,
   editDialogOf,
   OPERATION_TYPES,
@@ -57,6 +58,8 @@ import {
 import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import { rulePattern, treeOf, useCategories, useCreateCategoryRule, type Category } from "@/api/categories";
 import { CategoryChip, categoryKindOf } from "@/components/category-picker";
+import { MemberChip } from "@/components/member-picker";
+import { useMembers } from "@/api/members";
 import type { CostBasisRules } from "@/api/tax-residencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
@@ -172,6 +175,7 @@ export function OperationsTable({
   papers = [],
   accountName,
   instrumentLinks = false,
+  accountShared = false,
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -197,6 +201,9 @@ export function OperationsTable({
   // Whether a paper's name leads to its own page. Off where the table is drawn
   // outside the application's router.
   instrumentLinks?: boolean;
+  // Whether the account is the family's rather than one member's: a row naming
+  // nobody is then the family's.
+  accountShared?: boolean;
 }) {
   const { t } = useTranslation();
   // "Show more" appends the next page (see useOperations); the order is
@@ -215,6 +222,10 @@ export function OperationsTable({
   const categories = useCategories();
   const categoryList = categories.data ?? [];
   const setCategory = useSetOperationCategory();
+  const setMember = useSetOperationMember();
+  const members = useMembers();
+  // Whose a row is shows only where more than one person spends.
+  const family = (members.data ?? []).length > 1 ? (members.data ?? []) : [];
   const createRule = useCreateCategoryRule();
   const fileByRules = useFileByRules();
   // A rule remembered from a row files the account's other rows like it at
@@ -443,7 +454,7 @@ export function OperationsTable({
                   {/* What the money was for and with whom; anyone who may write
                      files the row from here, a broker's row included. */}
                   {operation.categorizable && (
-                    <div className="mt-1">
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
                       <CategoryChip
                         categories={categoryList}
                         kind={categoryKindOf(operation.type)}
@@ -454,6 +465,16 @@ export function OperationsTable({
                         counterparty={operation.counterparty || operation.note}
                         onRemember={(categoryId) => remember(operation.counterparty || operation.note, categoryId)}
                       />
+                      {family.length > 0 && (
+                        <MemberChip
+                          members={family}
+                          value={operation.member_id ?? null}
+                          editable={canDelete}
+                          pending={setMember.isPending && setMember.variables?.operationId === operation.id}
+                          onChange={(memberId) => setMember.mutate({ operationId: operation.id, memberId })}
+                          shared={accountShared}
+                        />
+                      )}
                     </div>
                   )}
                   {operation.counterparty && (

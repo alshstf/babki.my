@@ -154,7 +154,10 @@ type Operation struct {
 	// category. The engine never reads them.
 	CategoryID   *uuid.UUID
 	Counterparty string
-	Source       string
-	ExternalID   *string
-	CreatedAt    time.Time
+	// MemberID is whose the row is when not the account's owner's: the member
+	// who spent or earned it. The engine never reads it.
+	MemberID   *uuid.UUID
+	Source     string
+	ExternalID *string
+	CreatedAt  time.Time
 }

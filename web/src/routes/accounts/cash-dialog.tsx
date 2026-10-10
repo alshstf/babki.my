@@ -32,6 +32,8 @@ import {
 } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import { matchRule, useCategories, useCategoryRules } from "@/api/categories";
+import { useMembers } from "@/api/members";
+import { MemberSelect } from "@/components/member-picker";
 import { CategorySelect, categoryKindOf } from "@/components/category-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
@@ -69,6 +71,9 @@ export function CashDialog({
   const createOperation = useSaveOperation(editing?.id);
   const categories = useCategories();
   const rules = useCategoryRules();
+  const members = useMembers();
+  // Whose the row is matters where more than one person spends.
+  const family = members.data ?? [];
 
   const [type, setType] = useState<OperationType>("deposit");
   const [amount, setAmount] = useState("");
@@ -79,6 +84,7 @@ export function CashDialog({
   // Whether the category is the person's choice; until then the family's
   // rules suggest one from the counterparty.
   const [chosen, setChosen] = useState(false);
+  const [memberId, setMemberId] = useState<string | null>(null);
 
   useOnOpen(open, () => {
     setType(editing?.type ?? (preset ? PRESET_TYPE[preset] : "deposit"));
@@ -88,6 +94,7 @@ export function CashDialog({
     setCategoryId(editing?.category_id ?? null);
     setCounterparty(editing?.counterparty ?? "");
     setChosen(editing?.category_id != null);
+    setMemberId(editing?.member_id ?? null);
     createOperation.reset();
   });
 
@@ -122,6 +129,7 @@ export function CashDialog({
         note,
         category_id: categoryId,
         counterparty: counterparty.trim(),
+        member_id: memberId,
       },
       { onSuccess: () => onOpenChange(false) },
     );
@@ -192,6 +200,18 @@ export function CashDialog({
               onChange={(e) => typeCounterparty(e.target.value)}
             />
           </div>
+          {family.length > 1 && (
+            <div className="grid gap-2">
+              <Label htmlFor="cash-member">{t("cash.member")}</Label>
+              <MemberSelect
+                id="cash-member"
+                members={family}
+                value={memberId}
+                onChange={setMemberId}
+                shared={account.owner_user_id == null}
+              />
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="cash-note">{t("cash.note")}</Label>
             <Input id="cash-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
