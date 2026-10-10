@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/oapi-codegen/nullable"
@@ -186,46 +185,35 @@ func minorFloat(minor int64) float64 {
 	return f
 }
 
-// FlowDays are the days a time-weighted return is valued on — the period's
-// start, each day money crossed the edge within it, its end — with the money
-// of each day.
-func FlowDays(flows []ReturnFlow, from, to time.Time) ([]time.Time, map[time.Time]int64) {
+// Performance is the account's time-weighted rate, drawdown and volatility
+// over the period (#405): its full worth at the end of the period's start,
+// every month's last day, each day money crossed its edge, and its end
+// (twr.Days, twr.Measure). Nothing is told when a day could not be valued in
+// full.
+func (s *Service) Performance(ctx context.Context, spaceID, accountID uuid.UUID, flows []ReturnFlow, from, to time.Time) (twr.Performance, error) {
 	byDay := map[time.Time]int64{}
-	days := []time.Time{from}
+	var flowDays []time.Time
 	for _, f := range flows {
-		if !f.Day.After(from) || f.Day.After(to) {
-			continue
-		}
-		if _, seen := byDay[f.Day]; !seen && !f.Day.Equal(to) {
-			days = append(days, f.Day)
+		if _, seen := byDay[f.Day]; !seen {
+			flowDays = append(flowDays, f.Day)
 		}
 		byDay[f.Day] += f.Minor
 	}
-	slices.SortFunc(days[1:], func(a, b time.Time) int { return a.Compare(b) })
-	return append(days, to), byDay
-}
-
-// TimeWeighted is the account's time-weighted return over the period (#405):
-// its full worth at the end of each day money crossed its edge, the stretches
-// between chained (twr.Rate). ok is false when a day could not be valued in
-// full, or there was nothing to grow from.
-func (s *Service) TimeWeighted(ctx context.Context, spaceID, accountID uuid.UUID, flows []ReturnFlow, from, to time.Time) (float64, bool, error) {
-	days, byDay := FlowDays(flows, from, to)
+	days, monthEnds := twr.Days(from, to, flowDays)
 	values, err := s.ValuesOn(ctx, spaceID, accountID, days)
 	if err != nil {
-		return 0, false, err
+		return twr.Performance{}, err
 	}
-	points := make([]twr.Point, 0, len(days))
+	points := make([]twr.Point, len(days))
 	for i, v := range values {
 		full := fullView(v)
 		if !whole(full) {
-			return 0, false, nil
+			return twr.Performance{}, nil
 		}
-		points = append(points, twr.Point{Day: days[i], Worth: full.Minor, Flow: byDay[days[i]]})
+		points[i] = twr.Point{Day: days[i], Worth: full.Minor, Flow: byDay[days[i]]}
 	}
 	points[0].Flow = 0
-	rate, ok := twr.Rate(points)
-	return rate, ok, nil
+	return twr.Measure(points, monthEnds), nil
 }
 
 func (h *Handler) handleReturn(w http.ResponseWriter, r *http.Request) {
@@ -251,15 +239,12 @@ func (h *Handler) handleReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if basis.Complete {
-		rate, ok, err := h.svc.TimeWeighted(r.Context(), p.SpaceID, accountID, basis.Flows, from, to)
+		perf, err := h.svc.Performance(r.Context(), p.SpaceID, accountID, basis.Flows, from, to)
 		if err != nil {
 			family.WriteError(w, err)
 			return
 		}
-		if ok {
-			out.TimeWeightedPeriod = nullable.NewNullableWithValue(decimal.NewFromFloat(rate).Round(4).String())
-			out.TimeWeightedRate = nullable.NewNullableWithValue(decimal.NewFromFloat(twr.Annual(rate, from, to)).Round(4).String())
-		}
+		PerformanceToAPI(&out, perf, from, to)
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }
@@ -281,9 +266,29 @@ func periodReturnToAPI(b ReturnBasis, from, to time.Time) (apitypes.PeriodReturn
 		StartMinor: b.Start.Minor, EndMinor: b.End.Minor, ContributionsMinor: put, ProfitMinor: profit,
 		AnnualRate: nullable.NewNullNullable[string](), Complete: b.Complete,
 		TimeWeightedRate: nullable.NewNullNullable[string](), TimeWeightedPeriod: nullable.NewNullNullable[string](),
+		MaxDrawdown: nullable.NewNullNullable[string](), DrawdownFrom: nullable.NewNullNullable[string](),
+		DrawdownTo: nullable.NewNullNullable[string](), Volatility: nullable.NewNullNullable[string](),
 	}
 	if rate, ok := b.AnnualRate(from, to); ok {
 		out.AnnualRate = nullable.NewNullableWithValue(decimal.NewFromFloat(rate).Round(4).String())
 	}
 	return out, nil
+}
+
+// PerformanceToAPI writes the time-weighted rate, the drawdown and the
+// volatility into a period's return.
+func PerformanceToAPI(out *apitypes.PeriodReturn, p twr.Performance, from, to time.Time) {
+	round := func(f float64) string { return decimal.NewFromFloat(f).Round(4).String() }
+	if p.HasRate {
+		out.TimeWeightedPeriod = nullable.NewNullableWithValue(round(p.Period))
+		out.TimeWeightedRate = nullable.NewNullableWithValue(round(twr.Annual(p.Period, from, to)))
+	}
+	if p.HasDrawdown {
+		out.MaxDrawdown = nullable.NewNullableWithValue(round(p.Drawdown))
+		out.DrawdownFrom = nullable.NewNullableWithValue(p.Peak.Format(time.DateOnly))
+		out.DrawdownTo = nullable.NewNullableWithValue(p.Bottom.Format(time.DateOnly))
+	}
+	if p.HasVolatility {
+		out.Volatility = nullable.NewNullableWithValue(round(p.Volatility))
+	}
 }

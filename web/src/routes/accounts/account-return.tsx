@@ -9,7 +9,7 @@ import {
   type PeriodReturn,
 } from "@/api/returns";
 import { formatMinor, signClass } from "@/lib/money";
-import { localToday } from "@/lib/dates";
+import { formatDate, localToday } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 
 type Period = "year" | "ytd" | "all";
@@ -157,6 +157,25 @@ function ReturnLine({
           <span className="text-xs text-muted-foreground">
             {t("accountReturn.contributions", { amount: formatMinor(r.contributions_minor, r.currency) })}
           </span>
+        </div>
+      )}
+      {/* The holdings' own ride (#405): the deepest fall and how much they swing. */}
+      {r && r.complete && (r.max_drawdown != null || r.volatility != null) && (
+        <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground" data-testid="account-return-risk">
+          {r.max_drawdown != null && r.drawdown_from != null && r.drawdown_to != null && (
+            <span title={t("accountReturn.drawdownHint")}>
+              {t("accountReturn.drawdown", {
+                depth: percent(String(-Number(r.max_drawdown))),
+                from: formatDate(r.drawdown_from),
+                to: formatDate(r.drawdown_to),
+              })}
+            </span>
+          )}
+          {r.volatility != null && (
+            <span title={t("accountReturn.volatilityHint")}>
+              {t("accountReturn.volatility", { value: new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractionDigits: 0 }).format(Number(r.volatility)) })}
+            </span>
+          )}
         </div>
       )}
       {r && !r.complete && (

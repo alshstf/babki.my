@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,8 +34,22 @@ func (f *fakeJournals) ValueFromJournal(_ context.Context, _, accountID uuid.UUI
 	return f.byAccount[accountID.String()], nil
 }
 
+// ValueOn is the value set for the day, else the latest set before it — as a
+// journal's worth stands between the days anything happens.
 func (f *fakeJournals) ValueOn(_ context.Context, _, accountID uuid.UUID, day time.Time) (account.JournalValue, error) {
-	return f.onDay[accountID.String()+"@"+day.Format(time.DateOnly)], nil
+	if v, ok := f.onDay[accountID.String()+"@"+day.Format(time.DateOnly)]; ok {
+		return v, nil
+	}
+	var latest string
+	var out account.JournalValue
+	prefix := accountID.String() + "@"
+	for key, v := range f.onDay {
+		on, found := strings.CutPrefix(key, prefix)
+		if found && on <= day.Format(time.DateOnly) && on > latest {
+			latest, out = on, v
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeJournals) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]account.JournalValue, error) {

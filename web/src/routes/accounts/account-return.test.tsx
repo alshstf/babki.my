@@ -40,6 +40,10 @@ fetchMock.mockImplementation(async (input: Request) => {
       annual_rate: "0.1052",
       time_weighted_rate: "0.0864",
       time_weighted_period: "0.0864",
+      max_drawdown: "0.1234",
+      drawdown_from: "2026-03-05",
+      drawdown_to: "2026-04-20",
+      volatility: "0.1812",
       complete: state.complete,
       accounts: state.accounts,
     }),
@@ -73,6 +77,9 @@ describe("AccountReturn", () => {
     );
     expect(norm(screen.getByTestId("account-return-rate").textContent ?? "")).toBe("+10,5 %");
     expect(norm(screen.getByTestId("account-return-twr").textContent ?? "")).toBe("+8,6 %");
+    expect(norm(screen.getByTestId("account-return-risk").textContent ?? "")).toBe(
+      "наибольшая просадка -12,3 % (с 05.03.2026 по 20.04.2026)волатильность 18 % годовых",
+    );
     expect(asked[0].pathname).toBe("/api/v1/accounts/acc-1/return");
     const to = asked[0].searchParams.get("to") ?? "";
     expect(asked[0].searchParams.get("from")).toBe(`${Number(to.slice(0, 4)) - 1}${to.slice(4)}`);
