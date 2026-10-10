@@ -303,19 +303,43 @@ func (e CostBasisPerimeter) Valid() bool {
 
 // Defines values for CreditCardTermsGraceKind.
 const (
-	Long      CreditCardTermsGraceKind = "long"
-	Statement CreditCardTermsGraceKind = "statement"
-	Windows   CreditCardTermsGraceKind = "windows"
+	CreditCardTermsGraceKindLong      CreditCardTermsGraceKind = "long"
+	CreditCardTermsGraceKindRunning   CreditCardTermsGraceKind = "running"
+	CreditCardTermsGraceKindStatement CreditCardTermsGraceKind = "statement"
+	CreditCardTermsGraceKindWindows   CreditCardTermsGraceKind = "windows"
 )
 
 // Valid indicates whether the value is a known member of the CreditCardTermsGraceKind enum.
 func (e CreditCardTermsGraceKind) Valid() bool {
 	switch e {
-	case Long:
+	case CreditCardTermsGraceKindLong:
 		return true
-	case Statement:
+	case CreditCardTermsGraceKindRunning:
 		return true
-	case Windows:
+	case CreditCardTermsGraceKindStatement:
+		return true
+	case CreditCardTermsGraceKindWindows:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreditCardTermsGraceRunFrom.
+const (
+	MonthStart CreditCardTermsGraceRunFrom = "month_start"
+	NextDay    CreditCardTermsGraceRunFrom = "next_day"
+	Purchase   CreditCardTermsGraceRunFrom = "purchase"
+)
+
+// Valid indicates whether the value is a known member of the CreditCardTermsGraceRunFrom enum.
+func (e CreditCardTermsGraceRunFrom) Valid() bool {
+	switch e {
+	case MonthStart:
+		return true
+	case NextDay:
+		return true
+	case Purchase:
 		return true
 	default:
 		return false
@@ -1092,19 +1116,19 @@ func (e TinvestReconcileStatus) Valid() bool {
 
 // Defines values for TinvestSyncRunStatus.
 const (
-	Failed  TinvestSyncRunStatus = "failed"
-	Ok      TinvestSyncRunStatus = "ok"
-	Running TinvestSyncRunStatus = "running"
+	TinvestSyncRunStatusFailed  TinvestSyncRunStatus = "failed"
+	TinvestSyncRunStatusOk      TinvestSyncRunStatus = "ok"
+	TinvestSyncRunStatusRunning TinvestSyncRunStatus = "running"
 )
 
 // Valid indicates whether the value is a known member of the TinvestSyncRunStatus enum.
 func (e TinvestSyncRunStatus) Valid() bool {
 	switch e {
-	case Failed:
+	case TinvestSyncRunStatusFailed:
 		return true
-	case Ok:
+	case TinvestSyncRunStatusOk:
 		return true
-	case Running:
+	case TinvestSyncRunStatusRunning:
 		return true
 	default:
 		return false
@@ -2128,15 +2152,18 @@ type CreditCardTerms struct {
 	// GraceAllLost A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is
 	GraceAllLost bool `json:"grace_all_lost"`
 
-	// GraceDays For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise
+	// GraceDays For grace_kind long: the days a period's purchases stay free from the period's start; for running: the grace's length; 0 otherwise
 	GraceDays int `json:"grace_days"`
 
-	// GraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6).
+	// GraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6); running: one grace of grace_days for every purchase while the card is in debt, from the first purchase (grace_run_from), a new one only once the debt is repaid in full, a deadline missed taking it off the whole debt until then (ВТБ «110 дней»).
 	GraceKind CreditCardTermsGraceKind `json:"grace_kind"`
 
 	// GraceMonths For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise
-	GraceMonths int   `json:"grace_months"`
-	LimitMinor  int64 `json:"limit_minor"`
+	GraceMonths int `json:"grace_months"`
+
+	// GraceRunFrom For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise
+	GraceRunFrom CreditCardTermsGraceRunFrom `json:"grace_run_from"`
+	LimitMinor   int64                       `json:"limit_minor"`
 
 	// MinFloorMinor The smallest minimum payment
 	MinFloorMinor int64 `json:"min_floor_minor"`
@@ -2166,8 +2193,11 @@ type CreditCardTerms struct {
 	WindowMonths int `json:"window_months"`
 }
 
-// CreditCardTermsGraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6).
+// CreditCardTermsGraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6); running: one grace of grace_days for every purchase while the card is in debt, from the first purchase (grace_run_from), a new one only once the debt is repaid in full, a deadline missed taking it off the whole debt until then (ВТБ «110 дней»).
 type CreditCardTermsGraceKind string
+
+// CreditCardTermsGraceRunFrom For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise
+type CreditCardTermsGraceRunFrom string
 
 // CurrencyAmount One amount in one currency. Used where a figure cannot be added across currencies and is published per currency instead.
 type CurrencyAmount struct {
