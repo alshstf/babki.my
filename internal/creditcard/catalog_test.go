@@ -72,12 +72,24 @@ func TestANewerRevisionIsOffered(t *testing.T) {
 	}
 	terms.AnnualRate = decimal.NewFromInt(50)
 	terms.Catalog = &CatalogRef{Product: p.ID, ContractsFrom: v.ContractsFrom, Revision: "2026-01-01"}
-	got, changes := catalogUpdate(terms)
-	if got == nil || len(changes) != 1 || changes[0].Field != "annual_rate" || changes[0].Ours != "50" || changes[0].Theirs != "59.99" {
-		t.Errorf("update = %+v, changes %+v", got, changes)
+	got, changes, refined := catalogUpdate(terms)
+	if got == nil || refined || len(changes) != 1 || changes[0].Field != "annual_rate" || changes[0].Ours != "50" || changes[0].Theirs != "59.99" {
+		t.Errorf("update = %+v, changes %+v, refined %v", got, changes, refined)
 	}
-	terms.Catalog.Revision = v.Revision
-	if got, _ := catalogUpdate(terms); got != nil {
+	// The same revision, compared with the version's terms as they are: kept.
+	terms.Catalog.Revision, terms.Catalog.Terms = v.Revision, v.Fingerprint()
+	if got, _, _ := catalogUpdate(terms); got != nil {
 		t.Errorf("the same revision was offered: %+v", got)
+	}
+	// The catalog refined since (or the card taken before fingerprints):
+	// offered once, as refined.
+	terms.Catalog.Terms = ""
+	if got, changes, refined := catalogUpdate(terms); got == nil || !refined || len(changes) != 1 {
+		t.Errorf("a refined catalog = %+v, changes %+v, refined %v", got, changes, refined)
+	}
+	// An older revision than the card's: nothing.
+	terms.Catalog.Revision = "2099-01-01"
+	if got, _, _ := catalogUpdate(terms); got != nil {
+		t.Errorf("an older revision was offered: %+v", got)
 	}
 }

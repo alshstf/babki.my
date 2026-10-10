@@ -3482,19 +3482,21 @@ components:
         credit_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the period's statement it comes in" }
     CreditCardCatalogRef:
       type: object
-      required: [product, contracts_from, revision]
+      required: [product, contracts_from, revision, fingerprint]
       properties:
         product: { type: string, description: "The catalog product's id" }
         contracts_from: { type: string, nullable: true, description: "The version's first contract day; null for a version with no bound" }
         revision: { type: string, description: "The tariff's revision the terms were taken at, YYYY-MM-DD" }
+        fingerprint: { type: string, description: "The fingerprint of the version's terms the card's were last compared with — taken, applied or kept; empty for a card taken before fingerprints" }
     CreditCardCatalogVersion:
       type: object
-      required: [contracts_from, contracts_to, revision, checked_on, sources, notes, terms]
+      required: [contracts_from, contracts_to, revision, checked_on, fingerprint, sources, notes, terms]
       properties:
         contracts_from: { type: string, nullable: true, description: "For contracts made from this day; null for no bound" }
         contracts_to: { type: string, nullable: true, description: "…to this one; null for no bound" }
         revision: { type: string, description: "The tariff's revision" }
         checked_on: { type: string, description: "When it was checked against the bank's documents" }
+        fingerprint: { type: string, description: "Names the version's terms as they are: another one when the catalog refines them within the same revision" }
         sources: { type: array, items: { type: string } }
         notes: { type: string }
         terms: { type: object, additionalProperties: true, description: "The fields of CreditCardTerms the tariff sets, named as there" }
@@ -3515,12 +3517,14 @@ components:
         theirs: { type: string }
     CreditCardCatalogUpdate:
       type: object
-      required: [product, bank, card, revision, sources, changes]
+      required: [product, bank, card, revision, fingerprint, refined, sources, changes]
       properties:
         product: { type: string }
         bank: { type: string }
         card: { type: string }
-        revision: { type: string, description: "The catalog's newer revision" }
+        revision: { type: string, description: "The catalog's revision: newer than the card's, or the same one refined" }
+        fingerprint: { type: string, description: "The fingerprint of the version's terms offered" }
+        refined: { type: boolean, description: "The bank's revision is the card's; the catalog refined it since (a mechanic learnt, a number corrected)" }
         sources: { type: array, items: { type: string } }
         changes: { type: array, items: { $ref: "#/components/schemas/CreditCardCatalogChange" } }
     CreditCardBankFigures:

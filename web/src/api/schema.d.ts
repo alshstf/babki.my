@@ -2592,6 +2592,8 @@ export interface components {
             contracts_from: string | null;
             /** @description The tariff's revision the terms were taken at, YYYY-MM-DD */
             revision: string;
+            /** @description The fingerprint of the version's terms the card's were last compared with — taken, applied or kept; empty for a card taken before fingerprints */
+            fingerprint: string;
         };
         CreditCardCatalogVersion: {
             /** @description For contracts made from this day; null for no bound */
@@ -2602,6 +2604,8 @@ export interface components {
             revision: string;
             /** @description When it was checked against the bank's documents */
             checked_on: string;
+            /** @description Names the version's terms as they are: another one when the catalog refines them within the same revision */
+            fingerprint: string;
             sources: string[];
             notes: string;
             /** @description The fields of CreditCardTerms the tariff sets, named as there */
@@ -2625,8 +2629,12 @@ export interface components {
             product: string;
             bank: string;
             card: string;
-            /** @description The catalog's newer revision */
+            /** @description The catalog's revision: newer than the card's, or the same one refined */
             revision: string;
+            /** @description The fingerprint of the version's terms offered */
+            fingerprint: string;
+            /** @description The bank's revision is the card's; the catalog refined it since (a mechanic learnt, a number corrected) */
+            refined: boolean;
             sources: string[];
             changes: components["schemas"]["CreditCardCatalogChange"][];
         };
