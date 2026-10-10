@@ -121,6 +121,12 @@ export function useInvalidateJournal() {
     void queryClient.invalidateQueries({ queryKey: ["instrument-holdings"] });
     void queryClient.invalidateQueries({ queryKey: ["instrument-operations"] });
     void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+    // What is due on a card, the regular payments and the money ahead are
+    // worked out from the journals as well.
+    void queryClient.invalidateQueries({ queryKey: ["credit-card"] });
+    void queryClient.invalidateQueries({ queryKey: ["credit-cards"] });
+    void queryClient.invalidateQueries({ queryKey: ["recurring"] });
+    void queryClient.invalidateQueries({ queryKey: ["forecast"] });
   };
 }
 

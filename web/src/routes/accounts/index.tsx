@@ -20,6 +20,7 @@ import {
 import { useScreenCurrencies } from "@/lib/screen-currencies";
 import { SummaryCards } from "./summary-cards";
 import { CapitalChart } from "./capital-chart";
+import { CardReminders } from "./card-reminders";
 import { FamilyReturnLine } from "./account-return";
 import { AccountsTable } from "./accounts-table";
 import { useBusyAccounts } from "@/components/background-activity";
@@ -85,6 +86,7 @@ export function AccountsPage() {
       </div>
       <RefreshFailedNotice show={refreshFailed(accounts, summary)} />
       <StaleSourcesNotice canOpenSettings={session?.role === "owner"} />
+      <CardReminders />
       {summary.data && <SummaryCards summary={summary.data} mode={mode} />}
       <CapitalChart />
       <FamilyReturnLine />

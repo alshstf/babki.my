@@ -21,6 +21,7 @@ import (
 	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/forecast"
@@ -117,6 +118,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	structure.NewHandler(structure.NewService(accStore, positions, famStore, converter), famAuth, famSM).Mount(srv)
 	loan.NewHandler(loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool)), famAuth, famSM).Mount(srv)
+	creditcard.NewHandler(creditcard.NewService(r.pool, accStore, opStore), famAuth, famSM).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurringSvc := recurring.NewService(opStore, accStore)
