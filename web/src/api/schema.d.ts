@@ -438,6 +438,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/receipts/mailbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The mailbox read for receipts (decision Р-35), without its password; 404 when none is stated. */
+        get: operations["getReceiptMailbox"];
+        /** @description States the mailbox read for receipts: a box kept for receipts alone, read over IMAP with TLS by its app password, which is sealed and never shown again. A new box needs the password; a box stated again keeps its password when `password` is null, and is read anew from its first letter when the server, the login or the folder change. */
+        put: operations["setReceiptMailbox"];
+        post?: never;
+        /** @description Forgets the mailbox and its password. */
+        delete: operations["deleteReceiptMailbox"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/receipts/mailbox/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Reads the letters that came since the last reading (the program also does it every hour) and takes the receipts they hold, as POST /receipts/import does: the receipt's QR line in the letter, or its fiscal numbers, total and time in the text. A failure to reach or read the box is `mailbox.problem`, not an error of the call. */
+        post: operations["checkReceiptMailbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/receipts/{receiptId}/split": {
         parameters: {
             query?: never;
@@ -2938,6 +2974,40 @@ export interface components {
             /** @enum {string} */
             source: "qr" | "fns" | "mail" | "file";
         };
+        Mailbox: {
+            host: string;
+            port: number;
+            username: string;
+            folder: string;
+            /**
+             * Format: date-time
+             * @description When it was read last; null before the first reading
+             */
+            checked_at: string | null;
+            /**
+             * @description What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well
+             * @enum {string}
+             */
+            problem: "" | "connect" | "login" | "folder" | "read";
+            /** @description Receipts the last reading's new letters held */
+            last_found: number;
+        };
+        MailboxSettings: {
+            /** @description The IMAP server, e.g. imap.yandex.ru */
+            host: string;
+            /** @description 993: IMAP with TLS */
+            port: number;
+            /** @description The box's address */
+            username: string;
+            /** @description INBOX unless the letters are put elsewhere */
+            folder: string;
+            /** @description The app password; null keeps the stored one */
+            password?: string | null;
+        };
+        MailboxCheck: {
+            mailbox: components["schemas"]["Mailbox"];
+            result: components["schemas"]["ReceiptImportResult"];
+        };
         ReceiptSplitResult: {
             split: boolean;
         };
@@ -5331,6 +5401,99 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             413: components["responses"]["Error"];
+        };
+    };
+    getReceiptMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The mailbox */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Mailbox"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setReceiptMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailboxSettings"];
+            };
+        };
+        responses: {
+            /** @description The mailbox */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Mailbox"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    deleteReceiptMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    checkReceiptMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The mailbox and what its new letters brought */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxCheck"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     resplitReceiptRow: {

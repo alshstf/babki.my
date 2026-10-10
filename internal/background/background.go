@@ -21,11 +21,13 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/mailbox"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/notify"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
+	"babki.my/babki/internal/receipt"
 )
 
 // How often each periodic job runs. Rates change once a business day; quotes
@@ -44,6 +46,9 @@ const (
 	// pushRemindersInterval is how often the reminders due are pushed: each
 	// goes once, in the day, so an hour is soon enough.
 	pushRemindersInterval = time.Hour
+	// mailboxInterval is how often the receipts' mailboxes are read: a
+	// receipt is wanted the day it came, not the minute.
+	mailboxInterval = time.Hour
 
 	// Splits are announced days ahead and take effect on a date.
 	corporateActionsInterval = 24 * time.Hour
@@ -165,6 +170,9 @@ func NewWorkers(
 			log.Error("push keys", "error", err)
 		}
 	}
+	// Receipts' letters (decision Р-35): every space's mailbox, hourly.
+	receipts := receipt.NewService(pool, operations, accounts, category.NewStore(pool), operation.NewService(operations))
+	river.AddWorker(workers, mailbox.NewWorker(mailbox.NewService(pool, tinvestDeps.Box, mailbox.IMAP{}, receipts, log), log))
 	report := cashflow.NewService(operations, accounts, category.NewStore(pool), spaces, marketdata.NewConverter(mdStore))
 	river.AddWorker(workers, notify.NewRemindersWorker(notify.NewStore(pool),
 		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
@@ -214,6 +222,7 @@ func Schedule() []jobs.Periodic {
 		{Every: referencePricesInterval, Args: marketdata.RefreshCryptoPricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshBondSchedulesArgs{}},
 		{Every: pushRemindersInterval, Args: notify.SendRemindersArgs{}},
+		{Every: mailboxInterval, Args: mailbox.CheckArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshIndexesArgs{}},
 	}
 }

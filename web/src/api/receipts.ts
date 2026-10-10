@@ -92,3 +92,48 @@ export function useResplitReceipt() {
     },
   });
 }
+
+export type Mailbox = components["schemas"]["Mailbox"];
+export type MailboxSettings = components["schemas"]["MailboxSettings"];
+
+// The mailbox read for receipts (decision Р-35); null when none is stated.
+export function useMailbox() {
+  return useQuery({
+    queryKey: ["receipts", "mailbox"],
+    queryFn: async (): Promise<Mailbox | null> => {
+      const { data, error, response } = await api.GET("/api/v1/receipts/mailbox");
+      if (response.status === 404) return null;
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+// States the mailbox (password null keeps the stored one), or forgets it.
+export function useSetMailbox() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: MailboxSettings | null): Promise<void> => {
+      const { error, response } = body
+        ? await api.PUT("/api/v1/receipts/mailbox", { body })
+        : await api.DELETE("/api/v1/receipts/mailbox");
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["receipts", "mailbox"] }),
+  });
+}
+
+// Reads the mailbox's new letters now.
+export function useCheckMailbox() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<ReceiptImportResult> => {
+      const { data, error, response } = await api.POST("/api/v1/receipts/mailbox/check");
+      if (!data) throw apiError(response, error);
+      return data.result;
+    },
+    onSuccess: () => {
+      for (const key of ["receipts", "operations", "cashflow", "budget"]) void queryClient.invalidateQueries({ queryKey: [key] });
+    },
+  });
+}

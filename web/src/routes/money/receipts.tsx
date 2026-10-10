@@ -8,6 +8,7 @@ import { useImportReceipts, useWaitingReceipts, type ReceiptImportResult } from 
 import { useSession } from "@/api/session";
 import { formatDate } from "@/lib/dates";
 import { formatMinor } from "@/lib/money";
+import { MailboxSection } from "./mailbox";
 
 // ReceiptsCard takes a statement of the tax service's app «Проверка чеков»
 // (decision Р-34) and lists the receipts still waiting for a row. A viewer
@@ -98,6 +99,7 @@ export function ReceiptsCard() {
                   .join(" ")}
           </p>
         )}
+        {canEdit && <MailboxSection />}
         {list.length > 0 && (
           <div className="grid gap-1" data-testid="receipts-waiting">
             <p className="text-sm font-medium">{t("receipts.waitingTitle", { n: list.length })}</p>
