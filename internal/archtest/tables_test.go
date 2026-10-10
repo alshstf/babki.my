@@ -41,6 +41,7 @@ var owners = map[string]string{
 	"reference_prices":            "internal/marketdata",
 	"bond_days":                   "internal/marketdata",
 	"bond_events":                 "internal/marketdata",
+	"index_values":                "internal/marketdata",
 	"instrument_dividends":        "internal/marketdata",
 	"operations":                  "internal/operation",
 	"operation_transfer_lots":     "internal/operation",

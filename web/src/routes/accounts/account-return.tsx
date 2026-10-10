@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { useAccountReturn, useFamilyReturn, useInstrumentReturn, type PeriodReturn } from "@/api/returns";
+import {
+  useAccountReturn,
+  useFamilyReturn,
+  useInstrumentReturn,
+  useReturnBenchmarks,
+  type PeriodReturn,
+} from "@/api/returns";
 import { formatMinor, signClass } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -57,6 +63,32 @@ export function FamilyReturnLine() {
         {t("accountReturn.family", { count: result.data.accounts })}
       </div>
       <ReturnLine r={result.data} period={period} onPeriod={setPeriod} />
+      {/* Weighed only where the family's own figure is shown. */}
+      {result.data.complete && result.data.annual_rate != null && <BenchmarkLine from={fromFor(period, today)} to={today} />}
+    </div>
+  );
+}
+
+// BenchmarkLine says what the same money would have made in the indices
+// (#401), each the annual rate of a model portfolio that got the family's
+// contributions and withdrawals on the same days. Only the indices priced
+// over the whole period.
+function BenchmarkLine({ from, to }: { from: string; to: string }) {
+  const { t } = useTranslation();
+  const result = useReturnBenchmarks(from, to);
+  const priced = (result.data?.benchmarks ?? []).filter((b) => b.complete && b.annual_rate != null);
+  if (priced.length === 0) return null;
+  const name = (code: string) =>
+    code === "MCFTR" ? t("benchmarks.MCFTR") : code === "RGBITR" ? t("benchmarks.RGBITR") : t("benchmarks.SP500TR");
+  return (
+    <div className="text-xs text-muted-foreground" data-testid="return-benchmarks" title={t("benchmarks.hint")}>
+      {t("benchmarks.lead")}{" "}
+      {priced.map((b, i) => (
+        <span key={b.code} className="whitespace-nowrap">
+          {i > 0 && " · "}
+          {name(b.code)} {percent(b.annual_rate as string)}
+        </span>
+      ))}
     </div>
   );
 }

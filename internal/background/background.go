@@ -143,6 +143,16 @@ func NewWorkers(
 	if schedules, ok := quoteProvider.(marketdata.BondScheduleFeed); ok {
 		river.AddWorker(workers, marketdata.NewBondScheduleWorker(mdStore, operations, instruments, schedules, log))
 	}
+	// Benchmark indices (#401): the exchange's MCFTR and RGBITR, the S&P 500
+	// with dividends from the foreign feed — each where its feed is wired.
+	indexFeeds := map[string]marketdata.IndexFeed{}
+	if ix, ok := quoteProvider.(marketdata.IndexFeed); ok {
+		indexFeeds["moex"] = ix
+	}
+	if references.Foreign != nil {
+		indexFeeds["yahoo"] = marketdata.ClosesAsIndex(references.Foreign)
+	}
+	river.AddWorker(workers, marketdata.NewIndexesWorker(mdStore, operations, indexFeeds, log))
 	// Push reminders (decision Р-27): the keys come from the encryption key,
 	// so without one the worker is registered but sends nothing.
 	var sender notify.Sender
@@ -200,6 +210,7 @@ func Schedule() []jobs.Periodic {
 		{Every: referencePricesInterval, Args: marketdata.RefreshCryptoPricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshBondSchedulesArgs{}},
 		{Every: pushRemindersInterval, Args: notify.SendRemindersArgs{}},
+		{Every: tinvestDividendsInterval, Args: marketdata.RefreshIndexesArgs{}},
 	}
 }
 
@@ -220,6 +231,7 @@ var sources = []jobs.SourceKind{
 	{Kind: marketdata.RefreshDividendCalendarArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshCryptoPricesArgs{}.Kind(), Every: referencePricesInterval},
 	{Kind: marketdata.RefreshBondSchedulesArgs{}.Kind(), Every: tinvestDividendsInterval},
+	{Kind: marketdata.RefreshIndexesArgs{}.Kind(), Every: tinvestDividendsInterval},
 }
 
 // Sources reads how each source's jobs last ended.

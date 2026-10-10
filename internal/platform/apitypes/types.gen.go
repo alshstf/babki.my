@@ -103,6 +103,27 @@ func (e AccountWithBalanceCountedBy) Valid() bool {
 	}
 }
 
+// Defines values for BenchmarkCode.
+const (
+	MCFTR   BenchmarkCode = "MCFTR"
+	RGBITR  BenchmarkCode = "RGBITR"
+	SP500TR BenchmarkCode = "SP500TR"
+)
+
+// Valid indicates whether the value is a known member of the BenchmarkCode enum.
+func (e BenchmarkCode) Valid() bool {
+	switch e {
+	case MCFTR:
+		return true
+	case RGBITR:
+		return true
+	case SP500TR:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CapitalAccountCountedBy.
 const (
 	CapitalAccountCountedByBalance CapitalAccountCountedBy = "balance"
@@ -1451,6 +1472,29 @@ type BalancePoint struct {
 	AsOf string `json:"as_of"`
 }
 
+// Benchmark defines model for Benchmark.
+type Benchmark struct {
+	// AnnualRate Its money-weighted annual rate, a fraction (decimal)
+	AnnualRate nullable.Nullable[string] `json:"annual_rate"`
+	Code       BenchmarkCode             `json:"code"`
+	Complete   bool                      `json:"complete"`
+
+	// EndMinor What the model portfolio would be worth at `to`, in the base currency
+	EndMinor      nullable.Nullable[int64] `json:"end_minor"`
+	IndexCurrency string                   `json:"index_currency"`
+}
+
+// BenchmarkCode defines model for Benchmark.Code.
+type BenchmarkCode string
+
+// Benchmarks defines model for Benchmarks.
+type Benchmarks struct {
+	Benchmarks []Benchmark `json:"benchmarks"`
+	Currency   string      `json:"currency"`
+	From       string      `json:"from"`
+	To         string      `json:"to"`
+}
+
 // CapitalAccount defines model for CapitalAccount.
 type CapitalAccount struct {
 	AccountId   openapi_types.UUID      `json:"account_id"`
@@ -1985,7 +2029,7 @@ type DataSource struct {
 	// EverySeconds How often it runs
 	EverySeconds int `json:"every_seconds"`
 
-	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices, marketdata.refresh_bond_schedules
+	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, tinvest.refresh_dividends, corporateaction.refresh_moex_splits, corporateaction.refresh_foreign_splits, marketdata.refresh_reference_prices, marketdata.refresh_dividend_calendar, marketdata.refresh_crypto_prices, marketdata.refresh_bond_schedules, marketdata.refresh_indexes
 	Kind string `json:"kind"`
 
 	// LastError The last failure's text, cut to 300 characters; empty when it never failed
@@ -3985,6 +4029,12 @@ type UnsubscribePushParams struct {
 
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
 type GetFamilyReturnParams struct {
+	From string `form:"from" json:"from"`
+	To   string `form:"to" json:"to"`
+}
+
+// GetReturnBenchmarksParams defines parameters for GetReturnBenchmarks.
+type GetReturnBenchmarksParams struct {
 	From string `form:"from" json:"from"`
 	To   string `form:"to" json:"to"`
 }

@@ -57,6 +57,14 @@ func (h *Handler) familyReturn(ctx context.Context, spaceID uuid.UUID, base stri
 	return out, counted, nil
 }
 
+// FamilyReturnBasis is the family's worth at both ends of the period and
+// what crossed its edge in between, in the base currency — what GET
+// /api/v1/return reckons from — for weighing it against a benchmark (#401).
+func (h *Handler) FamilyReturnBasis(ctx context.Context, spaceID uuid.UUID, base string, from, to time.Time) (ReturnBasis, error) {
+	b, _, err := h.familyReturn(ctx, spaceID, base, from, to)
+	return b, err
+}
+
 func (h *Handler) handleFamilyReturn(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	from, errFrom := time.Parse(time.DateOnly, r.URL.Query().Get("from"))

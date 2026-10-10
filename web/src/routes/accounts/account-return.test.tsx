@@ -13,7 +13,21 @@ const fetchMock = vi.hoisted(() => {
   return fn;
 });
 fetchMock.mockImplementation(async (input: Request) => {
-  asked.push(new URL(input.url));
+  const url = new URL(input.url);
+  asked.push(url);
+  if (url.pathname.endsWith("/return/benchmarks")) {
+    return new Response(
+      JSON.stringify({
+        currency: "RUB", from: "2025-10-03", to: "2026-10-03",
+        benchmarks: [
+          { code: "MCFTR", index_currency: "RUB", complete: true, end_minor: 16_900_000, annual_rate: "0.0811" },
+          { code: "RGBITR", index_currency: "RUB", complete: false, end_minor: null, annual_rate: null },
+          { code: "SP500TR", index_currency: "USD", complete: true, end_minor: 18_100_000, annual_rate: "0.1433" },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
   return new Response(
     JSON.stringify({
       currency: "RUB",
@@ -92,7 +106,19 @@ describe("AccountReturn", () => {
         <FamilyReturnLine />
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(asked).toHaveLength(2));
+    await waitFor(() => expect(asked.filter((u) => u.pathname === "/api/v1/return")).toHaveLength(2));
     expect(screen.queryByTestId("account-return")).toBeNull();
+  });
+
+  it("weighs the family's return against the indices priced over the period", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <FamilyReturnLine />
+      </QueryClientProvider>,
+    );
+    expect(norm((await screen.findByTestId("return-benchmarks")).textContent ?? "")).toBe(
+      "Если бы те же деньги шли в индекс, годовых: акции РФ (MCFTR) +8,1 % · S&P 500 с дивидендами +14,3 %",
+    );
   });
 });
