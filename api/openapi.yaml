@@ -18,6 +18,7 @@ tags:
   - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
   - { name: recurring, description: "The family's regular payments found in the journal (internal/recurring)." }
   - { name: budget, description: "The family's budget: a spending category's limit a month, with a «копилка» by choice (internal/budget)." }
+  - { name: receipts, description: "Cash receipts: the shop's document completing a row of the journal (internal/receipt)." }
   - { name: forecast, description: "The family's everyday money over the coming months (internal/forecast)." }
   - { name: credit-cards, description: "A credit card's terms and what is due on it (internal/creditcard)." }
   - { name: push, description: "Reminders pushed to the family's devices (internal/notify)." }
@@ -607,6 +608,54 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/match:
+    get:
+      tags: [receipts]
+      operationId: matchReceipt
+      description: >-
+        Where a cash receipt goes: `receipt` when it is written already (its numbers fn and fd name it
+        for good), and otherwise `candidates` — the family's spending (a purchase, a payout's refund)
+        or earning (a refund, a payout) rows of exactly its total in roubles within a day of its time,
+        on any account but a broker's, that no receipt completes yet; nearest first, at most five. The
+        bank's row of a card purchase is such a candidate: the receipt completes it rather than
+        standing for a second purchase.
+      parameters:
+        - { name: fn, in: query, required: true, schema: { type: string, pattern: "^[0-9]{1,20}$" } }
+        - { name: fd, in: query, required: true, schema: { type: string, pattern: "^[0-9]{1,20}$" } }
+        - { name: kind, in: query, required: true, schema: { $ref: "#/components/schemas/ReceiptKind" } }
+        - { name: total_minor, in: query, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: issued_at, in: query, required: true, schema: { type: string }, description: "The till's time, YYYY-MM-DDTHH:MM" }
+      responses:
+        "200":
+          description: The receipt's place
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReceiptLookup" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts:
+    post:
+      tags: [receipts]
+      operationId: createReceipt
+      description: >-
+        Records a cash receipt, completing the row `operation_id` (the family's, of exactly its total,
+        spending for a purchase or a payout's refund, earning for a refund or a payout); none leaves it
+        waiting for one. 409 when the receipt is written already.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReceiptNew" }
+      responses:
+        "201":
+          description: The receipt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Receipt" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/categories:
     get:
       tags: [categories]
@@ -1845,25 +1894,6 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
-  /api/v1/operations/receipt:
-    get:
-      tags: [journal]
-      operationId: findReceipt
-      description: >-
-        The space's rows whose note names this cash receipt — «ФН {fn}, ФД {fd}», as the receipt dialog
-        writes it — newest first, at most five: so the dialog can warn before the same receipt is
-        written twice. Empty when there are none.
-      parameters:
-        - { name: fn, in: query, required: true, schema: { type: string, pattern: "^[0-9]{1,20}$" }, description: "The fiscal drive's number" }
-        - { name: fd, in: query, required: true, schema: { type: string, pattern: "^[0-9]{1,20}$" }, description: "The fiscal document's number" }
-      responses:
-        "200":
-          description: The rows
-          content:
-            application/json:
-              schema: { type: array, items: { $ref: "#/components/schemas/ReceiptMatch" } }
-        "400": { $ref: "#/components/responses/Error" }
-        "401": { $ref: "#/components/responses/Error" }
   /api/v1/operations/file-by-rules:
     post:
       tags: [journal]
@@ -2859,7 +2889,7 @@ components:
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     SpaceExport:
       type: object
-      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits]
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts]
       properties:
         format: { type: string, enum: [babki.my/space-export] }
         version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
@@ -2892,6 +2922,10 @@ components:
           type: array
           description: "The budget's limits, by category and the month each runs from (GET /budget/limits)"
           items: { $ref: "#/components/schemas/BudgetLimit" }
+        receipts:
+          type: array
+          description: "The cash receipts, by their time; operation_id names the row each completes"
+          items: { $ref: "#/components/schemas/Receipt" }
     ExportCategory:
       type: object
       required: [id, kind, name, parent_id, archived, position]
@@ -3489,6 +3523,62 @@ components:
       properties:
         devices: { type: integer }
         delivered: { type: integer }
+    ReceiptKind:
+      type: string
+      enum: [purchase, refund, payout, payout_refund]
+      description: "The receipt's kind (its QR code's n): a purchase, its refund, the seller paying out (scrap bought from you), the refund of that"
+    ReceiptItem:
+      type: object
+      required: [name, quantity, price_minor, sum_minor]
+      properties:
+        name: { type: string }
+        quantity: { type: string, description: "Decimal, pieces or kilograms" }
+        price_minor: { type: integer, format: int64 }
+        sum_minor: { type: integer, format: int64 }
+    ReceiptNew:
+      type: object
+      required: [fn, fd, kind, issued_at, total_minor, source]
+      properties:
+        operation_id: { type: string, format: uuid, nullable: true }
+        fn: { type: string, pattern: "^[0-9]{1,20}$", description: "The fiscal drive's number" }
+        fd: { type: string, pattern: "^[0-9]{1,20}$", description: "The fiscal document's number" }
+        fp: { type: string, nullable: true, pattern: "^[0-9]{1,20}$", description: "The fiscal sign" }
+        kind: { $ref: "#/components/schemas/ReceiptKind" }
+        issued_at: { type: string, description: "The till's time, YYYY-MM-DDTHH:MM" }
+        total_minor: { type: integer, format: int64, minimum: 1 }
+        source: { type: string, enum: [qr], description: "Where it came from: a QR code read here" }
+    Receipt:
+      type: object
+      required: [id, operation_id, fn, fd, fp, kind, issued_at, total_minor, seller, seller_inn, address, items, source]
+      properties:
+        id: { type: string, format: uuid }
+        operation_id: { type: string, format: uuid, nullable: true, description: "The row it completes; null while it waits for one" }
+        fn: { type: string }
+        fd: { type: string }
+        fp: { type: string, nullable: true }
+        kind: { $ref: "#/components/schemas/ReceiptKind" }
+        issued_at: { type: string, description: "YYYY-MM-DDTHH:MM" }
+        total_minor: { type: integer, format: int64 }
+        seller: { type: string, nullable: true }
+        seller_inn: { type: string, nullable: true }
+        address: { type: string, nullable: true }
+        items: { type: array, items: { $ref: "#/components/schemas/ReceiptItem" } }
+        source: { type: string, enum: [qr, fns, mail, file] }
+    ReceiptLookup:
+      type: object
+      required: [receipt, written_to, candidates]
+      properties:
+        receipt:
+          nullable: true
+          description: "The receipt as written already, with the row it completes; null when it is new"
+          allOf:
+            - $ref: "#/components/schemas/Receipt"
+        written_to:
+          nullable: true
+          description: "The row the written receipt completes, when it completes one"
+          allOf:
+            - $ref: "#/components/schemas/ReceiptMatch"
+        candidates: { type: array, items: { $ref: "#/components/schemas/ReceiptMatch" } }
     ReceiptMatch:
       type: object
       required: [id, account_id, occurred_on, amount_minor, currency]

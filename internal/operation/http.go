@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"time"
@@ -76,7 +75,6 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/instruments/{instrumentId}/operations", view(h.handleListByInstrument))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
 	srv.Mount("POST /api/v1/operations/file-by-rules", edit(h.handleFileByRules))
-	srv.Mount("GET /api/v1/operations/receipt", view(h.handleByReceipt))
 	srv.Mount("PUT /api/v1/operations/{operationId}/category", edit(h.handleSetCategory))
 	srv.Mount("PUT /api/v1/operations/{operationId}/member", edit(h.handleSetMember))
 	srv.Mount("PUT /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleStateWithheld))
@@ -1034,30 +1032,4 @@ func (h *Handler) handleMoneyTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusCreated, apitypes.TransferResponse{Out: toAPI(out), In: toAPI(in)})
-}
-
-var digits = regexp.MustCompile(`^[0-9]{1,20}$`)
-
-// handleByReceipt finds the rows a cash receipt was written to already, so
-// the dialog can warn before writing it twice.
-func (h *Handler) handleByReceipt(w http.ResponseWriter, r *http.Request) {
-	p, _ := family.PrincipalFromContext(r.Context())
-	fn, fd := r.URL.Query().Get("fn"), r.URL.Query().Get("fd")
-	if !digits.MatchString(fn) || !digits.MatchString(fd) {
-		httpjson.Error(w, http.StatusBadRequest, "fn and fd are the receipt's numbers")
-		return
-	}
-	ops, err := h.store.ByReceipt(r.Context(), p.SpaceID, fn, fd)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	out := make([]apitypes.ReceiptMatch, 0, len(ops))
-	for _, o := range ops {
-		out = append(out, apitypes.ReceiptMatch{
-			Id: o.ID, AccountId: o.AccountID, OccurredOn: o.OccurredOn.Format(time.DateOnly),
-			AmountMinor: o.AmountMinor, Currency: o.Currency,
-		})
-	}
-	httpjson.Write(w, http.StatusOK, out)
 }

@@ -33,6 +33,7 @@ import (
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/receipt"
 )
 
 // Version is the document's format version (see SpaceExport.version).
@@ -75,6 +76,10 @@ type cards interface {
 	Installments(ctx context.Context, spaceID, accountID uuid.UUID) (map[uuid.UUID]creditcard.Plan, error)
 }
 
+type receipts interface {
+	All(ctx context.Context, spaceID uuid.UUID) ([]receipt.Receipt, error)
+}
+
 type budgets interface {
 	Limits(ctx context.Context, spaceID uuid.UUID) ([]budget.Limit, error)
 }
@@ -95,17 +100,18 @@ type Handler struct {
 	loans       loans
 	cards       cards
 	budgets     budgets
+	receipts    receipts
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
 }
 
 func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events, pr prices, cats categories,
-	l loans, cc cards, b budgets, auth *family.Auth, sm *scs.SessionManager,
+	l loans, cc cards, b budgets, rc receipts, auth *family.Auth, sm *scs.SessionManager,
 ) *Handler {
 	return &Handler{
 		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
-		loans: l, cards: cc, budgets: b, auth: auth, sm: sm, now: time.Now,
+		loans: l, cards: cc, budgets: b, receipts: rc, auth: auth, sm: sm, now: time.Now,
 	}
 }
 
@@ -148,6 +154,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		Categories:       []apitypes.ExportCategory{},
 		CategoryRules:    []apitypes.CategoryRule{},
 		BudgetLimits:     []apitypes.BudgetLimit{},
+		Receipts:         []apitypes.Receipt{},
 	}
 	usernames := make(map[uuid.UUID]string, len(members))
 	for _, m := range members {
@@ -253,6 +260,13 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	}
 	for _, l := range limits {
 		doc.BudgetLimits = append(doc.BudgetLimits, budget.LimitAPI(l))
+	}
+	receipts, err := h.receipts.All(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	for _, r := range receipts {
+		doc.Receipts = append(doc.Receipts, receipt.API(r))
 	}
 	return doc, nil
 }
