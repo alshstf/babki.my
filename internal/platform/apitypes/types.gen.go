@@ -145,6 +145,27 @@ func (e CashGap) Valid() bool {
 	}
 }
 
+// Defines values for CashflowLineGroup.
+const (
+	CashflowLineGroupFee      CashflowLineGroup = "fee"
+	CashflowLineGroupInterest CashflowLineGroup = "interest"
+	CashflowLineGroupTax      CashflowLineGroup = "tax"
+)
+
+// Valid indicates whether the value is a known member of the CashflowLineGroup enum.
+func (e CashflowLineGroup) Valid() bool {
+	switch e {
+	case CashflowLineGroupFee:
+		return true
+	case CashflowLineGroupInterest:
+		return true
+	case CashflowLineGroupTax:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryKind.
 const (
 	Expense CategoryKind = "expense"
@@ -1242,6 +1263,79 @@ type CashPosition struct {
 
 	// OverdrawnSince On a NEGATIVE balance only: the first day the journal took this money below zero, by the operations' own dates. An account whose journal starts after money was already there is short from that day on, and it is the date an opening balance goes on (decision Р-2, variant Б): one deposit of what the account holds now less `amount_minor`, recorded as an ordinary journal row. Null when the balance is zero or positive, even if it was negative once.
 	OverdrawnSince nullable.Nullable[openapi_types.Date] `json:"overdrawn_since"`
+}
+
+// CashflowFlow defines model for CashflowFlow.
+type CashflowFlow struct {
+	// ByMonth One figure per month of CashflowReport.months, in its order
+	ByMonth []int64 `json:"by_month"`
+
+	// TotalMinor Over the period, in minor units of the base currency
+	TotalMinor int64 `json:"total_minor"`
+}
+
+// CashflowInvestments defines model for CashflowInvestments.
+type CashflowInvestments struct {
+	Costs     CashflowFlow `json:"costs"`
+	Deposited CashflowFlow `json:"deposited"`
+	Interest  CashflowFlow `json:"interest"`
+	Payouts   CashflowFlow `json:"payouts"`
+	Withdrawn CashflowFlow `json:"withdrawn"`
+}
+
+// CashflowLine defines model for CashflowLine.
+type CashflowLine struct {
+	ByMonth []int64 `json:"by_month"`
+
+	// CategoryId The category; null on a group
+	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id"`
+
+	// Children The categories under this one that moved money, in their order; `direct` is what was filed under this one itself
+	Children []CashflowLine `json:"children"`
+	Direct   CashflowFlow   `json:"direct"`
+
+	// Group Unfiled interest, fees or taxes off a broker's account; null on a category
+	Group nullable.Nullable[CashflowLineGroup] `json:"group"`
+
+	// TotalMinor The line with everything under it
+	TotalMinor int64 `json:"total_minor"`
+}
+
+// CashflowLineGroup Unfiled interest, fees or taxes off a broker's account; null on a category
+type CashflowLineGroup string
+
+// CashflowReport defines model for CashflowReport.
+type CashflowReport struct {
+	BaseCurrency string          `json:"base_currency"`
+	Expense      CashflowSection `json:"expense"`
+
+	// From Date YYYY-MM-DD
+	From        string              `json:"from"`
+	Income      CashflowSection     `json:"income"`
+	Investments CashflowInvestments `json:"investments"`
+
+	// LeftOut How many rows were left out for want of a rate
+	LeftOut int `json:"left_out"`
+
+	// MissingRates Currencies of rows left out for want of a rate on their day
+	MissingRates []string `json:"missing_rates"`
+
+	// Months Each month the period touches, YYYY-MM, oldest first
+	Months []string `json:"months"`
+
+	// To Date YYYY-MM-DD
+	To         string       `json:"to"`
+	UnfiledIn  CashflowFlow `json:"unfiled_in"`
+	UnfiledOut CashflowFlow `json:"unfiled_out"`
+}
+
+// CashflowSection defines model for CashflowSection.
+type CashflowSection struct {
+	ByMonth []int64 `json:"by_month"`
+
+	// Lines Top-level categories that moved money, in their order, then groups
+	Lines      []CashflowLine `json:"lines"`
+	TotalMinor int64          `json:"total_minor"`
 }
 
 // Category defines model for Category.
@@ -2974,6 +3068,18 @@ type GetCapitalParams struct {
 
 // GetCapitalParamsStep defines parameters for GetCapital.
 type GetCapitalParamsStep string
+
+// GetCashflowParams defines parameters for GetCashflow.
+type GetCashflowParams struct {
+	// From First day, YYYY-MM-DD
+	From string `form:"from" json:"from"`
+
+	// To Last day, YYYY-MM-DD; at most 120 months after `from`'s month
+	To string `form:"to" json:"to"`
+
+	// Member A member's id: only the accounts personal to them. `shared`: only the shared accounts. Absent: the whole family.
+	Member *string `form:"member,omitempty" json:"member,omitempty"`
+}
 
 // AddImportPapersJSONBody defines parameters for AddImportPapers.
 type AddImportPapersJSONBody struct {

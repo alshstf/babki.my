@@ -13,7 +13,38 @@ tags:
   - { name: tinvest, description: "The T-Invest connection: sync, unparsed operations, explanations (internal/importer/tinvest)." }
   - { name: service, description: "The whole space's export and the state of background data sources." }
   - { name: categories, description: "A family's categories of money going out and coming in (internal/category)." }
+  - { name: cashflow, description: "The family's money over a period: income and spending by category and month (internal/cashflow)." }
 paths:
+  /api/v1/cashflow:
+    get:
+      tags: [cashflow]
+      operationId: getCashflow
+      description: >-
+        What came in and went out between `from` and `to` (both included), in the base currency
+        at the rate of each row's day. A row filed under a category counts as income or spending
+        by it, on any account. An unfiled row on a brokerage account, and any dividend or coupon,
+        goes to `investments` — money between the family and its brokers, neither earned nor
+        spent. An unfiled row on any other account: interest earns and a fee or a tax spends
+        under a group of its own (`group`), and a deposit or a withdrawal waits in `unfiled_in` /
+        `unfiled_out`. A fee charged on a row spends under `fee`, or is an investment cost on a
+        broker's account. Transfers between the family's accounts are not read. Spending is
+        counted positive. A row whose day has no rate is left out (`missing_rates`, `left_out`).
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string }, description: "First day, YYYY-MM-DD" }
+        - { name: to, in: query, required: true, schema: { type: string }, description: "Last day, YYYY-MM-DD; at most 120 months after `from`'s month" }
+        - name: member
+          in: query
+          required: false
+          description: "A member's id: only the accounts personal to them. `shared`: only the shared accounts. Absent: the whole family."
+          schema: { type: string }
+      responses:
+        "200":
+          description: The period's money
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CashflowReport" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/categories:
     get:
       tags: [categories]
@@ -2231,6 +2262,66 @@ components:
       type: string
       enum: [expense, income]
       description: "expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)"
+    CashflowFlow:
+      type: object
+      required: [total_minor, by_month]
+      properties:
+        total_minor: { type: integer, format: int64, description: "Over the period, in minor units of the base currency" }
+        by_month:
+          type: array
+          description: "One figure per month of CashflowReport.months, in its order"
+          items: { type: integer, format: int64 }
+    CashflowLine:
+      type: object
+      required: [category_id, group, total_minor, by_month, direct, children]
+      properties:
+        category_id: { type: string, format: uuid, nullable: true, description: "The category; null on a group" }
+        group:
+          type: string
+          nullable: true
+          enum: [interest, fee, tax]
+          description: "Unfiled interest, fees or taxes off a broker's account; null on a category"
+        total_minor: { type: integer, format: int64, description: "The line with everything under it" }
+        by_month: { type: array, items: { type: integer, format: int64 } }
+        direct: { $ref: "#/components/schemas/CashflowFlow" }
+        children:
+          type: array
+          description: "The categories under this one that moved money, in their order; `direct` is what was filed under this one itself"
+          items: { $ref: "#/components/schemas/CashflowLine" }
+    CashflowSection:
+      type: object
+      required: [total_minor, by_month, lines]
+      properties:
+        total_minor: { type: integer, format: int64 }
+        by_month: { type: array, items: { type: integer, format: int64 } }
+        lines:
+          type: array
+          description: "Top-level categories that moved money, in their order, then groups"
+          items: { $ref: "#/components/schemas/CashflowLine" }
+    CashflowInvestments:
+      type: object
+      required: [deposited, withdrawn, payouts, interest, costs]
+      properties:
+        deposited: { $ref: "#/components/schemas/CashflowFlow" }
+        withdrawn: { $ref: "#/components/schemas/CashflowFlow" }
+        payouts: { $ref: "#/components/schemas/CashflowFlow" }
+        interest: { $ref: "#/components/schemas/CashflowFlow" }
+        costs: { $ref: "#/components/schemas/CashflowFlow" }
+    CashflowReport:
+      type: object
+      required: [base_currency, from, to, months, income, expense, unfiled_in, unfiled_out, investments, missing_rates, left_out]
+      properties:
+        base_currency: { type: string }
+        from: { type: string, description: "Date YYYY-MM-DD" }
+        to: { type: string, description: "Date YYYY-MM-DD" }
+        months: { type: array, items: { type: string }, description: "Each month the period touches, YYYY-MM, oldest first" }
+        income: { $ref: "#/components/schemas/CashflowSection" }
+        expense: { $ref: "#/components/schemas/CashflowSection" }
+        unfiled_in: { $ref: "#/components/schemas/CashflowFlow" }
+        unfiled_out: { $ref: "#/components/schemas/CashflowFlow" }
+        investments: { $ref: "#/components/schemas/CashflowInvestments" }
+        missing_rates: { type: array, items: { type: string }, description: "Currencies of rows left out for want of a rate on their day" }
+        left_out: { type: integer, description: "How many rows were left out for want of a rate" }
     Category:
       type: object
       required: [id, kind, name, parent_id, archived, position]

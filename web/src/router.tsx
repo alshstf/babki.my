@@ -53,6 +53,7 @@ const InstrumentsPage = lazyRouteComponent(
   () => import("@/routes/settings/instruments"),
   "InstrumentsPage",
 );
+const MoneyPage = lazyRouteComponent(() => import("@/routes/money"), "MoneyPage");
 const CategoriesPage = lazyRouteComponent(
   () => import("@/routes/settings/categories"),
   "CategoriesPage",
@@ -216,6 +217,13 @@ const indexRoute = createRoute({
   component: () => <Navigate to="/accounts" />,
 });
 
+// The family's money over a period (household stage 1).
+const moneyRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/money",
+  component: MoneyPage,
+});
+
 const accountsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/accounts",
@@ -301,6 +309,7 @@ export const routeTree = rootRoute.addChildren([
     settingsRoute,
     instrumentsRoute,
     categoriesRoute,
+    moneyRoute,
     connectWizardRoute,
     connectionDetailRoute,
   ]),

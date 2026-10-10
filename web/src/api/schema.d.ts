@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/cashflow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What came in and went out between `from` and `to` (both included), in the base currency at the rate of each row's day. A row filed under a category counts as income or spending by it, on any account. An unfiled row on a brokerage account, and any dividend or coupon, goes to `investments` — money between the family and its brokers, neither earned nor spent. An unfiled row on any other account: interest earns and a fee or a tax spends under a group of its own (`group`), and a deposit or a withdrawal waits in `unfiled_in` / `unfiled_out`. A fee charged on a row spends under `fee`, or is an investment cost on a broker's account. Transfers between the family's accounts are not read. Spending is counted positive. A row whose day has no rate is left out (`missing_rates`, `left_out`). */
+        get: operations["getCashflow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/categories": {
         parameters: {
             query?: never;
@@ -1609,6 +1626,68 @@ export interface components {
          * @enum {string}
          */
         CategoryKind: "expense" | "income";
+        CashflowFlow: {
+            /**
+             * Format: int64
+             * @description Over the period, in minor units of the base currency
+             */
+            total_minor: number;
+            /** @description One figure per month of CashflowReport.months, in its order */
+            by_month: number[];
+        };
+        CashflowLine: {
+            /**
+             * Format: uuid
+             * @description The category; null on a group
+             */
+            category_id: string | null;
+            /**
+             * @description Unfiled interest, fees or taxes off a broker's account; null on a category
+             * @enum {string|null}
+             */
+            group: "interest" | "fee" | "tax" | null;
+            /**
+             * Format: int64
+             * @description The line with everything under it
+             */
+            total_minor: number;
+            by_month: number[];
+            direct: components["schemas"]["CashflowFlow"];
+            /** @description The categories under this one that moved money, in their order; `direct` is what was filed under this one itself */
+            children: components["schemas"]["CashflowLine"][];
+        };
+        CashflowSection: {
+            /** Format: int64 */
+            total_minor: number;
+            by_month: number[];
+            /** @description Top-level categories that moved money, in their order, then groups */
+            lines: components["schemas"]["CashflowLine"][];
+        };
+        CashflowInvestments: {
+            deposited: components["schemas"]["CashflowFlow"];
+            withdrawn: components["schemas"]["CashflowFlow"];
+            payouts: components["schemas"]["CashflowFlow"];
+            interest: components["schemas"]["CashflowFlow"];
+            costs: components["schemas"]["CashflowFlow"];
+        };
+        CashflowReport: {
+            base_currency: string;
+            /** @description Date YYYY-MM-DD */
+            from: string;
+            /** @description Date YYYY-MM-DD */
+            to: string;
+            /** @description Each month the period touches, YYYY-MM, oldest first */
+            months: string[];
+            income: components["schemas"]["CashflowSection"];
+            expense: components["schemas"]["CashflowSection"];
+            unfiled_in: components["schemas"]["CashflowFlow"];
+            unfiled_out: components["schemas"]["CashflowFlow"];
+            investments: components["schemas"]["CashflowInvestments"];
+            /** @description Currencies of rows left out for want of a rate on their day */
+            missing_rates: string[];
+            /** @description How many rows were left out for want of a rate */
+            left_out: number;
+        };
         Category: {
             /** Format: uuid */
             id: string;
@@ -2791,6 +2870,35 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getCashflow: {
+        parameters: {
+            query: {
+                /** @description First day, YYYY-MM-DD */
+                from: string;
+                /** @description Last day, YYYY-MM-DD; at most 120 months after `from`'s month */
+                to: string;
+                /** @description A member's id: only the accounts personal to them. `shared`: only the shared accounts. Absent: the whole family. */
+                member?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The period's money */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CashflowReport"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
     listCategories: {
         parameters: {
             query?: never;
