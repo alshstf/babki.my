@@ -2305,6 +2305,8 @@ export interface components {
             opened_on: string | null;
             /** @description A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is */
             grace_all_lost: boolean;
+            /** @description A minimum missed takes the grace off the purchases of the period it was due in — those its next statement shows — and no others (Т-Банк) */
+            missed_minimum_period: boolean;
             /** @description The minimum is due by the last day of the period after the statement, not payment_days after it */
             pay_by_period_end: boolean;
             /** @description The minimum is due by this day of the month, the first after the statement (ВТБ: 20); 0 for none. Not with pay_by_period_end */

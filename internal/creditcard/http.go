@@ -82,7 +82,8 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
 		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
 		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
-		RunFrom: RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
+		MissedMinimumPeriod: req.MissedMinimumPeriod,
+		RunFrom:             RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
 		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
 	}
 	var err error
@@ -325,7 +326,8 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		WindowMonths: t.WindowMonths, GraceMonths: t.GraceMonths, OpenedOn: opened,
 		GraceRunFrom: apitypes.CreditCardTermsGraceRunFrom(t.RunFrom), PayDay: t.PayDay, MinRoundUpMinor: t.MinRoundUp,
 		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
-		TransferCategories: t.TransferCategories,
+		MissedMinimumPeriod: t.MissedMinimumPeriod,
+		TransferCategories:  t.TransferCategories,
 		Fees: apitypes.CreditCardFees{
 			MonthlyMinor: t.Fees.Monthly, CashFreeMinor: t.Fees.CashFree, CashPercent: t.Fees.CashPercent.String(),
 			CashFixedMinor: t.Fees.CashFixed, TransferPercent: t.Fees.TransferPercent.String(),
