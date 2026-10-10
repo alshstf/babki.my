@@ -1970,9 +1970,12 @@ type CreditCard struct {
 	Benefit nullable.Nullable[CreditCardBenefit] `json:"benefit"`
 
 	// ByJournal The status is worked out from the card's journal; false: from its last balance
-	ByJournal bool             `json:"by_journal"`
-	Status    CreditCardStatus `json:"status"`
-	Terms     CreditCardTerms  `json:"terms"`
+	ByJournal bool `json:"by_journal"`
+
+	// CatalogUpdate The catalog has a newer revision of the version the terms were taken from, changing these fields: offered, never applied by itself; null otherwise
+	CatalogUpdate nullable.Nullable[CreditCardCatalogUpdate] `json:"catalog_update"`
+	Status        CreditCardStatus                           `json:"status"`
+	Terms         CreditCardTerms                            `json:"terms"`
 }
 
 // CreditCardBankDue defines model for CreditCardBankDue.
@@ -2058,6 +2061,66 @@ type CreditCardCashbackCategory struct {
 
 	// Percent Decimal, 0 to 99.999
 	Percent string `json:"percent"`
+}
+
+// CreditCardCatalogChange defines model for CreditCardCatalogChange.
+type CreditCardCatalogChange struct {
+	// Field As CreditCardTerms names it; a nested one as fees.cash_percent
+	Field  string `json:"field"`
+	Ours   string `json:"ours"`
+	Theirs string `json:"theirs"`
+}
+
+// CreditCardCatalogProduct defines model for CreditCardCatalogProduct.
+type CreditCardCatalogProduct struct {
+	Bank     string                     `json:"bank"`
+	Card     string                     `json:"card"`
+	Id       string                     `json:"id"`
+	Versions []CreditCardCatalogVersion `json:"versions"`
+}
+
+// CreditCardCatalogRef defines model for CreditCardCatalogRef.
+type CreditCardCatalogRef struct {
+	// ContractsFrom The version's first contract day; null for a version with no bound
+	ContractsFrom nullable.Nullable[string] `json:"contracts_from"`
+
+	// Product The catalog product's id
+	Product string `json:"product"`
+
+	// Revision The tariff's revision the terms were taken at, YYYY-MM-DD
+	Revision string `json:"revision"`
+}
+
+// CreditCardCatalogUpdate defines model for CreditCardCatalogUpdate.
+type CreditCardCatalogUpdate struct {
+	Bank    string                    `json:"bank"`
+	Card    string                    `json:"card"`
+	Changes []CreditCardCatalogChange `json:"changes"`
+	Product string                    `json:"product"`
+
+	// Revision The catalog's newer revision
+	Revision string   `json:"revision"`
+	Sources  []string `json:"sources"`
+}
+
+// CreditCardCatalogVersion defines model for CreditCardCatalogVersion.
+type CreditCardCatalogVersion struct {
+	// CheckedOn When it was checked against the bank's documents
+	CheckedOn string `json:"checked_on"`
+
+	// ContractsFrom For contracts made from this day; null for no bound
+	ContractsFrom nullable.Nullable[string] `json:"contracts_from"`
+
+	// ContractsTo …to this one; null for no bound
+	ContractsTo nullable.Nullable[string] `json:"contracts_to"`
+	Notes       string                    `json:"notes"`
+
+	// Revision The tariff's revision
+	Revision string   `json:"revision"`
+	Sources  []string `json:"sources"`
+
+	// Terms The fields of CreditCardTerms the tariff sets, named as there
+	Terms map[string]interface{} `json:"terms"`
 }
 
 // CreditCardDue defines model for CreditCardDue.
@@ -2222,6 +2285,9 @@ type CreditCardTerms struct {
 
 	// Cashback The card's cashback rules, to tell the cashback before it comes (decision Р-31): a purchase earns its category's percent or base_percent, whichever is higher (subcategories with their category); the period's sum not past monthly_cap_minor when it is above 0. Transfers, cash and the bank's charges earn nothing. All zero and empty when the card names none.
 	Cashback CreditCardCashback `json:"cashback"`
+
+	// Catalog The catalog's version the terms were taken from (GET /credit-cards/catalog); null when stated by hand
+	Catalog nullable.Nullable[CreditCardCatalogRef] `json:"catalog"`
 
 	// ChargesInFull The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full
 	ChargesInFull bool `json:"charges_in_full"`

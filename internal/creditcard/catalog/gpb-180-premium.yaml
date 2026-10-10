@@ -1,0 +1,33 @@
+id: gpb-180-premium
+bank: Газпромбанк
+card: «180 дней Премиум»
+versions:
+  - contracts_from: 2025-10-01
+    contracts_to: null
+    revision: 2026-09-10
+    checked_on: 2026-10-10
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/afb/n1cmm34tmznbm6wlr168ja2oqjf17knq/77-Tarify-na-vypusk-i-obsluzhivanie-kart-Premium-180-dney-s-01.10.2025-_red.-10.09.2026_.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/c6f/ue7oz6k8pbv144ne4e27azwiu4dcxvfc/V3-s-25.05.2026-OUD_-Dolgiy-lgotnyy-period.pdf
+      - https://www.gazprombank.ru/download/7858543/
+    notes: >-
+      Обслуживание 590 ₽ в месяц не берётся при действующем сервисе «Газпром Бонус Премиум» — если
+      подписки нет, укажите его в платах. Окна отсчитываются от месяца договора: укажите дату договора.
+    terms:
+      statement_day: 1
+      grace_kind: windows
+      window_months: 2
+      grace_months: 6
+      grace_all_lost: true
+      pay_by_period_end: true
+      charges_in_full: true
+      min_percent: "3"
+      min_floor_minor: 50000
+      annual_rate: "59.99"
+      fees:
+        cash_free_minor: 10000000
+        cash_percent: "5.9"
+        cash_fixed_minor: 59000
+        transfer_percent: "4.9"
+        transfer_fixed_minor: 39000
+        penalty_daily_percent: "0.1"

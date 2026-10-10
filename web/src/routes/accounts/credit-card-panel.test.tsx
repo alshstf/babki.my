@@ -44,6 +44,24 @@ const noFees = {
 
 const noInstallment = { months: 0, monthly_fee_percent: "0", fee_minor: 0 };
 
+// The catalog as the server gives it: Газпромбанк's card by the contract's
+// day.
+const catalogFixture = [{
+  id: "gpb-180-premium", bank: "Газпромбанк", card: "«180 дней Премиум»",
+  versions: [{
+    contracts_from: "2025-10-01", contracts_to: null, revision: "2026-09-10", checked_on: "2026-10-10",
+    sources: ["https://example.test/tariff.pdf"], notes: "Обслуживание 590 ₽ в месяц не берётся при подписке.",
+    terms: {
+      statement_day: 1, grace_kind: "windows", window_months: 2, grace_months: 6, grace_all_lost: true, pay_by_period_end: true,
+      charges_in_full: true, min_percent: "3", min_floor_minor: 50000, annual_rate: "59.99",
+      fees: { cash_free_minor: 10000000, cash_percent: "5.9", cash_fixed_minor: 59000, transfer_percent: "4.9", transfer_fixed_minor: 39000, penalty_daily_percent: "0.1" },
+    },
+  }, {
+    contracts_from: "2025-04-01", contracts_to: "2025-09-30", revision: "2026-09-10", checked_on: "2026-10-10",
+    sources: ["https://example.test/old.pdf"], notes: "", terms: { grace_kind: "windows", window_months: 2, grace_months: 6 },
+  }],
+}];
+
 const noCashback = { base_percent: "0", categories: [], monthly_cap_minor: 0, points: false, credit_days: 0 };
 
 const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
@@ -61,8 +79,8 @@ const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: C
     missed_minimum_period: false,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
-    transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment },
-  status: status(over), by_journal: byJournal, benefit,
+    transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment, catalog: null },
+  status: status(over), by_journal: byJournal, benefit, catalog_update: null,
 });
 
 function answer(routes: Record<string, unknown>) {
@@ -110,47 +128,54 @@ describe("CreditCardPanel", () => {
       missed_minimum_period: false,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
-      transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment,
+      transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment, catalog: null,
     });
   });
 
-  it("states ВТБ's grace from the first purchase from its preset", async () => {
-    answer({});
+  it("takes a card's terms from the catalog by the contract's day", async () => {
+    answer({ "/credit-cards/catalog": catalogFixture });
+    Element.prototype.scrollIntoView ??= () => {};
     show(<CreditCardPanel account={account} canEdit />);
     fireEvent.click(await screen.findByRole("button", { name: "Указать условия карты" }));
-    fireEvent.click(await screen.findByRole("button", { name: "110 дней (ВТБ)" }));
+    const box = await screen.findByTestId("card-catalog");
+    fireEvent.keyDown(within(box).getByRole("combobox", { name: "Карта" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Газпромбанк «180 дней Премиум»" }));
+    fireEvent.change(within(box).getByLabelText("Дата договора"), { target: { value: "2026-07-10" } });
+    expect(within(box).getByText(/Обслуживание 590/)).toBeTruthy();
+    fireEvent.click(within(box).getByRole("button", { name: "Подставить условия" }));
     fireEvent.change(screen.getByLabelText(/Кредитный лимит/), { target: { value: "300000" } });
-    fireEvent.change(screen.getByLabelText(/Ставка без льготы/), { target: { value: "49,9" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({
-      grace_kind: "running", grace_days: 110, grace_run_from: "month_start", statement_day: 1, pay_day: 20,
-      pay_by_period_end: false, min_round_up_minor: 100_00,
+      limit_minor: 300_000_00, grace_kind: "windows", window_months: 2, grace_months: 6, opened_on: "2026-07-10",
+      grace_all_lost: true, pay_by_period_end: true, charges_in_full: true, annual_rate: "59.99", min_floor_minor: 500_00,
+      fees: { cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00 },
+      catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-09-10" },
     });
   });
 
-  it("states Газпромбанк's windows from its preset, with the contract's day", async () => {
-    answer({});
-    show(<CreditCardPanel account={account} canEdit />);
-    fireEvent.click(await screen.findByRole("button", { name: "Указать условия карты" }));
-    fireEvent.click(await screen.findByRole("button", { name: "180 дней (Газпромбанк)" }));
-    expect(screen.queryByLabelText("Дней на оплату после выписки")).toBeNull();
-    fireEvent.change(screen.getByLabelText(/Кредитный лимит/), { target: { value: "300000" } });
-    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Дата договора"), { target: { value: "2026-07-10" } });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
-    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
-    expect(await put.json()).toMatchObject({
-      statement_day: 1, grace_kind: "windows", grace_days: 0, window_months: 2, grace_months: 6, opened_on: "2026-07-10",
-      grace_all_lost: true, pay_by_period_end: true, charges_in_full: true, min_percent: "3", min_floor_minor: 500_00,
-      annual_rate: "59.99",
-      fees: {
-        monthly_minor: 0, cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00,
-        transfer_percent: "4.9", transfer_fixed_minor: 390_00, penalty_daily_percent: "0.1",
+  it("offers the catalog's newer tariff, and applies it only when asked", async () => {
+    const base = card();
+    answer({
+      "/credit-cards/catalog": catalogFixture,
+      "/credit-card": {
+        ...base,
+        terms: { ...base.terms, annual_rate: "49.9", catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-01-01" } },
+        catalog_update: {
+          product: "gpb-180-premium", bank: "Газпромбанк", card: "«180 дней Премиум»", revision: "2026-09-10", sources: [],
+          changes: [{ field: "annual_rate", ours: "49.9", theirs: "59.99" }],
+        },
       },
     });
+    show(<CreditCardPanel account={account} canEdit />);
+    const offer = await screen.findByTestId("card-catalog-update");
+    expect(norm(offer.textContent ?? "")).toContain("ставка, %: 49.9 → 59.99");
+    await waitFor(() => expect(within(offer).getByRole("button", { name: "Применить" })).not.toBeDisabled());
+    fireEvent.click(within(offer).getByRole("button", { name: "Применить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({ annual_rate: "59.99", catalog: { revision: "2026-09-10" } });
   });
 
   it("names the categories the bank takes for transfers", async () => {

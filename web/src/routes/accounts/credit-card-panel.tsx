@@ -15,6 +15,9 @@ import {
   useSetBankFigures,
   useSetCreditCard,
   useSetInstallment,
+  useCardCatalog,
+  mergeTerms,
+  versionFor,
   type CreditCard,
   type CreditCardTerms,
 } from "@/api/credit-cards";
@@ -174,6 +177,8 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
+      {data.catalog_update && canEdit && <CatalogUpdate account={account} card={data} />}
+
       <BankBlock account={account} card={data} canEdit={canEdit} />
 
       {data.by_journal && (st.installments.length > 0 || canEdit) && (
@@ -208,6 +213,66 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       )}
       {editing && <TermsDialog account={account} card={data} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+// The terms' fields as a change to them reads.
+const FIELD_LABEL: Record<string, string> = {
+  annual_rate: "annualRate",
+  min_percent: "minPercent",
+  min_floor_minor: "minFloor",
+  min_round_up_minor: "minRound",
+  grace_days: "graceDays",
+  grace_months: "graceMonths",
+  window_months: "windowMonths",
+  payment_days: "paymentDays",
+  pay_day: "payDay",
+  "fees.cash_percent": "cashPercent",
+  "fees.cash_fixed_minor": "cashFixed",
+  "fees.cash_free_minor": "cashFree",
+  "fees.transfer_percent": "transferPercent",
+  "fees.transfer_fixed_minor": "transferFixed",
+  "fees.penalty_daily_percent": "penalty",
+  "fees.monthly_minor": "monthlyFee",
+};
+
+// CatalogUpdate offers the catalog's newer revision of the card's tariff
+// (decision Р-32): applied only when the person says so.
+function CatalogUpdate({ account, card }: { account: AccountWithBalance; card: CreditCard }) {
+  const { t } = useTranslation();
+  const save = useSetCreditCard(account.id);
+  const catalog = useCardCatalog();
+  const u = card.catalog_update!;
+  const ref = card.terms.catalog!;
+  const version = catalog.data
+    ?.find((p) => p.id === ref.product)
+    ?.versions.find((v) => v.contracts_from === ref.contracts_from);
+  const label = (field: string) => (FIELD_LABEL[field] ? t(`card.field.${FIELD_LABEL[field]}`) : field);
+  const decide = (apply: boolean) => {
+    const terms = apply && version ? mergeTerms(card.terms, version.terms) : card.terms;
+    save.mutate({ ...terms, catalog: { ...ref, revision: u.revision } });
+  };
+  return (
+    <Alert data-testid="card-catalog-update">
+      <AlertDescription className="grid gap-2">
+        <span>{t("card.catalogUpdated", { card: `${u.bank} ${u.card}`, revision: formatDate(u.revision) })}</span>
+        <ul className="list-disc pl-5">
+          {u.changes.map((ch) => (
+            <li key={ch.field}>
+              {label(ch.field)}: {ch.ours || "—"} → {ch.theirs}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" disabled={!version || save.isPending} onClick={() => decide(true)}>
+            {t("card.catalogUpdateApply")}
+          </Button>
+          <Button type="button" size="sm" variant="outline" disabled={save.isPending} onClick={() => decide(false)}>
+            {t("card.catalogUpdateKeep")}
+          </Button>
+        </div>
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -537,26 +602,6 @@ const PRESETS: Record<string, Partial<Form>> = {
   statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT, missedMinimumPeriod: true },
   sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3", ...LENIENT, chargesInFull: true },
   year: { kind: "long", graceDays: "365", paymentDays: "20", minPercent: "3", ...LENIENT },
-  // «Халва» (decision Р-33): every purchase in installments, 99 ₽ with the
-  // first part; no interest; the payment is the parts.
-  halva: {
-    kind: "statement", paymentDays: "15", statementDay: "1", minPercent: "0", minFloor: "0", rate: "0", ...LENIENT,
-    installMonths: "3", installFeePercent: "0", installFee: "99",
-  },
-  // ВТБ «Карта возможностей» (#457): one grace of 110 days from the 1st of
-  // the first purchase's month, renewed once the debt is repaid; the minimum
-  // by the 20th.
-  vtb110: {
-    kind: "running", graceDays: "110", runFrom: "month_start", statementDay: "1", minPercent: "3",
-    minFloor: "0", ...LENIENT, dueMode: "day", payDay: "20", minRound: "100",
-  },
-  // Газпромбанк «180 дней» (decision Р-28): two months of purchases, paid by
-  // the end of the sixth; the minimum by the end of the next month.
-  gpb180: {
-    kind: "windows", windowMonths: "2", graceMonths: "6", statementDay: "1", minPercent: "3", minFloor: "500",
-    rate: "59.99", graceAllLost: true, dueMode: "periodEnd", chargesInFull: true, minRound: "0",
-    cashFree: "100000", cashPercent: "5.9", cashFixed: "590", transferPercent: "4.9", transferFixed: "390", penaltyDaily: "0.1",
-  },
 };
 
 interface Form {
@@ -597,11 +642,65 @@ interface Form {
   installFee: string;
 }
 
-function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
-  const { t } = useTranslation();
-  const save = useSetCreditCard(account.id);
-  const terms = card?.terms;
-  const [f, setF] = useState<Form>({
+// termsOf is the form as terms; a figure that is not a number counts as
+// nought (the form's checks keep such a form from being saved).
+function termsOf(f: Form): CreditCardTerms {
+  const num = (s: string) => {
+    const v = Number((s || "0").replace(",", "."));
+    return Number.isNaN(v) ? 0 : v;
+  };
+  const money = (s: string) => parseToMinor(s.trim() === "" ? "0" : s) ?? 0;
+  const int = (s: string) => (/^\d+$/.test(s) ? Number(s) : 0);
+  return {
+    limit_minor: money(f.limit),
+    statement_day: int(f.statementDay),
+    payment_days: int(f.paymentDays) <= 60 ? int(f.paymentDays) : 0,
+    grace_kind: f.kind,
+    grace_days: f.kind === "long" || f.kind === "running" ? int(f.graceDays) : 0,
+    grace_run_from: f.kind === "running" ? f.runFrom : "purchase",
+    window_months: f.kind === "windows" ? int(f.windowMonths) : 0,
+    grace_months: f.kind === "windows" ? int(f.graceMonths) : 0,
+    opened_on: f.kind === "windows" ? f.openedOn : null,
+    grace_all_lost: f.graceAllLost,
+    missed_minimum_period: f.missedMinimumPeriod,
+    pay_by_period_end: f.dueMode === "periodEnd",
+    pay_day: f.dueMode === "day" ? int(f.payDay) : 0,
+    min_round_up_minor: money(f.minRound),
+    charges_in_full: f.chargesInFull,
+    transfer_categories: f.transferCategories,
+    fees: {
+      monthly_minor: money(f.monthlyFee),
+      cash_free_minor: money(f.cashFree),
+      cash_percent: String(num(f.cashPercent)),
+      cash_fixed_minor: money(f.cashFixed),
+      transfer_percent: String(num(f.transferPercent)),
+      transfer_fixed_minor: money(f.transferFixed),
+      penalty_daily_percent: String(num(f.penaltyDaily)),
+    },
+    installment: {
+      months: int(f.installMonths || "0"),
+      monthly_fee_percent: String(num(f.installFeePercent)),
+      fee_minor: money(f.installFee),
+    },
+    cashback: {
+      base_percent: String(num(f.cashbackBase)),
+      categories: f.cashbackCategories.map((c) => ({ category_id: c.id, percent: String(num(c.percent)) })),
+      monthly_cap_minor: money(f.cashbackCap),
+      points: f.cashbackPoints,
+      credit_days: int(f.cashbackDays || "0"),
+    },
+    min_percent: String(num(f.minPercent)),
+    min_floor_minor: money(f.minFloor),
+    annual_rate: String(num(f.rate)),
+    own_rate: f.ownRate.trim() === "" ? null : String(num(f.ownRate)),
+    catalog: null,
+  };
+}
+
+// toForm is a card's terms as the form edits them; the form's defaults
+// without terms.
+function toForm(terms?: CreditCardTerms): Form {
+  return {
     limit: terms ? minorToInput(terms.limit_minor) : "",
     statementDay: terms ? String(terms.statement_day) : "1",
     paymentDays: terms ? String(terms.payment_days) : "25",
@@ -637,7 +736,15 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     installMonths: terms ? String(terms.installment.months) : "0",
     installFeePercent: terms?.installment.monthly_fee_percent ?? "0",
     installFee: terms ? minorToInput(terms.installment.fee_minor) : "0",
-  });
+  };
+}
+
+function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
+  const { t } = useTranslation();
+  const save = useSetCreditCard(account.id);
+  const terms = card?.terms;
+  const [f, setF] = useState<Form>(() => toForm(terms));
+  const [catalogRef, setCatalogRef] = useState<CreditCardTerms["catalog"]>(terms?.catalog ?? null);
   const categories = useCategories();
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const num = (s: string) => Number(s.replace(",", "."));
@@ -672,52 +779,22 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
 
   const submit = () => {
     if (!valid || limit === null || floor === null) return;
-    save.mutate(
-      {
-        limit_minor: limit,
-        statement_day: Number(f.statementDay),
-        payment_days: int(f.paymentDays, 0, 60) ? Number(f.paymentDays) : 0,
-        grace_kind: f.kind,
-        grace_days: f.kind === "long" || f.kind === "running" ? Number(f.graceDays) : 0,
-        grace_run_from: f.kind === "running" ? f.runFrom : "purchase",
-        window_months: f.kind === "windows" ? Number(f.windowMonths) : 0,
-        grace_months: f.kind === "windows" ? Number(f.graceMonths) : 0,
-        opened_on: f.kind === "windows" ? f.openedOn : null,
-        grace_all_lost: f.graceAllLost,
-        missed_minimum_period: f.missedMinimumPeriod,
-        pay_by_period_end: f.dueMode === "periodEnd",
-        pay_day: f.dueMode === "day" ? Number(f.payDay) : 0,
-        min_round_up_minor: money(f.minRound) ?? 0,
-        charges_in_full: f.chargesInFull,
-        transfer_categories: f.transferCategories,
-        fees: {
-          monthly_minor: fees.monthly_minor ?? 0,
-          cash_free_minor: fees.cash_free_minor ?? 0,
-          cash_percent: String(num(f.cashPercent || "0")),
-          cash_fixed_minor: fees.cash_fixed_minor ?? 0,
-          transfer_percent: String(num(f.transferPercent || "0")),
-          transfer_fixed_minor: fees.transfer_fixed_minor ?? 0,
-          penalty_daily_percent: String(num(f.penaltyDaily || "0")),
-        },
-        installment: {
-          months: Number(f.installMonths || "0"),
-          monthly_fee_percent: String(num(f.installFeePercent || "0")),
-          fee_minor: money(f.installFee) ?? 0,
-        },
-        cashback: {
-          base_percent: String(num(f.cashbackBase || "0")),
-          categories: f.cashbackCategories.map((c) => ({ category_id: c.id, percent: String(num(c.percent)) })),
-          monthly_cap_minor: cashbackCap ?? 0,
-          points: f.cashbackPoints,
-          credit_days: Number(f.cashbackDays || "0"),
-        },
-        min_percent: String(num(f.minPercent)),
-        min_floor_minor: floor,
-        annual_rate: String(num(f.rate)),
-        own_rate: f.ownRate.trim() === "" ? null : String(num(f.ownRate)),
-      },
-      { onSuccess: onClose },
-    );
+    save.mutate({ ...termsOf(f), catalog: catalogRef }, { onSuccess: onClose });
+  };
+  // A card from the catalog (decision Р-32): its tariff for the contract's
+  // day laid over the form; the person's own (limit, rate) kept.
+  const catalog = useCardCatalog();
+  const [productId, setProductId] = useState(terms?.catalog?.product ?? "");
+  const [contractOn, setContractOn] = useState(terms?.opened_on ?? "");
+  const product = catalog.data?.find((p) => p.id === productId);
+  const version = product ? versionFor(product, contractOn) : undefined;
+  const needsDay = product !== undefined && product.versions.some((v) => v.contracts_from !== null || v.contracts_to !== null);
+  const applyCatalog = () => {
+    if (!product || !version) return;
+    const next = toForm(mergeTerms(termsOf(f), version.terms));
+    if (next.kind === "windows" && contractOn) next.openedOn = contractOn;
+    setF(next);
+    setCatalogRef({ product: product.id, contracts_from: version.contracts_from, revision: version.revision });
   };
   type TextField = { [K in keyof Form]: Form[K] extends string ? K : never }[keyof Form];
   const field = (id: TextField, label: string, hint?: string, type = "text") => (
@@ -749,9 +826,6 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     statement55: t("card.presets.statement55"),
     sber120: t("card.presets.sber120"),
     year: t("card.presets.year"),
-    gpb180: t("card.presets.gpb180"),
-    vtb110: t("card.presets.vtb110"),
-    halva: t("card.presets.halva"),
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -760,6 +834,45 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           <DialogTitle>{t("card.termsTitle")}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-3">
+          <fieldset className="grid gap-2 rounded-md border p-3" data-testid="card-catalog">
+            <legend className="px-1 text-sm font-medium">{t("card.catalogTitle")}</legend>
+            <Select value={productId} onValueChange={setProductId}>
+              <SelectTrigger aria-label={t("card.catalogCard")}>
+                <SelectValue placeholder={t("card.catalogPick")} />
+              </SelectTrigger>
+              <SelectContent>
+                {(catalog.data ?? []).map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.bank} {p.card}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {needsDay && (
+              <div className="grid gap-1">
+                <Label htmlFor="card-contract-on">{t("card.catalogContractOn")}</Label>
+                <Input id="card-contract-on" type="date" value={contractOn} onChange={(e) => setContractOn(e.target.value)} />
+              </div>
+            )}
+            {product && contractOn && !version && <p className="text-xs text-amber-700">{t("card.catalogNoVersion")}</p>}
+            {version && (
+              <div className="grid gap-1 text-xs text-muted-foreground">
+                {version.notes && <p>{version.notes}</p>}
+                <p>
+                  {t("card.catalogChecked", { revision: formatDate(version.revision), checked: formatDate(version.checked_on) })}{" "}
+                  {version.sources.map((u, i) => (
+                    <a key={u} href={u} target="_blank" rel="noreferrer" className="underline">
+                      {t("card.catalogSource", { n: i + 1 })}
+                    </a>
+                  ))}
+                </p>
+              </div>
+            )}
+            <Button type="button" size="sm" variant="outline" className="justify-self-start" disabled={!version} onClick={applyCatalog}>
+              {t("card.catalogApply")}
+            </Button>
+            {catalogRef && <p className="text-xs text-muted-foreground" data-testid="card-catalog-ref">{t("card.catalogFrom")}</p>}
+          </fieldset>
           <div className="grid gap-1">
             <Label>{t("card.preset")}</Label>
             <div className="flex flex-wrap gap-2">

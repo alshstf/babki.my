@@ -1,0 +1,32 @@
+id: vtb-vozmozhnosti
+bank: ВТБ
+card: «Карта возможностей»
+versions:
+  - contracts_from: null
+    contracts_to: null
+    revision: 2026-08-31
+    checked_on: 2026-10-10
+    sources:
+      - https://www.vtb.ru/personal/karty/kreditnye/vozmozhnosti/
+    notes: >-
+      Ставка — от 29,9 до 69,9 % годовых, у каждого своя: укажите свою. Снятие и переводы до 50 000 ₽
+      в первые 30 дней без комиссии. Рассрочка на покупку — 4 % в месяц от суммы.
+    terms:
+      statement_day: 1
+      grace_kind: running
+      grace_days: 110
+      grace_run_from: month_start
+      grace_all_lost: true
+      pay_day: 20
+      min_percent: "3"
+      min_floor_minor: 0
+      min_round_up_minor: 10000
+      installment:
+        months: 0
+        monthly_fee_percent: "4"
+        fee_minor: 0
+      fees:
+        cash_percent: "5.9"
+        cash_fixed_minor: 59000
+        transfer_percent: "5.9"
+        transfer_fixed_minor: 59000

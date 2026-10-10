@@ -45,6 +45,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card/bank", edit(h.handleDeleteBank))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/credit-card/installments/{operationId}", edit(h.handleDeleteInstallment))
 	srv.Mount("GET /api/v1/credit-cards", view(h.handleList))
+	srv.Mount("GET /api/v1/credit-cards/catalog", view(h.handleCatalog))
 }
 
 func accountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -80,50 +81,10 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	t := Terms{
-		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
-		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
-		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
-		MissedMinimumPeriod: req.MissedMinimumPeriod,
-		RunFrom:             RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
-		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
-	}
-	var err error
-	if req.OpenedOn.IsSpecified() && !req.OpenedOn.IsNull() {
-		on, err := time.Parse(time.DateOnly, req.OpenedOn.MustGet())
-		if err != nil {
-			httpjson.Error(w, http.StatusBadRequest, "opened_on must be a date YYYY-MM-DD")
-			return
-		}
-		t.OpenedOn = &on
-	}
-	if t.MinPercent, err = decimal.NewFromString(req.MinPercent); err != nil {
-		httpjson.Error(w, http.StatusBadRequest, "min_percent must be a decimal")
-		return
-	}
-	if t.AnnualRate, err = decimal.NewFromString(req.AnnualRate); err != nil {
-		httpjson.Error(w, http.StatusBadRequest, "annual_rate must be a decimal")
-		return
-	}
-	if t.Fees, err = feesFromAPI(req.Fees); err != nil {
+	t, err := termsFromAPI(id, req)
+	if err != nil {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	if t.Cashback, err = cashbackFromAPI(req.Cashback); err != nil {
-		httpjson.Error(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if t.Installment, err = planFromAPI(req.Installment); err != nil {
-		httpjson.Error(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.OwnRate.IsSpecified() && !req.OwnRate.IsNull() {
-		own, err := decimal.NewFromString(req.OwnRate.MustGet())
-		if err != nil {
-			httpjson.Error(w, http.StatusBadRequest, "own_rate must be a decimal")
-			return
-		}
-		t.OwnRate = &own
 	}
 	if _, err := h.svc.SetTerms(r.Context(), p.SpaceID, t); err != nil {
 		family.WriteError(w, err)
@@ -303,6 +264,91 @@ func InstallmentsExport(plans map[uuid.UUID]Plan) []apitypes.ExportCardInstallme
 	return out
 }
 
+// termsFromAPI reads a card's terms as the API writes them.
+func termsFromAPI(id uuid.UUID, req apitypes.CreditCardTerms) (Terms, error) {
+	t := Terms{
+		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
+		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
+		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
+		MissedMinimumPeriod: req.MissedMinimumPeriod,
+		RunFrom:             RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
+		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
+	}
+	var err error
+	if req.OpenedOn.IsSpecified() && !req.OpenedOn.IsNull() {
+		on, err := time.Parse(time.DateOnly, req.OpenedOn.MustGet())
+		if err != nil {
+			return Terms{}, fmt.Errorf("opened_on must be a date YYYY-MM-DD")
+		}
+		t.OpenedOn = &on
+	}
+	if t.MinPercent, err = decimal.NewFromString(req.MinPercent); err != nil {
+		return Terms{}, fmt.Errorf("min_percent must be a decimal")
+	}
+	if t.AnnualRate, err = decimal.NewFromString(req.AnnualRate); err != nil {
+		return Terms{}, fmt.Errorf("annual_rate must be a decimal")
+	}
+	if t.Fees, err = feesFromAPI(req.Fees); err != nil {
+		return Terms{}, err
+	}
+	if t.Cashback, err = cashbackFromAPI(req.Cashback); err != nil {
+		return Terms{}, err
+	}
+	if t.Installment, err = planFromAPI(req.Installment); err != nil {
+		return Terms{}, err
+	}
+	if req.OwnRate.IsSpecified() && !req.OwnRate.IsNull() {
+		own, err := decimal.NewFromString(req.OwnRate.MustGet())
+		if err != nil {
+			return Terms{}, fmt.Errorf("own_rate must be a decimal")
+		}
+		t.OwnRate = &own
+	}
+	if req.Catalog.IsSpecified() && !req.Catalog.IsNull() {
+		ref := req.Catalog.MustGet()
+		t.Catalog = &CatalogRef{Product: ref.Product, Revision: ref.Revision}
+		if ref.ContractsFrom.IsSpecified() && !ref.ContractsFrom.IsNull() {
+			from := ref.ContractsFrom.MustGet()
+			t.Catalog.ContractsFrom = &from
+		}
+	}
+	return t, nil
+}
+
+func (h *Handler) handleCatalog(w http.ResponseWriter, _ *http.Request) {
+	all, err := Catalog()
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := make([]apitypes.CreditCardCatalogProduct, 0, len(all))
+	for _, p := range all {
+		item := apitypes.CreditCardCatalogProduct{Id: p.ID, Bank: p.Bank, Card: p.Card, Versions: make([]apitypes.CreditCardCatalogVersion, 0, len(p.Versions))}
+		for _, v := range p.Versions {
+			item.Versions = append(item.Versions, apitypes.CreditCardCatalogVersion{
+				ContractsFrom: nullableText(v.ContractsFrom), ContractsTo: nullableText(v.ContractsTo),
+				Revision: v.Revision, CheckedOn: v.CheckedOn, Sources: nonNil(v.Sources), Notes: v.Notes, Terms: v.Terms,
+			})
+		}
+		out = append(out, item)
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func nullableText(s *string) nullable.Nullable[string] {
+	if s == nil {
+		return nullable.NewNullNullable[string]()
+	}
+	return nullable.NewNullableWithValue(*s)
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	id, ok := accountID(w, r)
@@ -424,6 +470,12 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		},
 		Cashback:    cashbackAPI(t.Cashback),
 		Installment: planAPI(t.Installment),
+		Catalog:     nullable.NewNullNullable[apitypes.CreditCardCatalogRef](),
+	}
+	if c := t.Catalog; c != nil {
+		out.Catalog = nullable.NewNullableWithValue(apitypes.CreditCardCatalogRef{
+			Product: c.Product, ContractsFrom: nullableText(c.ContractsFrom), Revision: c.Revision,
+		})
 	}
 	if out.TransferCategories == nil {
 		out.TransferCategories = []uuid.UUID{}
@@ -434,7 +486,19 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 func cardAPI(c Card) apitypes.CreditCard {
 	out := apitypes.CreditCard{
 		Terms: TermsAPI(c.Terms), Status: statusAPI(c.Status), ByJournal: c.ByJournal,
-		Benefit: nullable.NewNullNullable[apitypes.CreditCardBenefit](),
+		Benefit:       nullable.NewNullNullable[apitypes.CreditCardBenefit](),
+		CatalogUpdate: nullable.NewNullNullable[apitypes.CreditCardCatalogUpdate](),
+	}
+	if v, changes := catalogUpdate(c.Terms); v != nil {
+		p, _ := productByID(c.Terms.Catalog.Product)
+		u := apitypes.CreditCardCatalogUpdate{
+			Product: p.ID, Bank: p.Bank, Card: p.Card, Revision: v.Revision, Sources: nonNil(v.Sources),
+			Changes: make([]apitypes.CreditCardCatalogChange, 0, len(changes)),
+		}
+		for _, ch := range changes {
+			u.Changes = append(u.Changes, apitypes.CreditCardCatalogChange{Field: ch.Field, Ours: ch.Ours, Theirs: ch.Theirs})
+		}
+		out.CatalogUpdate = nullable.NewNullableWithValue(u)
 	}
 	if b := c.Benefit; b != nil {
 		out.Benefit = nullable.NewNullableWithValue(apitypes.CreditCardBenefit{

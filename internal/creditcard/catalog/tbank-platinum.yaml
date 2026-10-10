@@ -1,0 +1,28 @@
+id: tbank-platinum
+bank: Т-Банк
+card: «Платинум»
+versions:
+  - contracts_from: null
+    contracts_to: null
+    revision: 2026-09-30
+    checked_on: 2026-10-10
+    sources:
+      - https://cdn.tbank.ru/static/documents/credit_cards-tariffs-platinum.pdf
+      - https://www.tbank.ru/cards/credit-cards/platinum/tariffs/
+    notes: >-
+      Ставка (29,9–61,9 %) и минимальный платёж (до 14 % долга) — у каждого свои: банк пишет их в
+      выписке, их удобно вносить в «Что пишет банк». День выписки и дата платежа — тоже в выписке.
+      Обслуживание 290–590 ₽ в год, переводы через сервисы банка до 80 000 ₽ за период бесплатно —
+      программа пока этого не учитывает (#462). Неустойка — 20 % годовых.
+    terms:
+      grace_kind: statement
+      payment_days: 25
+      missed_minimum_period: true
+      min_floor_minor: 60000
+      min_round_up_minor: 10000
+      fees:
+        cash_percent: "4.9"
+        cash_fixed_minor: 49000
+        transfer_percent: "4.9"
+        transfer_fixed_minor: 49000
+        penalty_daily_percent: "0.0548"
