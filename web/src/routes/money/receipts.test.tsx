@@ -66,6 +66,20 @@ describe("ReceiptsCard", () => {
     expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "POST")).toBe(false);
   });
 
+  it("says what was shared from a phone", async () => {
+    answer("owner", []);
+    window.history.replaceState(null, "", "/money?shared=2.1.1.0.0.1");
+    show(<ReceiptsCard />);
+    expect(norm((await screen.findByTestId("receipts-shared")).textContent)).toBe(
+      "Прислано с телефона. Чеков: 2. Дописано к тратам: 1. Разделено по категориям: 1. Ждут траты: 1.",
+    );
+    cleanup();
+    window.history.replaceState(null, "", "/money?shared=none");
+    show(<ReceiptsCard />);
+    expect((await screen.findByTestId("receipts-shared")).textContent).toMatch(/не нашлось чека/);
+    window.history.replaceState(null, "", "/");
+  });
+
   it("is nothing for a viewer with no receipt waiting", async () => {
     answer("viewer", []);
     show(<ReceiptsCard />);

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
+import { useWaitingReceipts } from "@/api/receipts";
 import { CashDialog } from "@/routes/accounts/cash-dialog";
 
 // The account the last quick entry went to, in this browser only: a
@@ -14,9 +15,13 @@ const LAST_ACCOUNT = "babki.quickAdd.account";
 // own page.
 const EVERYDAY: AccountWithBalance["type"][] = ["credit_card", "checking", "cash", "savings", "deposit"];
 
-// The installed app's shortcut «Добавить операцию» starts it at /?add. Read
-// once, as the bundle loads, before the router's redirect drops the query.
-const startedToAdd = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("add");
+// The installed app's shortcut «Добавить операцию» starts it at /?add, and a
+// photo of a receipt shared to the app at /?add&receipt=<id> — the receipt
+// left waiting for its row. Read once, as the bundle loads, before the
+// router's redirect drops the query.
+const started = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+const startedToAdd = started.has("add");
+const sharedReceipt = startedToAdd ? started.get("receipt") : null;
 
 function lastAccount(): string | null {
   try {
@@ -41,6 +46,10 @@ export function QuickAdd() {
   const { t } = useTranslation();
   const accounts = useAccounts();
   const [open, setOpen] = useState(startedToAdd);
+  // The shared receipt fills the first opening only.
+  const [sharedId, setSharedId] = useState(sharedReceipt);
+  const waiting = useWaitingReceipts(sharedId !== null);
+  const shared = waiting.data?.find((r) => r.id === sharedId);
   const everyday = (accounts.data ?? [])
     .filter((a) => a.status === "active" && EVERYDAY.includes(a.type))
     .sort((a, b) => EVERYDAY.indexOf(a.type) - EVERYDAY.indexOf(b.type));
@@ -63,11 +72,15 @@ export function QuickAdd() {
       </Button>
       <CashDialog
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setSharedId(null);
+        }}
         account={account}
         accounts={everyday}
         preset="expense"
         onSaved={(op) => rememberAccount(op.account_id)}
+        waiting={shared}
       />
     </>
   );

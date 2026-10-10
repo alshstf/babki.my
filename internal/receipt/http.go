@@ -43,6 +43,9 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/receipts/import", edit(h.handleImport))
 	srv.Mount("POST /api/v1/receipts/{receiptId}/split", edit(h.handleResplit))
 	srv.Mount("PUT /api/v1/receipts/{receiptId}/operation", edit(h.handleAttach))
+	// «Поделиться» on a phone is a navigation: one not signed in goes to the
+	// sign-in page rather than to an error.
+	srv.Mount("POST /share", h.sm.LoadAndSave(toSignIn(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleShare))))))
 }
 
 func (h *Handler) handleMatch(w http.ResponseWriter, r *http.Request) {
@@ -238,4 +241,34 @@ func match(op operation.Operation) apitypes.ReceiptMatch {
 		Id: op.ID, AccountId: op.AccountID, OccurredOn: op.OccurredOn.Format(time.DateOnly),
 		AmountMinor: op.AmountMinor, Currency: op.Currency,
 	}
+}
+
+// toSignIn turns a refusal for want of a session into the sign-in page.
+func toSignIn(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&signInRedirect{ResponseWriter: w, r: r}, r)
+	})
+}
+
+type signInRedirect struct {
+	http.ResponseWriter
+	r        *http.Request
+	redirect bool
+}
+
+func (w *signInRedirect) WriteHeader(code int) {
+	if code == http.StatusUnauthorized {
+		w.redirect = true
+		w.Header().Del("Content-Type")
+		http.Redirect(w.ResponseWriter, w.r, "/login", http.StatusSeeOther)
+		return
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *signInRedirect) Write(b []byte) (int, error) {
+	if w.redirect {
+		return len(b), nil
+	}
+	return w.ResponseWriter.Write(b)
 }

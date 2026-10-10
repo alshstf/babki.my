@@ -10,6 +10,18 @@ import { formatDate } from "@/lib/dates";
 import { formatMinor } from "@/lib/money";
 import { MailboxSection } from "./mailbox";
 
+// What was shared to the installed app from a phone and landed here
+// (/money?shared=…): the counts of the receipts it brought, or "bad" for
+// what could not be read, "none" for no receipt in it.
+function sharedResult(search: string): ReceiptImportResult | "bad" | "none" | null {
+  const v = new URLSearchParams(search).get("shared");
+  if (v === "bad" || v === "none") return v;
+  const n = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(v ?? "")?.slice(1).map(Number);
+  if (!n) return null;
+  const [found, attached, waiting, enriched, known, split] = n;
+  return { found, attached, waiting, enriched, known, split };
+}
+
 // ReceiptsCard takes a statement of the tax service's app «Проверка чеков»
 // (decision Р-34) and lists the receipts still waiting for a row. A viewer
 // sees the waiting ones only, and nothing while there are none.
@@ -22,6 +34,7 @@ export function ReceiptsCard() {
   const file = useRef<HTMLInputElement>(null);
   const [badFile, setBadFile] = useState(false);
   const [result, setResult] = useState<ReceiptImportResult | null>(null);
+  const [shared] = useState(() => sharedResult(window.location.search));
   const list = waiting.data ?? [];
   if (!canEdit && list.length === 0) return null;
 
@@ -38,6 +51,19 @@ export function ReceiptsCard() {
     }
     importReceipts.mutate(statement, { onSuccess: setResult });
   };
+
+  // What a statement or a share brought, after the line with how many came.
+  const told = (r: ReceiptImportResult, first: string) =>
+    [
+      first,
+      r.attached > 0 && t("receipts.attached", { n: r.attached }),
+      r.enriched > 0 && t("receipts.enriched", { n: r.enriched }),
+      r.split > 0 && t("receipts.split", { n: r.split }),
+      r.waiting > 0 && t("receipts.waitingCount", { n: r.waiting }),
+      r.known > 0 && t("receipts.known", { n: r.known }),
+    ]
+      .filter(Boolean)
+      .join(" ");
 
   return (
     <Card data-testid="money-receipts">
@@ -83,20 +109,18 @@ export function ReceiptsCard() {
             <AlertDescription>{t("receipts.failed")}</AlertDescription>
           </Alert>
         )}
+        {canEdit && shared && (
+          <Alert variant={shared === "bad" || shared === "none" ? "destructive" : "default"} data-testid="receipts-shared">
+            <AlertDescription>
+              {shared === "bad" || shared === "none"
+                ? t(`receipts.shared.${shared}`)
+                : `${t("receipts.shared.title")} ${told(shared, t("receipts.shared.found", { n: shared.found }))}`}
+            </AlertDescription>
+          </Alert>
+        )}
         {result && (
           <p className="text-sm" data-testid="receipts-result">
-            {result.found === 0
-              ? t("receipts.none")
-              : [
-                  t("receipts.found", { n: result.found }),
-                  result.attached > 0 && t("receipts.attached", { n: result.attached }),
-                  result.enriched > 0 && t("receipts.enriched", { n: result.enriched }),
-                  result.split > 0 && t("receipts.split", { n: result.split }),
-                  result.waiting > 0 && t("receipts.waitingCount", { n: result.waiting }),
-                  result.known > 0 && t("receipts.known", { n: result.known }),
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
+            {result.found === 0 ? t("receipts.none") : told(result, t("receipts.found", { n: result.found }))}
           </p>
         )}
         {canEdit && <MailboxSection />}
