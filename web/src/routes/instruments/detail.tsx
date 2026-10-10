@@ -23,6 +23,7 @@ import { InstrumentEditDialog } from "@/routes/settings/instruments/edit-dialog"
 import type { Instrument } from "@/api/instruments";
 import { PriceChart } from "./price-chart";
 import { PaperOperations } from "./paper-operations";
+import { PaperPayouts } from "./paper-payouts";
 import { PaperReturn } from "@/routes/accounts/account-return";
 import { priceText } from "./price-text";
 
@@ -255,6 +256,10 @@ export function InstrumentPage() {
           </>
         )}
       </div>
+
+      {holdings.data.holdings.length > 0 && (
+        <PaperPayouts instrumentId={instrumentId} accountName={(id) => accountOf.get(id)?.name} />
+      )}
 
       {holdings.data.holdings.length > 0 && (
         <div className="grid gap-2">

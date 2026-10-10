@@ -3099,6 +3099,8 @@ export interface operations {
                 months?: number;
                 /** @description Only this account's; absent, every active account of the family */
                 account_id?: string;
+                /** @description Only this paper's */
+                instrument_id?: string;
             };
             header?: never;
             path?: never;

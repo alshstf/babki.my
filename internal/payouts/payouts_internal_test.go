@@ -102,7 +102,7 @@ func TestTheForecastCarriesTodaysHoldingsForward(t *testing.T) {
 
 	svc := NewService(opStore, accStore, md, fam, marketdata.NewConverter(md))
 	svc.now = func() time.Time { return day(t, "2026-10-10") }
-	f, err := svc.Forecast(ctx, sp.ID, 12, nil)
+	f, err := svc.Forecast(ctx, sp.ID, 12, Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,15 @@ func TestTheForecastCarriesTodaysHoldingsForward(t *testing.T) {
 	if f.Total != 35_400+91_800 || f.ByMonth[1] != 35_400 || f.ByMonth[2] != 91_800 {
 		t.Errorf("total %d, by month %v", f.Total, f.ByMonth)
 	}
-	if _, err := svc.Forecast(ctx, sp.ID, 25, nil); err == nil {
+	if _, err := svc.Forecast(ctx, sp.ID, 25, Scope{}); err == nil {
 		t.Error("a 25-month forecast was accepted")
+	}
+	// One paper's own payouts, as its page shows them.
+	only, err := svc.Forecast(ctx, sp.ID, 12, Scope{InstrumentID: &ko})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(only.Events) != 1 || only.Events[0].Kind != KindDividend || only.Total != 91_800 {
+		t.Errorf("Coca-Cola's own = %+v, total %d", only.Events, only.Total)
 	}
 }
