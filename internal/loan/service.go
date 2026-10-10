@@ -74,7 +74,33 @@ func (s *Service) Terms(ctx context.Context, spaceID, accountID uuid.UUID) (Term
 	if err != nil {
 		return Terms{}, fmt.Errorf("loan: terms: %w", err)
 	}
+	pre, err := s.prepayments(ctx, spaceID, &accountID)
+	if err != nil {
+		return Terms{}, err
+	}
+	t.Prepayments = pre[accountID]
 	return t, nil
+}
+
+// prepayments are the space's prepayments by loan, or one loan's.
+func (s *Service) prepayments(ctx context.Context, spaceID uuid.UUID, accountID *uuid.UUID) (map[uuid.UUID][]Prepayment, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, account_id, paid_on, amount_minor, mode FROM loan_prepayments
+		WHERE space_id = $1 AND ($2::uuid IS NULL OR account_id = $2) ORDER BY paid_on, created_at`, spaceID, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("loan: prepayments: %w", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID][]Prepayment{}
+	for rows.Next() {
+		var p Prepayment
+		var account uuid.UUID
+		if err := rows.Scan(&p.ID, &account, &p.On, &p.Amount, &p.Mode); err != nil {
+			return nil, fmt.Errorf("loan: prepayments: %w", err)
+		}
+		out[account] = append(out[account], p)
+	}
+	return out, rows.Err()
 }
 
 // All is every loan's terms in the space.
@@ -94,7 +120,18 @@ func (s *Service) All(ctx context.Context, spaceID uuid.UUID) ([]Terms, error) {
 		}
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("loan: all: %w", err)
+	}
+	rows.Close()
+	pre, err := s.prepayments(ctx, spaceID, nil)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Prepayments = pre[out[i].AccountID]
+	}
+	return out, nil
 }
 
 // SetTerms states or restates a loan account's terms.
@@ -198,6 +235,70 @@ func (s *Service) interestCategory(ctx context.Context, spaceID uuid.UUID) *uuid
 			id := c.ID
 			return &id
 		}
+	}
+	return nil
+}
+
+// Prepay is debt paid ahead of the schedule from another account of the
+// loan's currency.
+type Prepay struct {
+	LoanAccountID uuid.UUID
+	FromAccountID uuid.UUID
+	OccurredOn    time.Time
+	Amount        int64
+	Mode          Mode
+}
+
+// RecordPrepayment moves the money to the loan's account — a transfer, as the
+// debt part of every payment — and notes it for the schedule. Should the
+// note be refused, the transfer is taken back.
+func (s *Service) RecordPrepayment(ctx context.Context, spaceID uuid.UUID, p Prepay) (Prepayment, error) {
+	if p.Amount <= 0 {
+		return Prepayment{}, fmt.Errorf("%w: a prepayment repays some debt", family.ErrValidation)
+	}
+	if p.Mode != Shorter && p.Mode != Lower {
+		return Prepayment{}, fmt.Errorf("%w: a prepayment shortens the term or lowers the payment", family.ErrValidation)
+	}
+	if _, err := s.Terms(ctx, spaceID, p.LoanAccountID); err != nil {
+		return Prepayment{}, err
+	}
+	loanAcc, err := s.loanAccount(ctx, spaceID, p.LoanAccountID)
+	if err != nil {
+		return Prepayment{}, err
+	}
+	from, err := s.accounts.ByID(ctx, spaceID, p.FromAccountID)
+	if err != nil {
+		return Prepayment{}, err
+	}
+	if from.Currency != loanAcc.Currency {
+		return Prepayment{}, fmt.Errorf("%w: the loan is in %s and the paying account in %s", family.ErrValidation, loanAcc.Currency, from.Currency)
+	}
+	out, _, err := s.journal.CreateMoneyTransfer(ctx, spaceID, operation.MoneyTransferParams{
+		FromAccountID: p.FromAccountID, ToAccountID: p.LoanAccountID, OccurredOn: p.OccurredOn,
+		AmountMinor: p.Amount, Currency: from.Currency,
+	})
+	if err != nil {
+		return Prepayment{}, err
+	}
+	pre := Prepayment{ID: uuid.New(), On: p.OccurredOn, Amount: p.Amount, Mode: p.Mode}
+	_, err = s.db.Exec(ctx, `INSERT INTO loan_prepayments (id, account_id, space_id, paid_on, amount_minor, mode)
+		VALUES ($1, $2, $3, $4, $5, $6)`, pre.ID, p.LoanAccountID, spaceID, pre.On, pre.Amount, pre.Mode)
+	if err != nil {
+		_ = s.journal.Delete(ctx, spaceID, out.ID)
+		return Prepayment{}, fmt.Errorf("loan: prepayment: %w", err)
+	}
+	return pre, nil
+}
+
+// DeletePrepayment forgets a prepayment for the schedule; the money moved
+// stays in the journal until deleted there.
+func (s *Service) DeletePrepayment(ctx context.Context, spaceID, accountID, id uuid.UUID) error {
+	ct, err := s.db.Exec(ctx, `DELETE FROM loan_prepayments WHERE space_id = $1 AND account_id = $2 AND id = $3`, spaceID, accountID, id)
+	if err != nil {
+		return fmt.Errorf("loan: delete prepayment: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

@@ -189,7 +189,8 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int) (Forecast
 			return Forecast{}, err
 		}
 		for _, r := range rows {
-			if r.On.Before(today) || !r.On.Before(end) {
+			// A prepayment is money already moved, in the journal.
+			if r.Prepaid || r.On.Before(today) || !r.On.Before(end) {
 				continue
 			}
 			events = append(events, Event{On: r.On, Name: a.Name, Kind: KindLoan, AccountID: a.ID, Amount: -r.Payment, Currency: a.Currency})

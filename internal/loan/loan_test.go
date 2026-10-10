@@ -64,3 +64,64 @@ func TestTheScheduleIsWorkedOutMonthByMonth(t *testing.T) {
 		t.Error("a zero-month loan was accepted")
 	}
 }
+
+// A million at 12% for a year, 300 000 paid ahead after the third payment:
+// lowering the payment keeps the twelve months with a smaller one; shortening
+// the term keeps the payment and ends sooner. Either way the debt ends at
+// nought and every rouble borrowed is repaid once.
+func TestAPrepaymentReshapesTheSchedule(t *testing.T) {
+	base := terms(loan.Annuity, "12")
+	plain, err := loan.Schedule(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(name string, rows []loan.Row) {
+		t.Helper()
+		var repaid int64
+		for _, r := range rows {
+			repaid += r.Principal
+		}
+		if repaid != base.Principal || rows[len(rows)-1].Left != 0 {
+			t.Errorf("%s: repaid %d of %d, left %d", name, repaid, base.Principal, rows[len(rows)-1].Left)
+		}
+	}
+	for _, mode := range []loan.Mode{loan.Lower, loan.Shorter} {
+		withPrepayment := base
+		withPrepayment.Prepayments = []loan.Prepayment{{On: time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC), Amount: 30_000_000, Mode: mode}}
+		rows, err := loan.Schedule(withPrepayment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(string(mode), rows)
+		if !rows[3].Prepaid || rows[3].Principal != 30_000_000 || rows[3].Interest != 0 || rows[3].Left != plain[2].Left-30_000_000 {
+			t.Fatalf("%s: the prepayment row = %+v", mode, rows[3])
+		}
+		regular := rows[4:]
+		switch mode {
+		case loan.Lower:
+			if len(regular) != 9 || regular[0].Payment >= plain[3].Payment || regular[0].Payment != regular[7].Payment {
+				t.Errorf("lower: %d months, payment %d then %d (was %d)", len(regular), regular[0].Payment, regular[7].Payment, plain[3].Payment)
+			}
+		case loan.Shorter:
+			if len(regular) >= 9 || regular[0].Payment != plain[3].Payment {
+				t.Errorf("shorter: %d months, payment %d (was %d)", len(regular), regular[0].Payment, plain[3].Payment)
+			}
+		}
+	}
+
+	// More than the debt ends the loan there; one before the first payment
+	// comes off at once.
+	early := base
+	early.Prepayments = []loan.Prepayment{
+		{On: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), Amount: 10_000_000, Mode: loan.Lower},
+		{On: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), Amount: 999_999_999, Mode: loan.Shorter},
+	}
+	rows, err := loan.Schedule(early)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("early and too much", rows)
+	if !rows[0].Prepaid || rows[0].Left != 90_000_000 || !rows[len(rows)-1].Prepaid || len(rows) != 6 {
+		t.Errorf("rows = %+v", rows)
+	}
+}

@@ -54,3 +54,44 @@ export function useRecordLoanPayment(accountId: string) {
     onSuccess: (_, body) => invalidate([accountId, body.from_account_id]),
   });
 }
+
+export type LoanPrepayment = components["schemas"]["LoanPrepayment"];
+export type LoanPrepaymentBody = components["schemas"]["LoanPrepaymentRequest"];
+
+// Debt paid ahead of the schedule: a transfer to the loan and a note that
+// reshapes the schedule.
+export function useRecordPrepayment(accountId: string) {
+  const queryClient = useQueryClient();
+  const invalidate = useInvalidateJournal();
+  return useMutation({
+    mutationFn: async (body: LoanPrepaymentBody): Promise<LoanPrepayment> => {
+      const { data, error, response } = await api.POST("/api/v1/accounts/{accountId}/loan/prepayments", {
+        params: { path: { accountId } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (_data, body) => {
+      invalidate([accountId, body.from_account_id]);
+      void queryClient.invalidateQueries({ queryKey: ["loan", accountId] });
+    },
+  });
+}
+
+// Forgets a prepayment for the schedule; its transfer stays in the journal.
+export function useDeletePrepayment(accountId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (prepaymentId: string) => {
+      const { error, response } = await api.DELETE("/api/v1/accounts/{accountId}/loan/prepayments/{prepaymentId}", {
+        params: { path: { accountId, prepaymentId } },
+      });
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["loan", accountId] });
+      void queryClient.invalidateQueries({ queryKey: ["forecast"] });
+    },
+  });
+}

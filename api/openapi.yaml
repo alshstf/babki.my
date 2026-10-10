@@ -95,6 +95,46 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/loan/prepayments:
+    post:
+      tags: [loans]
+      operationId: recordLoanPrepayment
+      description: >-
+        Pays debt ahead of the schedule (#429) from another account of the loan's currency: a transfer to
+        the loan's account, as the debt part of a payment, and a note that reshapes the schedule — the
+        payment worked out anew for the months left (mode payment) or kept, ending the loan sooner (term).
+        Should the note be refused, the transfer is taken back.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoanPrepaymentRequest" }
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoanPrepayment" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/loan/prepayments/{prepaymentId}:
+    delete:
+      tags: [loans]
+      operationId: deleteLoanPrepayment
+      description: Forgets a prepayment for the schedule; the transfer stays in the journal until deleted there.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: prepaymentId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Forgotten }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/loan/payments:
     post:
       tags: [loans]
@@ -2639,7 +2679,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated, loan, credit_card]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -2664,6 +2704,10 @@ components:
           type: array
           description: "Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first"
           items: { $ref: "#/components/schemas/ExportWithheldStated" }
+        loan_prepayments:
+          type: array
+          description: "A loan's prepayments (POST /accounts/{accountId}/loan/prepayments), oldest first; empty on every other account"
+          items: { $ref: "#/components/schemas/LoanPrepayment" }
         loan:
           nullable: true
           description: "A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account"
@@ -2834,13 +2878,14 @@ components:
         kind: { type: string, enum: [annuity, differentiated], description: "Equal payments, or an equal part of the debt plus the interest on what is left" }
     LoanRow:
       type: object
-      required: [on, payment_minor, interest_minor, principal_minor, left_minor]
+      required: [on, payment_minor, interest_minor, principal_minor, left_minor, prepaid]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD" }
         payment_minor: { type: integer, format: int64 }
         interest_minor: { type: integer, format: int64 }
         principal_minor: { type: integer, format: int64 }
         left_minor: { type: integer, format: int64, description: "The debt after this payment" }
+        prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
       required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate]
@@ -2987,7 +3032,7 @@ components:
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
     Loan:
       type: object
-      required: [terms, schedule, left_by_schedule_minor, next, total_interest_minor]
+      required: [terms, schedule, left_by_schedule_minor, next, total_interest_minor, prepayments]
       properties:
         terms: { $ref: "#/components/schemas/LoanTerms" }
         schedule: { type: array, items: { $ref: "#/components/schemas/LoanRow" } }
@@ -2998,6 +3043,23 @@ components:
           allOf:
             - $ref: "#/components/schemas/LoanRow"
         total_interest_minor: { type: integer, format: int64, description: "All the interest the schedule charges" }
+        prepayments: { type: array, items: { $ref: "#/components/schemas/LoanPrepayment" }, description: "Debt paid ahead of the schedule, oldest first; each reshapes it" }
+    LoanPrepayment:
+      type: object
+      required: [id, on, amount_minor, mode]
+      properties:
+        id: { type: string, format: uuid }
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        amount_minor: { type: integer, format: int64 }
+        mode: { type: string, enum: [term, payment], description: "term: the payment stays and the loan ends sooner; payment: the end stays and the payment is lower" }
+    LoanPrepaymentRequest:
+      type: object
+      required: [from_account_id, occurred_on, amount_minor, mode]
+      properties:
+        from_account_id: { type: string, format: uuid }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        amount_minor: { type: integer, format: int64, minimum: 1 }
+        mode: { type: string, enum: [term, payment] }
     LoanPaymentRequest:
       type: object
       required: [from_account_id, occurred_on, principal_minor, interest_minor]

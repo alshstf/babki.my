@@ -40,6 +40,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/accounts/{accountId}/loan", edit(h.handlePut))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/loan", edit(h.handleDelete))
 	srv.Mount("POST /api/v1/accounts/{accountId}/loan/payments", edit(h.handlePayment))
+	srv.Mount("POST /api/v1/accounts/{accountId}/loan/prepayments", edit(h.handlePrepayment))
+	srv.Mount("DELETE /api/v1/accounts/{accountId}/loan/prepayments/{prepaymentId}", edit(h.handleDeletePrepayment))
 }
 
 func accountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -139,6 +141,58 @@ func (h *Handler) handlePayment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
+func (h *Handler) handlePrepayment(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := accountID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.LoanPrepaymentRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	on, err := time.Parse(time.DateOnly, req.OccurredOn)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "occurred_on must be YYYY-MM-DD")
+		return
+	}
+	pre, err := h.svc.RecordPrepayment(r.Context(), p.SpaceID, Prepay{
+		LoanAccountID: id, FromAccountID: req.FromAccountId, OccurredOn: on, Amount: req.AmountMinor, Mode: Mode(req.Mode),
+	})
+	if errors.Is(err, operation.ErrInconsistent) {
+		httpjson.Error(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusCreated, PrepaymentAPI(pre))
+}
+
+func (h *Handler) handleDeletePrepayment(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := accountID(w, r)
+	if !ok {
+		return
+	}
+	pre, err := uuid.Parse(r.PathValue("prepaymentId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "prepaymentId must be a uuid")
+		return
+	}
+	if err := h.svc.DeletePrepayment(r.Context(), p.SpaceID, id, pre); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PrepaymentAPI is a prepayment as the API and the export write it.
+func PrepaymentAPI(p Prepayment) apitypes.LoanPrepayment {
+	return apitypes.LoanPrepayment{Id: p.ID, On: p.On.Format(time.DateOnly), AmountMinor: p.Amount, Mode: apitypes.LoanPrepaymentMode(p.Mode)}
+}
+
 // writeLoan answers the terms with the schedule and where it stands today.
 func (h *Handler) writeLoan(w http.ResponseWriter, status int, t Terms) {
 	rows, err := Schedule(t)
@@ -151,21 +205,29 @@ func (h *Handler) writeLoan(w http.ResponseWriter, status int, t Terms) {
 	out := apitypes.Loan{
 		Terms:               TermsAPI(t),
 		Schedule:            make([]apitypes.LoanRow, 0, len(rows)),
+		Prepayments:         make([]apitypes.LoanPrepayment, 0, len(t.Prepayments)),
 		LeftByScheduleMinor: t.Principal,
 		Next:                nullable.NewNullNullable[apitypes.LoanRow](),
 	}
 	for _, row := range rows {
 		api := apitypes.LoanRow{
 			On: row.On.Format(time.DateOnly), PaymentMinor: row.Payment, InterestMinor: row.Interest,
-			PrincipalMinor: row.Principal, LeftMinor: row.Left,
+			PrincipalMinor: row.Principal, LeftMinor: row.Left, Prepaid: row.Prepaid,
 		}
 		out.Schedule = append(out.Schedule, api)
 		out.TotalInterestMinor += row.Interest
-		if row.On.Before(today) {
+		switch {
+		// A prepayment is made when recorded: today's counts already.
+		case row.On.Before(today) || row.Prepaid && row.On.Equal(today):
 			out.LeftByScheduleMinor = row.Left
-		} else if !out.Next.IsSpecified() || out.Next.IsNull() {
+		case row.Prepaid:
+			// A prepayment dated ahead is not a payment due.
+		case !out.Next.IsSpecified() || out.Next.IsNull():
 			out.Next = nullable.NewNullableWithValue(api)
 		}
+	}
+	for _, p := range t.Prepayments {
+		out.Prepayments = append(out.Prepayments, PrepaymentAPI(p))
 	}
 	httpjson.Write(w, status, out)
 }

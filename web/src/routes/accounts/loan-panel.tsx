@@ -27,10 +27,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
-import { useLoan, useRecordLoanPayment, useSetLoanTerms, type Loan, type LoanTerms } from "@/api/loans";
+import {
+  useDeletePrepayment,
+  useLoan,
+  useRecordLoanPayment,
+  useRecordPrepayment,
+  useSetLoanTerms,
+  type Loan,
+  type LoanTerms,
+} from "@/api/loans";
 import { useSaveOperation } from "@/api/operations";
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
+import { cn } from "@/lib/utils";
 
 // LoanPanel is a loan account's terms and schedule: the next payment, the debt
 // the schedule leaves, the interest it charges in all, and a way to record a
@@ -40,6 +49,8 @@ export function LoanPanel({ account, canEdit }: { account: AccountWithBalance; c
   const loan = useLoan(account.id, true);
   const [editing, setEditing] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [prepaying, setPrepaying] = useState(false);
+  const forget = useDeletePrepayment(account.id);
   const [showAll, setShowAll] = useState(false);
   const issue = useSaveOperation();
   const data = loan.data;
@@ -125,10 +136,31 @@ export function LoanPanel({ account, canEdit }: { account: AccountWithBalance; c
           <Button size="sm" onClick={() => setPaying(true)} disabled={!data.next}>
             {t("loan.pay")}
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setPrepaying(true)} disabled={data.left_by_schedule_minor <= 0}>
+            {t("loan.prepay")}
+          </Button>
           <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
             {t("loan.editTerms")}
           </Button>
         </div>
+      )}
+      {data.prepayments.length > 0 && (
+        <ul className="grid gap-1 text-sm" data-testid="loan-prepayments">
+          {data.prepayments.map((p) => (
+            <li key={p.id} className="flex flex-wrap items-center gap-2 text-muted-foreground">
+              {t("loan.prepaid", {
+                date: formatDate(p.on),
+                amount: formatMinor(p.amount_minor, c),
+                mode: p.mode === "term" ? t("loan.modeTerm") : t("loan.modePayment"),
+              })}
+              {canEdit && (
+                <Button variant="ghost" size="sm" disabled={forget.isPending} onClick={() => forget.mutate(p.id)}>
+                  {t("loan.forgetPrepayment")}
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
       <div className="overflow-x-auto">
         <Table>
@@ -143,8 +175,11 @@ export function LoanPanel({ account, canEdit }: { account: AccountWithBalance; c
           </TableHeader>
           <TableBody>
             {rows.map((r) => (
-              <TableRow key={r.on} data-testid="loan-row">
-                <TableCell>{formatDate(r.on)}</TableCell>
+              <TableRow key={`${r.on}-${r.prepaid}`} data-testid="loan-row" className={cn(r.prepaid && "text-emerald-700 dark:text-emerald-400")}>
+                <TableCell>
+                  {formatDate(r.on)}
+                  {r.prepaid && <div className="text-xs">{t("loan.prepaidRow")}</div>}
+                </TableCell>
                 <TableCell className="text-right tabular-nums">{formatMinor(r.payment_minor, c)}</TableCell>
                 <TableCell className="hidden text-right tabular-nums sm:table-cell">{formatMinor(r.interest_minor, c)}</TableCell>
                 <TableCell className="hidden text-right tabular-nums sm:table-cell">{formatMinor(r.principal_minor, c)}</TableCell>
@@ -155,11 +190,12 @@ export function LoanPanel({ account, canEdit }: { account: AccountWithBalance; c
         </Table>
       </div>
       <Button variant="link" size="sm" className="justify-self-start p-0" onClick={() => setShowAll(!showAll)}>
-        {showAll ? t("loan.showNext") : t("loan.showAll", { count: data.schedule.length })}
+        {showAll ? t("loan.showNext") : t("loan.showAll", { count: data.schedule.filter((r) => !r.prepaid).length })}
       </Button>
       <p className="text-xs text-muted-foreground">{t("loan.hint")}</p>
       {editing && <TermsDialog account={account} loan={data} onClose={() => setEditing(false)} />}
       {paying && data.next && <PaymentDialog account={account} loan={data} onClose={() => setPaying(false)} />}
+      {prepaying && <PrepaymentDialog account={account} onClose={() => setPrepaying(false)} />}
     </div>
   );
 }
@@ -240,15 +276,100 @@ function TermsDialog({ account, loan, onClose }: { account: AccountWithBalance; 
 
 const PAYER_ORDER: AccountWithBalance["type"][] = ["checking", "credit_card", "savings", "cash", "deposit"];
 
+// payersOf are the accounts a loan can be paid from: the same currency, a
+// current account first — that is where a loan is usually paid from.
+function payersOf(account: AccountWithBalance, all: AccountWithBalance[]): AccountWithBalance[] {
+  return all
+    .filter((a) => a.id !== account.id && a.currency === account.currency && a.status === "active" && PAYER_ORDER.includes(a.type))
+    .sort((a, b) => PAYER_ORDER.indexOf(a.type) - PAYER_ORDER.indexOf(b.type));
+}
+
+// PrepaymentDialog pays debt ahead of the schedule (#429): a transfer to the
+// loan, and what the bank does with it — a lower payment or a shorter term.
+function PrepaymentDialog({ account, onClose }: { account: AccountWithBalance; onClose: () => void }) {
+  const { t } = useTranslation();
+  const accounts = useAccounts();
+  const record = useRecordPrepayment(account.id);
+  const payers = payersOf(account, accounts.data ?? []);
+  const [picked, setFrom] = useState("");
+  const from = picked || (payers[0]?.id ?? "");
+  const [on, setOn] = useState(localToday());
+  const [amount, setAmount] = useState("");
+  const [mode, setMode] = useState<"term" | "payment">("term");
+  const minor = parseToMinor(amount);
+  const valid = from !== "" && on !== "" && minor !== null && minor > 0;
+  const submit = () => {
+    if (!valid || minor === null) return;
+    record.mutate({ from_account_id: from, occurred_on: on, amount_minor: minor, mode }, { onSuccess: onClose });
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-sm" data-testid="loan-prepayment-dialog">
+        <DialogHeader>
+          <DialogTitle>{t("loan.prepayTitle")}</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-1">
+            <Label>{t("loan.from")}</Label>
+            <Select value={from} onValueChange={setFrom}>
+              <SelectTrigger aria-label={t("loan.from")}>
+                <SelectValue placeholder={t("loan.noPayers")} />
+              </SelectTrigger>
+              <SelectContent>
+                {payers.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="loan-prepay-date">{t("loan.payDate")}</Label>
+            <Input id="loan-prepay-date" type="date" value={on} onChange={(e) => setOn(e.target.value)} />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="loan-prepay-amount">{t("loan.prepayAmount", { currency: account.currency })}</Label>
+            <Input id="loan-prepay-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </div>
+          <div className="grid gap-1">
+            <Label>{t("loan.prepayMode")}</Label>
+            <Select value={mode} onValueChange={(v) => setMode(v as "term" | "payment")}>
+              <SelectTrigger aria-label={t("loan.prepayMode")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="term">{t("loan.modeTerm")}</SelectItem>
+                <SelectItem value="payment">{t("loan.modePayment")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground">{t("loan.prepayHint")}</p>
+          {record.isError && (
+            <Alert variant="destructive">
+              <AlertDescription>{t("loan.payFailed")}</AlertDescription>
+            </Alert>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!valid || record.isPending} onClick={submit}>
+            {t("loan.payButton")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PaymentDialog({ account, loan, onClose }: { account: AccountWithBalance; loan: Loan; onClose: () => void }) {
   const { t } = useTranslation();
   const accounts = useAccounts();
   const record = useRecordLoanPayment(account.id);
   const next = loan.next;
-  // A current account first: that is where a loan is usually paid from.
-  const payers = (accounts.data ?? [])
-    .filter((a) => a.id !== account.id && a.currency === account.currency && a.status === "active" && PAYER_ORDER.includes(a.type))
-    .sort((a, b) => PAYER_ORDER.indexOf(a.type) - PAYER_ORDER.indexOf(b.type));
+  const payers = payersOf(account, accounts.data ?? []);
   // The first fitting account until another is picked: the list may arrive
   // after the dialog opens.
   const [picked, setFrom] = useState("");

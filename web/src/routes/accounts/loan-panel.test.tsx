@@ -34,12 +34,13 @@ const dollars: AccountWithBalance = { ...base, id: "usd-1", name: "Доллар�
 const loan: Loan = {
   terms: { principal_minor: 120_000_00, annual_rate: "12", term_months: 12, issued_on: "2099-01-01", kind: "annuity" },
   schedule: [
-    { on: "2099-02-01", payment_minor: 10_661_85, interest_minor: 1_200_00, principal_minor: 9_461_85, left_minor: 110_538_15 },
-    { on: "2099-03-01", payment_minor: 10_661_85, interest_minor: 1_105_38, principal_minor: 9_556_47, left_minor: 100_981_68 },
+    { on: "2099-02-01", payment_minor: 10_661_85, interest_minor: 1_200_00, principal_minor: 9_461_85, left_minor: 110_538_15, prepaid: false },
+    { on: "2099-03-01", payment_minor: 10_661_85, interest_minor: 1_105_38, principal_minor: 9_556_47, left_minor: 100_981_68, prepaid: false },
   ],
   left_by_schedule_minor: 120_000_00,
   total_interest_minor: 7_942_20,
-  next: { on: "2099-02-01", payment_minor: 10_661_85, interest_minor: 1_200_00, principal_minor: 9_461_85, left_minor: 110_538_15 },
+  prepayments: [],
+  next: { on: "2099-02-01", payment_minor: 10_661_85, interest_minor: 1_200_00, principal_minor: 9_461_85, left_minor: 110_538_15, prepaid: false },
 };
 
 function answer(stated: Loan | null) {
@@ -135,6 +136,20 @@ describe("LoanPanel", () => {
     );
     await screen.findByTestId("loan-next");
     expect(screen.queryByTestId("loan-no-debt")).toBeNull();
+  });
+
+  it("pays ahead of the schedule, shortening the term or lowering the payment", async () => {
+    answer(loan);
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Погасить досрочно" }));
+    await screen.findByTestId("loan-prepayment-dialog");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "С какого счёта" }).textContent).toContain("Карта Сбер"));
+    fireEvent.change(screen.getByLabelText(/Сумма, RUB/), { target: { value: "300000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Записать" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
+    expect(post.url).toMatch(/\/loan\/prepayments$/);
+    expect(await post.json()).toMatchObject({ from_account_id: "card-1", amount_minor: 300_000_00, mode: "term" });
   });
 
   it("leaves a viewer only the reading", async () => {

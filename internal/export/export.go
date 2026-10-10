@@ -187,6 +187,9 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		out := exportAccount(a, history[a.ID], ops, stated, usernames)
 		if t, ok := loanOf[a.ID]; ok {
 			out.Loan = nullable.NewNullableWithValue(loan.TermsAPI(t))
+			for _, p := range t.Prepayments {
+				out.LoanPrepayments = append(out.LoanPrepayments, loan.PrepaymentAPI(p))
+			}
 		}
 		if t, ok := cardOf[a.ID]; ok {
 			out.CreditCard = nullable.NewNullableWithValue(creditcard.TermsAPI(t))
@@ -289,9 +292,10 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance, TradesAbroad: a.TradesAbroad,
 		KeptByOperations: a.KeptByOperations,
 		CreatedAt:        a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
-		WithheldStated: []apitypes.ExportWithheldStated{},
-		Loan:           nullable.NewNullNullable[apitypes.LoanTerms](),
-		CreditCard:     nullable.NewNullNullable[apitypes.CreditCardTerms](),
+		WithheldStated:  []apitypes.ExportWithheldStated{},
+		Loan:            nullable.NewNullNullable[apitypes.LoanTerms](),
+		LoanPrepayments: []apitypes.LoanPrepayment{},
+		CreditCard:      nullable.NewNullNullable[apitypes.CreditCardTerms](),
 	}
 	for _, w := range stated {
 		out.WithheldStated = append(out.WithheldStated, apitypes.ExportWithheldStated{
