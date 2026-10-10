@@ -535,6 +535,24 @@ func (e InstrumentType) Valid() bool {
 	}
 }
 
+// Defines values for LoanTermsKind.
+const (
+	Annuity        LoanTermsKind = "annuity"
+	Differentiated LoanTermsKind = "differentiated"
+)
+
+// Valid indicates whether the value is a known member of the LoanTermsKind enum.
+func (e LoanTermsKind) Valid() bool {
+	switch e {
+	case Annuity:
+		return true
+	case Differentiated:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MarketValueGap.
 const (
 	NoFaceValue             MarketValueGap = "no_face_value"
@@ -2195,6 +2213,62 @@ type InstrumentsResponse struct {
 	Instruments []Instrument `json:"instruments"`
 }
 
+// Loan defines model for Loan.
+type Loan struct {
+	// LeftByScheduleMinor The debt the schedule leaves today
+	LeftByScheduleMinor int64 `json:"left_by_schedule_minor"`
+
+	// Next The first payment due today or later; null once the schedule is through
+	Next     nullable.Nullable[LoanRow] `json:"next"`
+	Schedule []LoanRow                  `json:"schedule"`
+	Terms    LoanTerms                  `json:"terms"`
+
+	// TotalInterestMinor All the interest the schedule charges
+	TotalInterestMinor int64 `json:"total_interest_minor"`
+}
+
+// LoanPaymentRequest defines model for LoanPaymentRequest.
+type LoanPaymentRequest struct {
+	FromAccountId openapi_types.UUID `json:"from_account_id"`
+	InterestMinor int64              `json:"interest_minor"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn     string `json:"occurred_on"`
+	PrincipalMinor int64  `json:"principal_minor"`
+}
+
+// LoanRow defines model for LoanRow.
+type LoanRow struct {
+	InterestMinor int64 `json:"interest_minor"`
+
+	// LeftMinor The debt after this payment
+	LeftMinor int64 `json:"left_minor"`
+
+	// On Date YYYY-MM-DD
+	On             string `json:"on"`
+	PaymentMinor   int64  `json:"payment_minor"`
+	PrincipalMinor int64  `json:"principal_minor"`
+}
+
+// LoanTerms defines model for LoanTerms.
+type LoanTerms struct {
+	// AnnualRate Decimal as string: the yearly rate in percent, 0 to 999.9999
+	AnnualRate string `json:"annual_rate"`
+
+	// IssuedOn Date YYYY-MM-DD the loan was issued; the first payment is a month later
+	IssuedOn string `json:"issued_on"`
+
+	// Kind Equal payments, or an equal part of the debt plus the interest on what is left
+	Kind LoanTermsKind `json:"kind"`
+
+	// PrincipalMinor What was borrowed, in minor units of the account's currency
+	PrincipalMinor int64 `json:"principal_minor"`
+	TermMonths     int   `json:"term_months"`
+}
+
+// LoanTermsKind Equal payments, or an equal part of the debt plus the interest on what is left
+type LoanTermsKind string
+
 // LoginRequest Neither field states the shape SetupRequest requires, on purpose: login checks no shape, and every failure — a malformed name, an unknown one, a wrong password — is the same 401, so users cannot be enumerated. A length rule here would lock out passwords set under an earlier rule.
 type LoginRequest struct {
 	Password string `json:"password"`
@@ -3490,6 +3564,12 @@ type ImportTableJSONRequestBody = ImportTableRequest
 
 // PreviewTableImportJSONRequestBody defines body for PreviewTableImport for application/json ContentType.
 type PreviewTableImportJSONRequestBody = ImportPreviewRequest
+
+// SetLoanTermsJSONRequestBody defines body for SetLoanTerms for application/json ContentType.
+type SetLoanTermsJSONRequestBody = LoanTerms
+
+// RecordLoanPaymentJSONRequestBody defines body for RecordLoanPayment for application/json ContentType.
+type RecordLoanPaymentJSONRequestBody = LoanPaymentRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest

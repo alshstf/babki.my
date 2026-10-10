@@ -32,6 +32,7 @@ import { PurchasePriceDialog, type PricedPaper } from "./purchase-price-dialog";
 import { StatePriceDialog, type QuotedPaper } from "./state-price-dialog";
 import { OpeningBalanceDialog } from "./opening-balance-dialog";
 import { EverydayBalance } from "./everyday-balance";
+import { LoanPanel } from "./loan-panel";
 import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
@@ -147,6 +148,13 @@ export function AccountDetailPage() {
         <Alert>
           <AlertDescription>{t("accounts.archivedNotice")}</AlertDescription>
         </Alert>
+      )}
+
+      {account.type === "loan" && (
+        <div className="grid gap-2">
+          <h2 className="text-lg font-semibold">{t("loan.title")}</h2>
+          <LoanPanel account={account} canEdit={!readOnly} />
+        </div>
       )}
 
       <div className="grid gap-2">

@@ -17,6 +17,7 @@ tags:
   - { name: structure, description: "The family's worth taken apart by kind of asset, currency, account and country (internal/structure)." }
   - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
   - { name: recurring, description: "The family's regular payments found in the journal (internal/recurring)." }
+  - { name: loans, description: "A loan's terms, its schedule and its payments (internal/loan)." }
 paths:
   /api/v1/structure:
     get:
@@ -39,6 +40,81 @@ paths:
               schema: { $ref: "#/components/schemas/Structure" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/loan:
+    get:
+      tags: [loans]
+      operationId: getLoan
+      description: >-
+        A loan account's terms and the schedule worked out from them: each month's payment, the
+        interest in it and the debt it repays, the first a month after the loan was issued; and,
+        as of today, the debt the schedule leaves and the next payment due. 404 until terms are
+        stated.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The loan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Loan" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [loans]
+      operationId: setLoanTerms
+      description: States or restates a loan account's terms; anything other than a loan account is a 400.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoanTerms" }
+      responses:
+        "200":
+          description: The loan with its schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Loan" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [loans]
+      operationId: deleteLoanTerms
+      description: Forgets the terms; the journal keeps what was paid.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Forgotten }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/loan/payments:
+    post:
+      tags: [loans]
+      operationId: recordLoanPayment
+      description: >-
+        Records a payment on the loan from another account of the same currency, the way decision
+        Р-24 counts it: the interest is a spending from the paying account (under «Проценты по
+        кредитам» when the family has that category), the rest a transfer to the loan's account,
+        which brings the debt down. Should the transfer be refused, the interest is taken back.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoanPaymentRequest" }
+      responses:
+        "201": { description: Recorded }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/payouts:
     get:
       tags: [payouts]
@@ -2535,6 +2611,45 @@ components:
         by_country: { type: array, items: { $ref: "#/components/schemas/StructureSlice" } }
         unpriced: { type: integer, description: "Papers left out for want of a price" }
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
+    LoanTerms:
+      type: object
+      required: [principal_minor, annual_rate, term_months, issued_on, kind]
+      properties:
+        principal_minor: { type: integer, format: int64, minimum: 1, description: "What was borrowed, in minor units of the account's currency" }
+        annual_rate: { type: string, description: "Decimal as string: the yearly rate in percent, 0 to 999.9999" }
+        term_months: { type: integer, minimum: 1, maximum: 600 }
+        issued_on: { type: string, description: "Date YYYY-MM-DD the loan was issued; the first payment is a month later" }
+        kind: { type: string, enum: [annuity, differentiated], description: "Equal payments, or an equal part of the debt plus the interest on what is left" }
+    LoanRow:
+      type: object
+      required: [on, payment_minor, interest_minor, principal_minor, left_minor]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        payment_minor: { type: integer, format: int64 }
+        interest_minor: { type: integer, format: int64 }
+        principal_minor: { type: integer, format: int64 }
+        left_minor: { type: integer, format: int64, description: "The debt after this payment" }
+    Loan:
+      type: object
+      required: [terms, schedule, left_by_schedule_minor, next, total_interest_minor]
+      properties:
+        terms: { $ref: "#/components/schemas/LoanTerms" }
+        schedule: { type: array, items: { $ref: "#/components/schemas/LoanRow" } }
+        left_by_schedule_minor: { type: integer, format: int64, description: "The debt the schedule leaves today" }
+        next:
+          nullable: true
+          description: "The first payment due today or later; null once the schedule is through"
+          allOf:
+            - $ref: "#/components/schemas/LoanRow"
+        total_interest_minor: { type: integer, format: int64, description: "All the interest the schedule charges" }
+    LoanPaymentRequest:
+      type: object
+      required: [from_account_id, occurred_on, principal_minor, interest_minor]
+      properties:
+        from_account_id: { type: string, format: uuid }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        principal_minor: { type: integer, format: int64, minimum: 0 }
+        interest_minor: { type: integer, format: int64, minimum: 0 }
     CashflowFlow:
       type: object
       required: [total_minor, by_month]

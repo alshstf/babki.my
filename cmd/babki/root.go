@@ -26,6 +26,7 @@ import (
 	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/cbr"
 	"babki.my/babki/internal/marketdata/coingecko"
@@ -114,6 +115,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	}
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	structure.NewHandler(structure.NewService(accStore, positions, famStore, converter), famAuth, famSM).Mount(srv)
+	loan.NewHandler(loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool)), famAuth, famSM).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurring.NewHandler(recurring.NewService(opStore, accStore), famAuth, famSM).Mount(srv)
