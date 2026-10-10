@@ -3261,8 +3261,12 @@ components:
         stale: { type: boolean }
     PeriodReturn:
       type: object
-      required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete, time_weighted_rate, time_weighted_period]
+      required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete, time_weighted_rate, time_weighted_period, max_drawdown, drawdown_from, drawdown_to, volatility]
       properties:
+        max_drawdown: { type: string, nullable: true, description: "The deepest fall of the holdings' own (time-weighted) index from a peak within the period, a fraction (#405); null when it never fell or a day could not be valued" }
+        drawdown_from: { type: string, nullable: true, description: "The peak's day" }
+        drawdown_to: { type: string, nullable: true, description: "The bottom's day" }
+        volatility: { type: string, nullable: true, description: "The yearly standard deviation of the index's month-on-month changes (√12 × monthly); null with fewer than three months" }
         time_weighted_rate: { type: string, nullable: true, description: "Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from" }
         time_weighted_period: { type: string, nullable: true, description: "The same over the period, not compounded to a year" }
         currency: { type: string, description: "The space's base currency" }

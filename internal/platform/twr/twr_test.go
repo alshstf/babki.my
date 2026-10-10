@@ -45,3 +45,46 @@ func TestAnHalfYearAnnualises(t *testing.T) {
 		t.Errorf("annual = %v", got)
 	}
 }
+
+// The index of the holdings rises to 1.2, falls to 0.9, recovers to 1.1: the
+// deepest fall is a quarter, from the second point to the third, whatever
+// money came in on the way.
+func TestTheDeepestFallIsFoundOnTheHoldingsOwnIndex(t *testing.T) {
+	points := []Point{
+		{Day: d("2026-01-31"), Worth: 100_00},
+		{Day: d("2026-02-28"), Worth: 1_120_00, Flow: -1_000_00}, // 1.2, with 1 000 put in
+		{Day: d("2026-03-31"), Worth: 840_00},                    // 0.9
+		{Day: d("2026-04-30"), Worth: 1_026_67},                  // 1.1
+	}
+	index := Index(points)
+	if math.Abs(index[1]-1.2) > 1e-9 || math.Abs(index[2]-0.9) > 1e-9 {
+		t.Fatalf("index = %v", index)
+	}
+	depth, peak, bottom, ok := Drawdown(index)
+	if !ok || math.Abs(depth-0.25) > 1e-9 || peak != 1 || bottom != 2 {
+		t.Errorf("drawdown = %v from %d to %d (%v)", depth, peak, bottom, ok)
+	}
+	if _, _, _, ok := Drawdown([]float64{1, 1.1, 1.2}); ok {
+		t.Error("an index that never fell has a drawdown")
+	}
+}
+
+// Monthly changes of +2 %, −1 %, +3 %, 0 %: their spread a year.
+func TestVolatilityIsTheMonthlySpreadPerYear(t *testing.T) {
+	index := []float64{1, 1.02, 1.02 * 0.99, 1.02 * 0.99 * 1.03, 1.02 * 0.99 * 1.03, 1.05}
+	ends := []bool{true, true, true, true, true, false}
+	got, ok := Volatility(index, ends)
+	changes := []float64{0.02, -0.01, 0.03, 0}
+	mean := (0.02 - 0.01 + 0.03) / 4
+	var sum float64
+	for _, c := range changes {
+		sum += (c - mean) * (c - mean)
+	}
+	want := math.Sqrt(sum/3) * math.Sqrt(12)
+	if !ok || math.Abs(got-want) > 1e-9 {
+		t.Errorf("volatility = %v (%v), want %v", got, ok, want)
+	}
+	if _, ok := Volatility(index[:3], ends[:3]); ok {
+		t.Error("two months gave a volatility")
+	}
+}

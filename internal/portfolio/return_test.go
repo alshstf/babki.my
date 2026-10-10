@@ -46,7 +46,16 @@ func TestAPeriodsReturnIsReckonedFromItsEdges(t *testing.T) {
 	q := func(on, price string) marketdata.Quote {
 		return marketdata.Quote{InstrumentID: uuid.MustParse(sber.ID), On: mustDate(t, on), Price: decimal.RequireFromString(price), Currency: "RUB", Source: "test"}
 	}
-	if err := md.UpsertQuotes(ctx, []marketdata.Quote{q("2025-06-30", "1000"), q("2026-01-01", "1000"), q("2026-02-02", "1050"), q("2026-06-30", "1100")}); err != nil {
+	quotes := []marketdata.Quote{q("2025-06-30", "1000"), q("2026-01-01", "1000"), q("2026-02-02", "1050"), q("2026-06-30", "1100")}
+	// A close at every month's end, as a traded share has: the time-weighted
+	// series is valued on them.
+	for _, m := range []string{"2025-07-31", "2025-08-31", "2025-09-30", "2025-10-31", "2025-11-30", "2025-12-31", "2026-01-31"} {
+		quotes = append(quotes, q(m, "1000"))
+	}
+	for _, m := range []string{"2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31"} {
+		quotes = append(quotes, q(m, "1050"))
+	}
+	if err := md.UpsertQuotes(ctx, quotes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,9 +88,13 @@ func TestAPeriodsReturnIsReckonedFromItsEdges(t *testing.T) {
 	// Time-weighted (#405): 100 000 to 150 000 with 50 000 put in — flat; to
 	// 165 500 with 10 500 of shares in — 155 000 / 150 000; to 174 000 —
 	// 174 000 / 165 500. Chained: 8.64 %, the money's timing aside.
-	twr, ok, err := h.TimeWeighted(ctx, spaceID, uuid.MustParse(acc.ID), b.Flows, from, to)
-	if err != nil || !ok || math.Abs(twr-(155_000.0/150_000*174_000/165_500-1)) > 1e-6 {
-		t.Errorf("time-weighted = %v, %v, %v; want 8.64 %%", twr, ok, err)
+	perf, err := h.Performance(ctx, spaceID, uuid.MustParse(acc.ID), b.Flows, from, to)
+	if err != nil || !perf.HasRate || math.Abs(perf.Period-(155_000.0/150_000*174_000/165_500-1)) > 1e-6 {
+		t.Errorf("time-weighted = %+v, %v; want 8.64 %%", perf, err)
+	}
+	// The price never fell: no drawdown. A year of months: a volatility.
+	if perf.HasDrawdown || !perf.HasVolatility || perf.Volatility <= 0 || perf.Volatility > 0.2 {
+		t.Errorf("drawdown and volatility = %+v", perf)
 	}
 
 	// A paper with no price at the end makes the period incomplete.

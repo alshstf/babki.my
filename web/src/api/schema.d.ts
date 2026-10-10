@@ -2616,6 +2616,14 @@ export interface components {
             stale: boolean;
         };
         PeriodReturn: {
+            /** @description The deepest fall of the holdings' own (time-weighted) index from a peak within the period, a fraction (#405); null when it never fell or a day could not be valued */
+            max_drawdown: string | null;
+            /** @description The peak's day */
+            drawdown_from: string | null;
+            /** @description The bottom's day */
+            drawdown_to: string | null;
+            /** @description The yearly standard deviation of the index's month-on-month changes (√12 × monthly); null with fewer than three months */
+            volatility: string | null;
             /** @description Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from */
             time_weighted_rate: string | null;
             /** @description The same over the period, not compounded to a year */

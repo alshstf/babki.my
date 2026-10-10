@@ -2243,8 +2243,17 @@ type FamilyReturn struct {
 
 	// Currency The space's base currency
 	Currency string `json:"currency"`
-	EndMinor int64  `json:"end_minor"`
-	From     string `json:"from"`
+
+	// DrawdownFrom The peak's day
+	DrawdownFrom nullable.Nullable[string] `json:"drawdown_from"`
+
+	// DrawdownTo The bottom's day
+	DrawdownTo nullable.Nullable[string] `json:"drawdown_to"`
+	EndMinor   int64                     `json:"end_minor"`
+	From       string                    `json:"from"`
+
+	// MaxDrawdown The deepest fall of the holdings' own (time-weighted) index from a peak within the period, a fraction (#405); null when it never fell or a day could not be valued
+	MaxDrawdown nullable.Nullable[string] `json:"max_drawdown"`
 
 	// ProfitMinor end_minor − start_minor − contributions_minor
 	ProfitMinor int64 `json:"profit_minor"`
@@ -2256,6 +2265,9 @@ type FamilyReturn struct {
 	// TimeWeightedRate Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from
 	TimeWeightedRate nullable.Nullable[string] `json:"time_weighted_rate"`
 	To               string                    `json:"to"`
+
+	// Volatility The yearly standard deviation of the index's month-on-month changes (√12 × monthly); null with fewer than three months
+	Volatility nullable.Nullable[string] `json:"volatility"`
 }
 
 // FileByRulesRequest defines model for FileByRulesRequest.
@@ -2933,8 +2945,17 @@ type PeriodReturn struct {
 
 	// Currency The space's base currency
 	Currency string `json:"currency"`
-	EndMinor int64  `json:"end_minor"`
-	From     string `json:"from"`
+
+	// DrawdownFrom The peak's day
+	DrawdownFrom nullable.Nullable[string] `json:"drawdown_from"`
+
+	// DrawdownTo The bottom's day
+	DrawdownTo nullable.Nullable[string] `json:"drawdown_to"`
+	EndMinor   int64                     `json:"end_minor"`
+	From       string                    `json:"from"`
+
+	// MaxDrawdown The deepest fall of the holdings' own (time-weighted) index from a peak within the period, a fraction (#405); null when it never fell or a day could not be valued
+	MaxDrawdown nullable.Nullable[string] `json:"max_drawdown"`
 
 	// ProfitMinor end_minor − start_minor − contributions_minor
 	ProfitMinor int64 `json:"profit_minor"`
@@ -2946,6 +2967,9 @@ type PeriodReturn struct {
 	// TimeWeightedRate Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from
 	TimeWeightedRate nullable.Nullable[string] `json:"time_weighted_rate"`
 	To               string                    `json:"to"`
+
+	// Volatility The yearly standard deviation of the index's month-on-month changes (√12 × monthly); null with fewer than three months
+	Volatility nullable.Nullable[string] `json:"volatility"`
 }
 
 // Position defines model for Position.
