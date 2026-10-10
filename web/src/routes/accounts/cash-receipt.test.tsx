@@ -12,12 +12,20 @@ const fetchMock = vi.hoisted(() => {
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
-fetchMock.mockImplementation(() =>
-  Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })),
-);
+// Every lookup answers an empty list, but a receipt numbered 777 was written
+// already.
+fetchMock.mockImplementation((input: Request) => {
+  const written = input.url.includes("/operations/receipt") && input.url.includes("fd=777");
+  const body = written
+    ? [{ id: "op-1", account_id: "card", occurred_on: "2026-10-09", amount_minor: -123450, currency: "RUB" }]
+    : [];
+  return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+});
 
 // The photo is not read in jsdom (no canvas): the reader answers what the
 // camera would have found.
+const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
+
 const decoded = vi.hoisted(() => ({ text: null as string | null }));
 vi.mock("@/lib/qr-decode", () => ({ decodeQrFromImage: () => Promise.resolve(decoded.text) }));
 
@@ -65,6 +73,24 @@ describe("CashDialog: a receipt's QR code", () => {
     expect(screen.getByLabelText("Заметка")).toHaveValue("Чек 09.10.2026 19:15, ФН 7380440700000000, ФД 12345");
     expect(screen.getByRole("combobox", { name: "Тип операции" }).textContent).toBe("вывод");
     expect(screen.getByTestId("receipt-status").textContent).toMatch(/Продавца в QR-коде нет/);
+  });
+
+  it("warns when the same receipt was written already", async () => {
+    decoded.text = "t=20261009T1915&s=1234.50&fn=7380440700000000&i=777&fp=1234567890&n=1";
+    open("expense");
+    snap();
+    expect(norm((await screen.findByTestId("receipt-already")).textContent ?? "")).toBe(
+      "Похоже, этот чек уже записан: 09.10.2026, 1 234,50 ₽. Проверьте, чтобы не записать его дважды.",
+    );
+  });
+
+  it("says nothing more of a receipt not written before", async () => {
+    decoded.text = "t=20261009T1915&s=1234.50&fn=7380440700000000&i=12345&fp=1234567890&n=1";
+    open("expense");
+    snap();
+    await waitFor(() => expect(screen.getByLabelText(/Сумма/)).toHaveValue("1234.50"));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("receipt-already")).toBeNull();
   });
 
   it("turns a refund into money coming in", async () => {

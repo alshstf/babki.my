@@ -615,6 +615,16 @@ func (s *Store) ListMoneyFlows(ctx context.Context, spaceID uuid.UUID, from, to 
 		`+engineOrder, spaceID, from, to, types)
 }
 
+// ByReceipt is the space's rows whose note names a cash receipt — the fiscal
+// drive's number and the document's, as the receipt dialog writes them («ФН
+// 7380440700000000, ФД 12345») — newest first, at most five. fn and fd are
+// digits (the caller checks), so they go into the pattern as they are.
+func (s *Store) ByReceipt(ctx context.Context, spaceID uuid.UUID, fn, fd string) ([]Operation, error) {
+	return s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND note ~ $2
+		ORDER BY occurred_on DESC, created_at DESC LIMIT 5`, spaceID, "ФН "+fn+", ФД "+fd+"([^0-9]|$)")
+}
+
 // ListForEngine returns the account's whole journal in engine order, with
 // breakdowns attached: they date the lots a transfer brought in.
 func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {

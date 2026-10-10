@@ -315,3 +315,13 @@ export function useCreateTransfer() {
       invalidate([variables.from_account_id, variables.to_account_id]),
   });
 }
+
+export type ReceiptMatch = components["schemas"]["ReceiptMatch"];
+
+// The rows a cash receipt was already written to (GET
+// /api/v1/operations/receipt), so the dialog can warn before writing it twice.
+export async function findReceipt(fn: string, fd: string): Promise<ReceiptMatch[]> {
+  const { data, error, response } = await api.GET("/api/v1/operations/receipt", { params: { query: { fn, fd } } });
+  if (!data) throw apiError(response, error);
+  return data;
+}

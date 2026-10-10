@@ -1016,6 +1016,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The space's rows whose note names this cash receipt — «ФН {fn}, ФД {fd}», as the receipt dialog writes it — newest first, at most five: so the dialog can warn before the same receipt is written twice. Empty when there are none. */
+        get: operations["findReceipt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/file-by-rules": {
         parameters: {
             query?: never;
@@ -2203,6 +2220,17 @@ export interface components {
         PushTestResult: {
             devices: number;
             delivered: number;
+        };
+        ReceiptMatch: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            account_id: string;
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            /** Format: int64 */
+            amount_minor: number;
+            currency: string;
         };
         ForecastDay: {
             /** @description Date YYYY-MM-DD */
@@ -5590,6 +5618,33 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    findReceipt: {
+        parameters: {
+            query: {
+                /** @description The fiscal drive's number */
+                fn: string;
+                /** @description The fiscal document's number */
+                fd: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptMatch"][];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     fileOperationsByRules: {

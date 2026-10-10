@@ -2939,6 +2939,17 @@ type RealizedTotal struct {
 	UnknownCostPositions int `json:"unknown_cost_positions"`
 }
 
+// ReceiptMatch defines model for ReceiptMatch.
+type ReceiptMatch struct {
+	AccountId   openapi_types.UUID `json:"account_id"`
+	AmountMinor int64              `json:"amount_minor"`
+	Currency    string             `json:"currency"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string `json:"occurred_on"`
+}
+
 // RecurringPayment defines model for RecurringPayment.
 type RecurringPayment struct {
 	// AccountId The account of the latest payment
@@ -3767,6 +3778,15 @@ type GetInstrumentReturnParams struct {
 
 	// To Date YYYY-MM-DD, the period's last day
 	To string `form:"to" json:"to"`
+}
+
+// FindReceiptParams defines parameters for FindReceipt.
+type FindReceiptParams struct {
+	// Fn The fiscal drive's number
+	Fn string `form:"fn" json:"fn"`
+
+	// Fd The fiscal document's number
+	Fd string `form:"fd" json:"fd"`
 }
 
 // GetPayoutsParams defines parameters for GetPayouts.

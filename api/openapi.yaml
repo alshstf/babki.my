@@ -1549,6 +1549,25 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/receipt:
+    get:
+      tags: [journal]
+      operationId: findReceipt
+      description: >-
+        The space's rows whose note names this cash receipt — «ФН {fn}, ФД {fd}», as the receipt dialog
+        writes it — newest first, at most five: so the dialog can warn before the same receipt is
+        written twice. Empty when there are none.
+      parameters:
+        - { name: fn, in: query, required: true, schema: { type: string, pattern: "^[0-9]{1,20}$" }, description: "The fiscal drive's number" }
+        - { name: fd, in: query, required: true, schema: { type: string, pattern: "^[0-9]{1,20}$" }, description: "The fiscal document's number" }
+      responses:
+        "200":
+          description: The rows
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ReceiptMatch" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/operations/file-by-rules:
     post:
       tags: [journal]
@@ -2879,6 +2898,15 @@ components:
       properties:
         devices: { type: integer }
         delivered: { type: integer }
+    ReceiptMatch:
+      type: object
+      required: [id, account_id, occurred_on, amount_minor, currency]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
     ForecastDay:
       type: object
       required: [on, balance_minor]
