@@ -571,6 +571,42 @@ func (e InstrumentType) Valid() bool {
 	}
 }
 
+// Defines values for LoanPrepaymentMode.
+const (
+	LoanPrepaymentModePayment LoanPrepaymentMode = "payment"
+	LoanPrepaymentModeTerm    LoanPrepaymentMode = "term"
+)
+
+// Valid indicates whether the value is a known member of the LoanPrepaymentMode enum.
+func (e LoanPrepaymentMode) Valid() bool {
+	switch e {
+	case LoanPrepaymentModePayment:
+		return true
+	case LoanPrepaymentModeTerm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LoanPrepaymentRequestMode.
+const (
+	LoanPrepaymentRequestModePayment LoanPrepaymentRequestMode = "payment"
+	LoanPrepaymentRequestModeTerm    LoanPrepaymentRequestMode = "term"
+)
+
+// Valid indicates whether the value is a known member of the LoanPrepaymentRequestMode enum.
+func (e LoanPrepaymentRequestMode) Valid() bool {
+	switch e {
+	case LoanPrepaymentRequestModePayment:
+		return true
+	case LoanPrepaymentRequestModeTerm:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LoanTermsKind.
 const (
 	Annuity        LoanTermsKind = "annuity"
@@ -1945,7 +1981,10 @@ type ExportAccount struct {
 
 	// Loan A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account
 	Loan nullable.Nullable[LoanTerms] `json:"loan"`
-	Name string                       `json:"name"`
+
+	// LoanPrepayments A loan's prepayments (POST /accounts/{accountId}/loan/prepayments), oldest first; empty on every other account
+	LoanPrepayments []LoanPrepayment `json:"loan_prepayments"`
+	Name            string           `json:"name"`
 
 	// Operations The journal as stored, in the order it is folded
 	Operations []ExportOperation `json:"operations"`
@@ -2451,9 +2490,12 @@ type Loan struct {
 	LeftByScheduleMinor int64 `json:"left_by_schedule_minor"`
 
 	// Next The first payment due today or later; null once the schedule is through
-	Next     nullable.Nullable[LoanRow] `json:"next"`
-	Schedule []LoanRow                  `json:"schedule"`
-	Terms    LoanTerms                  `json:"terms"`
+	Next nullable.Nullable[LoanRow] `json:"next"`
+
+	// Prepayments Debt paid ahead of the schedule, oldest first; each reshapes it
+	Prepayments []LoanPrepayment `json:"prepayments"`
+	Schedule    []LoanRow        `json:"schedule"`
+	Terms       LoanTerms        `json:"terms"`
 
 	// TotalInterestMinor All the interest the schedule charges
 	TotalInterestMinor int64 `json:"total_interest_minor"`
@@ -2469,6 +2511,34 @@ type LoanPaymentRequest struct {
 	PrincipalMinor int64  `json:"principal_minor"`
 }
 
+// LoanPrepayment defines model for LoanPrepayment.
+type LoanPrepayment struct {
+	AmountMinor int64              `json:"amount_minor"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// Mode term: the payment stays and the loan ends sooner; payment: the end stays and the payment is lower
+	Mode LoanPrepaymentMode `json:"mode"`
+
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+}
+
+// LoanPrepaymentMode term: the payment stays and the loan ends sooner; payment: the end stays and the payment is lower
+type LoanPrepaymentMode string
+
+// LoanPrepaymentRequest defines model for LoanPrepaymentRequest.
+type LoanPrepaymentRequest struct {
+	AmountMinor   int64                     `json:"amount_minor"`
+	FromAccountId openapi_types.UUID        `json:"from_account_id"`
+	Mode          LoanPrepaymentRequestMode `json:"mode"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string `json:"occurred_on"`
+}
+
+// LoanPrepaymentRequestMode defines model for LoanPrepaymentRequest.Mode.
+type LoanPrepaymentRequestMode string
+
 // LoanRow defines model for LoanRow.
 type LoanRow struct {
 	InterestMinor int64 `json:"interest_minor"`
@@ -2477,9 +2547,12 @@ type LoanRow struct {
 	LeftMinor int64 `json:"left_minor"`
 
 	// On Date YYYY-MM-DD
-	On             string `json:"on"`
-	PaymentMinor   int64  `json:"payment_minor"`
-	PrincipalMinor int64  `json:"principal_minor"`
+	On           string `json:"on"`
+	PaymentMinor int64  `json:"payment_minor"`
+
+	// Prepaid Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment
+	Prepaid        bool  `json:"prepaid"`
+	PrincipalMinor int64 `json:"principal_minor"`
 }
 
 // LoanTerms defines model for LoanTerms.
@@ -3869,6 +3942,9 @@ type SetLoanTermsJSONRequestBody = LoanTerms
 
 // RecordLoanPaymentJSONRequestBody defines body for RecordLoanPayment for application/json ContentType.
 type RecordLoanPaymentJSONRequestBody = LoanPaymentRequest
+
+// RecordLoanPrepaymentJSONRequestBody defines body for RecordLoanPrepayment for application/json ContentType.
+type RecordLoanPrepaymentJSONRequestBody = LoanPrepaymentRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest

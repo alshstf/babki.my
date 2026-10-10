@@ -105,4 +105,37 @@ func TestALoanIsPaidByItsSchedule(t *testing.T) {
 	if len(page.Operations) != 1 || page.Operations[0].Type != "deposit" || page.Operations[0].AmountMinor != 7_884_879 {
 		t.Errorf("the loan's journal = %+v, want the transfer in", page.Operations)
 	}
+
+	// 300 000 ahead of the schedule, the payment lowered: a transfer in the
+	// journal, a row of its own in the schedule, smaller payments after it;
+	// forgotten, the schedule is as it was and the journal keeps the money.
+	prepay := func(from string) *http.Response {
+		return apitest.Do(t, c, "POST", url+"/api/v1/accounts/"+mortgage+"/loan/prepayments",
+			fmt.Sprintf(`{"from_account_id":%q,"occurred_on":"2026-02-20","amount_minor":30000000,"mode":"payment"}`, from))
+	}
+	if r := prepay(dollars); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("prepaying from dollars = %d, want 400", r.StatusCode)
+	}
+	resp = prepay(card)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("prepayment = %d", resp.StatusCode)
+	}
+	var pre apitypes.LoanPrepayment
+	apitest.Decode(t, resp, &pre)
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+mortgage+"/loan", ""), &got)
+	if len(got.Prepayments) != 1 || len(got.Schedule) != 13 || !got.Schedule[1].Prepaid ||
+		got.Schedule[2].PaymentMinor >= got.Schedule[0].PaymentMinor {
+		t.Errorf("after the prepayment: %d prepayments, %d rows, rows %+v %+v", len(got.Prepayments), len(got.Schedule), got.Schedule[1], got.Schedule[2])
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+mortgage+"/operations", ""), &page)
+	if len(page.Operations) != 2 {
+		t.Errorf("the loan's journal = %+v, want the prepayment's transfer too", page.Operations)
+	}
+	if r := apitest.Do(t, c, "DELETE", url+"/api/v1/accounts/"+mortgage+"/loan/prepayments/"+pre.Id.String(), ""); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("forget = %d", r.StatusCode)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+mortgage+"/loan", ""), &got)
+	if len(got.Prepayments) != 0 || len(got.Schedule) != 12 {
+		t.Errorf("forgotten: %d prepayments, %d rows", len(got.Prepayments), len(got.Schedule))
+	}
 }

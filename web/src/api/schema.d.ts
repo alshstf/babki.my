@@ -40,6 +40,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/loan/prepayments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Pays debt ahead of the schedule (#429) from another account of the loan's currency: a transfer to the loan's account, as the debt part of a payment, and a note that reshapes the schedule — the payment worked out anew for the months left (mode payment) or kept, ending the loan sooner (term). Should the note be refused, the transfer is taken back. */
+        post: operations["recordLoanPrepayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/loan/prepayments/{prepaymentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Forgets a prepayment for the schedule; the transfer stays in the journal until deleted there. */
+        delete: operations["deleteLoanPrepayment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/loan/payments": {
         parameters: {
             query?: never;
@@ -1854,6 +1888,8 @@ export interface components {
             operations: components["schemas"]["ExportOperation"][];
             /** @description Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first */
             withheld_stated: components["schemas"]["ExportWithheldStated"][];
+            /** @description A loan's prepayments (POST /accounts/{accountId}/loan/prepayments), oldest first; empty on every other account */
+            loan_prepayments: components["schemas"]["LoanPrepayment"][];
             /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
             loan: components["schemas"]["LoanTerms"] | null;
             /** @description A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account */
@@ -2104,6 +2140,8 @@ export interface components {
              * @description The debt after this payment
              */
             left_minor: number;
+            /** @description Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment */
+            prepaid: boolean;
         };
         CreditCardTerms: {
             /** Format: int64 */
@@ -2330,6 +2368,31 @@ export interface components {
              * @description All the interest the schedule charges
              */
             total_interest_minor: number;
+            /** @description Debt paid ahead of the schedule, oldest first; each reshapes it */
+            prepayments: components["schemas"]["LoanPrepayment"][];
+        };
+        LoanPrepayment: {
+            /** Format: uuid */
+            id: string;
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** Format: int64 */
+            amount_minor: number;
+            /**
+             * @description term: the payment stays and the loan ends sooner; payment: the end stays and the payment is lower
+             * @enum {string}
+             */
+            mode: "term" | "payment";
+        };
+        LoanPrepaymentRequest: {
+            /** Format: uuid */
+            from_account_id: string;
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            /** Format: int64 */
+            amount_minor: number;
+            /** @enum {string} */
+            mode: "term" | "payment";
         };
         LoanPaymentRequest: {
             /** Format: uuid */
@@ -3730,6 +3793,61 @@ export interface operations {
             header?: never;
             path: {
                 accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    recordLoanPrepayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanPrepaymentRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanPrepayment"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    deleteLoanPrepayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                prepaymentId: string;
             };
             cookie?: never;
         };
