@@ -49,7 +49,7 @@ export function RecurringPayments() {
           </TableHeader>
           <TableBody>
             {list.map((p) => (
-              <TableRow key={`${p.name}-${p.currency}-${p.amount_minor > 0}`} data-testid="recurring-row">
+              <TableRow key={`${p.name}-${p.currency}-${p.amount_minor > 0}-${p.next_on}`} data-testid="recurring-row">
                 <TableCell className="whitespace-normal">
                   {p.name}
                   <div>

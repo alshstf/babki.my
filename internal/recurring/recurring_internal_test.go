@@ -82,3 +82,37 @@ func TestRegularPaymentsAreFoundByPaceAndAmount(t *testing.T) {
 		t.Errorf("the soonest first: %s", got[0].Name)
 	}
 }
+
+// A salary paid twice a month — the 5th and, as an advance, the 25th, a
+// weekend moving either by a day or two — is two monthly payments from the
+// same payee (#428); one shop on scattered days stays nothing.
+func TestTwiceAMonthIsTwoMonthlyPayments(t *testing.T) {
+	card := uuid.New()
+	var ops []operation.Operation
+	add := func(on, who string, amount int64) {
+		ops = append(ops, operation.Operation{AccountID: card, OccurredOn: d(on), Counterparty: who, AmountMinor: amount, Currency: "RUB"})
+	}
+	for _, on := range []string{"2026-07-03", "2026-08-05", "2026-09-05"} {
+		add(on, "ООО «Ромашка»", 180_000_00)
+	}
+	for _, on := range []string{"2026-07-24", "2026-08-25", "2026-09-25"} {
+		add(on, "ООО «Ромашка»", 60_000_00)
+	}
+	for _, on := range []string{"2026-07-02", "2026-07-21", "2026-08-09", "2026-08-30", "2026-09-14", "2026-09-28"} {
+		add(on, "Перекрёсток", -2_500_00)
+	}
+
+	got := find(ops, d("2026-10-01"))
+	if len(got) != 2 {
+		t.Fatalf("found %+v, want the salary and the advance", got)
+	}
+	for i, want := range []struct {
+		amount int64
+		next   string
+	}{{180_000_00, "2026-10-05"}, {60_000_00, "2026-10-25"}} {
+		p := got[i]
+		if p.Name != "ООО «Ромашка»" || p.Cadence != Monthly || p.Amount != want.amount || p.Next.Format(time.DateOnly) != want.next {
+			t.Errorf("payment %d = %+v, want %d next %s", i, p, want.amount, want.next)
+		}
+	}
+}

@@ -17,6 +17,7 @@ tags:
   - { name: structure, description: "The family's worth taken apart by kind of asset, currency, account and country (internal/structure)." }
   - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
   - { name: recurring, description: "The family's regular payments found in the journal (internal/recurring)." }
+  - { name: forecast, description: "The family's everyday money over the coming months (internal/forecast)." }
   - { name: loans, description: "A loan's terms, its schedule and its payments (internal/loan)." }
 paths:
   /api/v1/structure:
@@ -136,6 +137,29 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PayoutsForecast" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/forecast:
+    get:
+      tags: [forecast]
+      operationId: getForecast
+      description: >-
+        The family's money to live on — active cards, current and savings accounts and cash, each
+        counted the way the total counts it (by its journal or by its last balance) — today and day by
+        day ahead, in the base currency at today's rates: the regular payments of GET /recurring on
+        those accounts on their pace (an overdue one today, unless the account is counted by a balance
+        marked on or after its day, which holds it already), and every loan's scheduled payments
+        (a regular payment named as a loan account is its interest and is left to the schedule).
+        Deposits, brokers' accounts and loans' own balances are not in it. Twice a month from one
+        payee (a salary and its advance) counts as two monthly payments.
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 7, maximum: 366 }, description: "How far ahead, in days; 90 when absent" }
+      responses:
+        "200":
+          description: The forecast
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Forecast" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/recurring:
@@ -2629,6 +2653,46 @@ components:
         interest_minor: { type: integer, format: int64 }
         principal_minor: { type: integer, format: int64 }
         left_minor: { type: integer, format: int64, description: "The debt after this payment" }
+    ForecastDay:
+      type: object
+      required: [on, balance_minor]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        balance_minor: { type: integer, format: int64, description: "The money at the end of the day, in the base currency" }
+    ForecastEvent:
+      type: object
+      required: [on, name, kind, account_id, amount_minor, currency, in_base_minor, overdue]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        name: { type: string, description: "The payee, or the loan account's name" }
+        kind: { type: string, enum: [regular, loan] }
+        account_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64, description: "Signed as the journal signs it, in currency" }
+        currency: { type: string }
+        in_base_minor: { type: integer, format: int64, description: "The same in the base currency at today's rate" }
+        overdue: { type: boolean, description: "A regular payment whose day has passed without it: expected today" }
+    Forecast:
+      type: object
+      required: [base_currency, days, start_minor, accounts_counted, series, events, lowest, next_income, free_until_income_minor, missing_rates]
+      properties:
+        base_currency: { type: string }
+        days: { type: integer }
+        start_minor: { type: integer, format: int64, description: "The money today" }
+        accounts_counted: { type: integer, description: "How many accounts the money is on" }
+        series: { type: array, items: { $ref: "#/components/schemas/ForecastDay" }, description: "Today and each day after, `days` of them" }
+        events: { type: array, items: { $ref: "#/components/schemas/ForecastEvent" } }
+        lowest: { $ref: "#/components/schemas/ForecastDay" }
+        next_income:
+          nullable: true
+          description: "The next salary: the next regular income of at least half the largest; null without one in sight"
+          allOf:
+            - $ref: "#/components/schemas/ForecastEvent"
+        free_until_income_minor:
+          type: integer
+          format: int64
+          nullable: true
+          description: "The lowest the money gets before next_income: what can be spent until then without going below zero (below zero: what is short)"
+        missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
     Loan:
       type: object
       required: [terms, schedule, left_by_schedule_minor, next, total_interest_minor]

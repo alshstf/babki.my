@@ -280,6 +280,24 @@ func (e CostBasisPerimeter) Valid() bool {
 	}
 }
 
+// Defines values for ForecastEventKind.
+const (
+	ForecastEventKindLoan    ForecastEventKind = "loan"
+	ForecastEventKindRegular ForecastEventKind = "regular"
+)
+
+// Valid indicates whether the value is a known member of the ForecastEventKind enum.
+func (e ForecastEventKind) Valid() bool {
+	switch e {
+	case ForecastEventKindLoan:
+		return true
+	case ForecastEventKindRegular:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FullValuation.
 const (
 	FullValuationLiquid        FullValuation = "liquid"
@@ -1960,6 +1978,65 @@ type FileByRulesResponse struct {
 	Filed int `json:"filed"`
 }
 
+// Forecast defines model for Forecast.
+type Forecast struct {
+	// AccountsCounted How many accounts the money is on
+	AccountsCounted int             `json:"accounts_counted"`
+	BaseCurrency    string          `json:"base_currency"`
+	Days            int             `json:"days"`
+	Events          []ForecastEvent `json:"events"`
+
+	// FreeUntilIncomeMinor The lowest the money gets before next_income: what can be spent until then without going below zero (below zero: what is short)
+	FreeUntilIncomeMinor nullable.Nullable[int64] `json:"free_until_income_minor"`
+	Lowest               ForecastDay              `json:"lowest"`
+
+	// MissingRates Currencies left out for want of today's rate
+	MissingRates []string `json:"missing_rates"`
+
+	// NextIncome The next salary: the next regular income of at least half the largest; null without one in sight
+	NextIncome nullable.Nullable[ForecastEvent] `json:"next_income"`
+
+	// Series Today and each day after, `days` of them
+	Series []ForecastDay `json:"series"`
+
+	// StartMinor The money today
+	StartMinor int64 `json:"start_minor"`
+}
+
+// ForecastDay defines model for ForecastDay.
+type ForecastDay struct {
+	// BalanceMinor The money at the end of the day, in the base currency
+	BalanceMinor int64 `json:"balance_minor"`
+
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+}
+
+// ForecastEvent defines model for ForecastEvent.
+type ForecastEvent struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor Signed as the journal signs it, in currency
+	AmountMinor int64  `json:"amount_minor"`
+	Currency    string `json:"currency"`
+
+	// InBaseMinor The same in the base currency at today's rate
+	InBaseMinor int64             `json:"in_base_minor"`
+	Kind        ForecastEventKind `json:"kind"`
+
+	// Name The payee, or the loan account's name
+	Name string `json:"name"`
+
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+
+	// Overdue A regular payment whose day has passed without it: expected today
+	Overdue bool `json:"overdue"`
+}
+
+// ForecastEventKind defines model for ForecastEvent.Kind.
+type ForecastEventKind string
+
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
 type FullValuation string
 
@@ -3468,6 +3545,12 @@ type GetCashflowParams struct {
 
 	// Member A member's id: only what is theirs — rows they are named on (Operation.member_id), and rows naming nobody on the accounts personal to them. `shared`: rows naming nobody on the shared accounts. Absent: the whole family.
 	Member *string `form:"member,omitempty" json:"member,omitempty"`
+}
+
+// GetForecastParams defines parameters for GetForecast.
+type GetForecastParams struct {
+	// Days How far ahead, in days; 90 when absent
+	Days *int `form:"days,omitempty" json:"days,omitempty"`
 }
 
 // AddImportPapersJSONBody defines parameters for AddImportPapers.

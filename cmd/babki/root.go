@@ -23,6 +23,7 @@ import (
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/forecast"
 	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
@@ -118,7 +119,10 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	loan.NewHandler(loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool)), famAuth, famSM).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
-	recurring.NewHandler(recurring.NewService(opStore, accStore), famAuth, famSM).Mount(srv)
+	recurringSvc := recurring.NewService(opStore, accStore)
+	recurring.NewHandler(recurringSvc, famAuth, famSM).Mount(srv)
+	forecast.NewHandler(forecast.NewService(accStore, positions, famStore, recurringSvc,
+		loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool)), converter), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)), instStore, famAuth, famSM).Mount(srv)
 
