@@ -673,6 +673,33 @@ func (e OperationType) Valid() bool {
 	}
 }
 
+// Defines values for PayoutKind.
+const (
+	PayoutKindAmortization PayoutKind = "amortization"
+	PayoutKindCoupon       PayoutKind = "coupon"
+	PayoutKindDividend     PayoutKind = "dividend"
+	PayoutKindOffer        PayoutKind = "offer"
+	PayoutKindRedemption   PayoutKind = "redemption"
+)
+
+// Valid indicates whether the value is a known member of the PayoutKind enum.
+func (e PayoutKind) Valid() bool {
+	switch e {
+	case PayoutKindAmortization:
+		return true
+	case PayoutKindCoupon:
+		return true
+	case PayoutKindDividend:
+		return true
+	case PayoutKindOffer:
+		return true
+	case PayoutKindRedemption:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PriceSource.
 const (
 	PriceSourceForeign PriceSource = "foreign"
@@ -2270,6 +2297,59 @@ type OperationsResponse struct {
 	Operations []Operation `json:"operations"`
 }
 
+// Payout defines model for Payout.
+type Payout struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor per_unit × quantity in minor units of `currency`, before tax
+	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+	Currency    string                   `json:"currency"`
+
+	// InBaseMinor amount_minor in the base currency at today's rate; null without an amount or a rate
+	InBaseMinor  nullable.Nullable[int64] `json:"in_base_minor"`
+	InstrumentId openapi_types.UUID       `json:"instrument_id"`
+	Kind         PayoutKind               `json:"kind"`
+
+	// On Date YYYY-MM-DD the money is due
+	On string `json:"on"`
+
+	// PerUnit Decimal as string, per paper in `currency`; null for a floating coupon not yet set and for an offer
+	PerUnit nullable.Nullable[string] `json:"per_unit"`
+
+	// Quantity Decimal as string: what the account holds today
+	Quantity string `json:"quantity"`
+
+	// RecordOn Date YYYY-MM-DD of the record day, when the source gives one
+	RecordOn nullable.Nullable[string] `json:"record_on"`
+}
+
+// PayoutKind defines model for Payout.Kind.
+type PayoutKind string
+
+// PayoutsForecast defines model for PayoutsForecast.
+type PayoutsForecast struct {
+	BaseCurrency string `json:"base_currency"`
+
+	// ByMonth What each month's payouts come to in the base currency
+	ByMonth []int64 `json:"by_month"`
+
+	// From Date YYYY-MM-DD, today
+	From string `json:"from"`
+
+	// MissingRates Currencies left out of the base figures for want of today's rate
+	MissingRates []string `json:"missing_rates"`
+
+	// Months YYYY-MM, this month first
+	Months []string `json:"months"`
+
+	// Payouts Earliest first
+	Payouts []Payout `json:"payouts"`
+
+	// To Date YYYY-MM-DD, the last day of the last month
+	To         string `json:"to"`
+	TotalMinor int64  `json:"total_minor"`
+}
+
 // PeriodReturn defines model for PeriodReturn.
 type PeriodReturn struct {
 	// AnnualRate The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end
@@ -3230,6 +3310,14 @@ type GetInstrumentReturnParams struct {
 
 	// To Date YYYY-MM-DD, the period's last day
 	To string `form:"to" json:"to"`
+}
+
+// GetPayoutsParams defines parameters for GetPayouts.
+type GetPayoutsParams struct {
+	Months *int `form:"months,omitempty" json:"months,omitempty"`
+
+	// AccountId Only this account's; absent, every active account of the family
+	AccountId *openapi_types.UUID `form:"account_id,omitempty" json:"account_id,omitempty"`
 }
 
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
