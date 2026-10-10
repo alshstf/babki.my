@@ -310,7 +310,7 @@ func termsFromAPI(id uuid.UUID, req apitypes.CreditCardTerms) (Terms, error) {
 	}
 	if req.Catalog.IsSpecified() && !req.Catalog.IsNull() {
 		ref := req.Catalog.MustGet()
-		t.Catalog = &CatalogRef{Product: ref.Product, Revision: ref.Revision}
+		t.Catalog = &CatalogRef{Product: ref.Product, Revision: ref.Revision, Terms: ref.Fingerprint}
 		if ref.ContractsFrom.IsSpecified() && !ref.ContractsFrom.IsNull() {
 			from := ref.ContractsFrom.MustGet()
 			t.Catalog.ContractsFrom = &from
@@ -331,7 +331,8 @@ func (h *Handler) handleCatalog(w http.ResponseWriter, _ *http.Request) {
 		for _, v := range p.Versions {
 			item.Versions = append(item.Versions, apitypes.CreditCardCatalogVersion{
 				ContractsFrom: nullableText(v.ContractsFrom), ContractsTo: nullableText(v.ContractsTo),
-				Revision: v.Revision, CheckedOn: v.CheckedOn, Sources: nonNil(v.Sources), Notes: v.Notes, Terms: v.Terms,
+				Revision: v.Revision, CheckedOn: v.CheckedOn, Fingerprint: v.Fingerprint(), Sources: nonNil(v.Sources),
+				Notes: v.Notes, Terms: v.Terms,
 			})
 		}
 		out = append(out, item)
@@ -488,7 +489,7 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 	}
 	if c := t.Catalog; c != nil {
 		out.Catalog = nullable.NewNullableWithValue(apitypes.CreditCardCatalogRef{
-			Product: c.Product, ContractsFrom: nullableText(c.ContractsFrom), Revision: c.Revision,
+			Product: c.Product, ContractsFrom: nullableText(c.ContractsFrom), Revision: c.Revision, Fingerprint: c.Terms,
 		})
 	}
 	if out.TransferCategories == nil {
@@ -506,10 +507,11 @@ func cardAPI(c Card) apitypes.CreditCard {
 		Benefit:       nullable.NewNullNullable[apitypes.CreditCardBenefit](),
 		CatalogUpdate: nullable.NewNullNullable[apitypes.CreditCardCatalogUpdate](),
 	}
-	if v, changes := catalogUpdate(c.Terms); v != nil {
+	if v, changes, refined := catalogUpdate(c.Terms); v != nil {
 		p, _ := productByID(c.Terms.Catalog.Product)
 		u := apitypes.CreditCardCatalogUpdate{
-			Product: p.ID, Bank: p.Bank, Card: p.Card, Revision: v.Revision, Sources: nonNil(v.Sources),
+			Product: p.ID, Bank: p.Bank, Card: p.Card, Revision: v.Revision, Fingerprint: v.Fingerprint(),
+			Refined: refined, Sources: nonNil(v.Sources),
 			Changes: make([]apitypes.CreditCardCatalogChange, 0, len(changes)),
 		}
 		for _, ch := range changes {

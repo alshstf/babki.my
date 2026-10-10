@@ -196,12 +196,12 @@ const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, 
 	grace_run_from, pay_day, min_round_up_minor, installment_months, installment_fee_percent, installment_fee_minor,
 	missed_minimum_period, catalog_product, catalog_contracts_from, catalog_revision, yearly_fee_minor,
 	transfer_free_minor, intro_free_days, intro_free_minor, penalty_yearly_percent, penalty_from_day, grace_moves,
-	grace_periods, grace_categories, grace_to_month_end`
+	grace_periods, grace_categories, grace_to_month_end, catalog_terms`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
 	var own decimal.NullDecimal
-	var catalogProduct, catalogFrom, catalogRevision *string
+	var catalogProduct, catalogFrom, catalogRevision, catalogTerms *string
 	err := row.Scan(&t.AccountID, &t.Limit, &t.StatementDay, &t.PaymentDays, &t.GraceKind, &t.GraceDays,
 		&t.MinPercent, &t.MinFloor, &t.AnnualRate, &own, &t.WindowMonths, &t.GraceMonths, &t.OpenedOn,
 		&t.GraceAllLost, &t.PayByPeriodEnd, &t.ChargesInFull, &t.TransferCategories, &t.Fees.Monthly, &t.Fees.CashFree,
@@ -210,9 +210,12 @@ func scan(row pgx.Row) (Terms, error) {
 		&t.RunFrom, &t.PayDay, &t.MinRoundUp, &t.Installment.Months, &t.Installment.MonthlyFeePercent, &t.Installment.Fee,
 		&t.MissedMinimumPeriod, &catalogProduct, &catalogFrom, &catalogRevision, &t.Fees.Yearly,
 		&t.Fees.TransferFree, &t.Fees.IntroDays, &t.Fees.IntroFree, &t.Fees.PenaltyYearly, &t.Fees.PenaltyFromDay,
-		&t.GraceMoves, &t.GracePeriods, &t.GraceCategories, &t.GraceToMonthEnd)
+		&t.GraceMoves, &t.GracePeriods, &t.GraceCategories, &t.GraceToMonthEnd, &catalogTerms)
 	if catalogProduct != nil && catalogRevision != nil {
 		t.Catalog = &CatalogRef{Product: *catalogProduct, ContractsFrom: catalogFrom, Revision: *catalogRevision}
+		if catalogTerms != nil {
+			t.Catalog.Terms = *catalogTerms
+		}
 	}
 	if own.Valid {
 		t.OwnRate = &own.Decimal
@@ -254,12 +257,15 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 	if t.GraceKind != Windows {
 		t.WindowMonths, t.GraceMonths, t.OpenedOn = 0, 0, nil
 	}
-	var catalogProduct, catalogFrom, catalogRevision *string
+	var catalogProduct, catalogFrom, catalogRevision, catalogTerms *string
 	if c := t.Catalog; c != nil {
 		if _, ok := productByID(c.Product); !ok {
 			return Terms{}, fmt.Errorf("%w: no card %q in the catalog", family.ErrValidation, c.Product)
 		}
 		catalogProduct, catalogFrom, catalogRevision = &c.Product, c.ContractsFrom, &c.Revision
+		if c.Terms != "" {
+			catalogTerms = &c.Terms
+		}
 	}
 	if t.TransferCategories, err = s.spendingCategories(ctx, spaceID, t.TransferCategories); err != nil {
 		return Terms{}, err
@@ -284,10 +290,10 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			installment_fee_percent, installment_fee_minor, missed_minimum_period, catalog_product,
 			catalog_contracts_from, catalog_revision, yearly_fee_minor, transfer_free_minor, intro_free_days,
 			intro_free_minor, penalty_yearly_percent, penalty_from_day, grace_moves, grace_periods, grace_categories,
-			grace_to_month_end)
+			grace_to_month_end, catalog_terms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
 			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42,
-			$43, $44, $45, $46, $47, $48, $49, $50)
+			$43, $44, $45, $46, $47, $48, $49, $50, $51)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
@@ -314,7 +320,7 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			penalty_yearly_percent = EXCLUDED.penalty_yearly_percent, penalty_from_day = EXCLUDED.penalty_from_day,
 			grace_moves = EXCLUDED.grace_moves, grace_periods = EXCLUDED.grace_periods,
 			grace_categories = EXCLUDED.grace_categories, grace_to_month_end = EXCLUDED.grace_to_month_end,
-			updated_at = now()`,
+			catalog_terms = EXCLUDED.catalog_terms, updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
 		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
 		t.GraceAllLost, t.PayByPeriodEnd, t.ChargesInFull, t.TransferCategories, t.Fees.Monthly, t.Fees.CashFree,
@@ -323,7 +329,7 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 		t.RunFrom, t.PayDay, t.MinRoundUp, t.Installment.Months, t.Installment.MonthlyFeePercent, t.Installment.Fee,
 		t.MissedMinimumPeriod, catalogProduct, catalogFrom, catalogRevision, t.Fees.Yearly,
 		t.Fees.TransferFree, t.Fees.IntroDays, t.Fees.IntroFree, t.Fees.PenaltyYearly, t.Fees.PenaltyFromDay,
-		t.GraceMoves, t.GracePeriods, t.GraceCategories, t.GraceToMonthEnd)
+		t.GraceMoves, t.GracePeriods, t.GraceCategories, t.GraceToMonthEnd, catalogTerms)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}

@@ -2231,6 +2231,9 @@ type CreditCardCatalogRef struct {
 	// ContractsFrom The version's first contract day; null for a version with no bound
 	ContractsFrom nullable.Nullable[string] `json:"contracts_from"`
 
+	// Fingerprint The fingerprint of the version's terms the card's were last compared with — taken, applied or kept; empty for a card taken before fingerprints
+	Fingerprint string `json:"fingerprint"`
+
 	// Product The catalog product's id
 	Product string `json:"product"`
 
@@ -2243,9 +2246,15 @@ type CreditCardCatalogUpdate struct {
 	Bank    string                    `json:"bank"`
 	Card    string                    `json:"card"`
 	Changes []CreditCardCatalogChange `json:"changes"`
-	Product string                    `json:"product"`
 
-	// Revision The catalog's newer revision
+	// Fingerprint The fingerprint of the version's terms offered
+	Fingerprint string `json:"fingerprint"`
+	Product     string `json:"product"`
+
+	// Refined The bank's revision is the card's; the catalog refined it since (a mechanic learnt, a number corrected)
+	Refined bool `json:"refined"`
+
+	// Revision The catalog's revision: newer than the card's, or the same one refined
 	Revision string   `json:"revision"`
 	Sources  []string `json:"sources"`
 }
@@ -2260,7 +2269,10 @@ type CreditCardCatalogVersion struct {
 
 	// ContractsTo …to this one; null for no bound
 	ContractsTo nullable.Nullable[string] `json:"contracts_to"`
-	Notes       string                    `json:"notes"`
+
+	// Fingerprint Names the version's terms as they are: another one when the catalog refines them within the same revision
+	Fingerprint string `json:"fingerprint"`
+	Notes       string `json:"notes"`
 
 	// Revision The tariff's revision
 	Revision string   `json:"revision"`

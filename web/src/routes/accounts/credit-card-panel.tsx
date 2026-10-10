@@ -264,7 +264,9 @@ const FIELD_LABEL: Record<string, string> = {
 };
 
 // CatalogUpdate offers the catalog's newer revision of the card's tariff
-// (decision Р-32): applied only when the person says so.
+// (decision Р-32), or the same revision the catalog has refined since
+// (#472): applied only when the person says so, and either way not offered
+// again.
 function CatalogUpdate({ account, card }: { account: AccountWithBalance; card: CreditCard }) {
   const { t } = useTranslation();
   const save = useSetCreditCard(account.id);
@@ -277,12 +279,16 @@ function CatalogUpdate({ account, card }: { account: AccountWithBalance; card: C
   const label = (field: string) => (FIELD_LABEL[field] ? t(`card.field.${FIELD_LABEL[field]}`) : field);
   const decide = (apply: boolean) => {
     const terms = apply && version ? mergeTerms(card.terms, version.terms) : card.terms;
-    save.mutate({ ...terms, catalog: { ...ref, revision: u.revision } });
+    save.mutate({ ...terms, catalog: { ...ref, revision: u.revision, fingerprint: u.fingerprint } });
   };
   return (
     <Alert data-testid="card-catalog-update">
       <AlertDescription className="grid gap-2">
-        <span>{t("card.catalogUpdated", { card: `${u.bank} ${u.card}`, revision: formatDate(u.revision) })}</span>
+        <span>
+          {u.refined
+            ? t("card.catalogRefined", { card: `${u.bank} ${u.card}`, revision: formatDate(u.revision) })
+            : t("card.catalogUpdated", { card: `${u.bank} ${u.card}`, revision: formatDate(u.revision) })}
+        </span>
         <ul className="list-disc pl-5">
           {u.changes.map((ch) => (
             <li key={ch.field}>
@@ -876,7 +882,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     const next = toForm(mergeTerms(termsOf(f), version.terms));
     if ((next.kind === "windows" || Number(next.introDays) > 0) && contractOn) next.openedOn = contractOn;
     setF(next);
-    setCatalogRef({ product: product.id, contracts_from: version.contracts_from, revision: version.revision });
+    setCatalogRef({ product: product.id, contracts_from: version.contracts_from, revision: version.revision, fingerprint: version.fingerprint });
   };
   type TextField = { [K in keyof Form]: Form[K] extends string ? K : never }[keyof Form];
   const field = (id: TextField, label: string, hint?: string, type = "text") => (

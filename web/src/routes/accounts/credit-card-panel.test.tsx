@@ -52,7 +52,7 @@ const noGraces = { grace_moves: false, grace_periods: 0, grace_categories: [], g
 const catalogFixture = [{
   id: "gpb-180-premium", bank: "Газпромбанк", card: "«180 дней Премиум»",
   versions: [{
-    contracts_from: "2025-10-01", contracts_to: null, revision: "2026-09-10", checked_on: "2026-10-10",
+    contracts_from: "2025-10-01", contracts_to: null, revision: "2026-09-10", checked_on: "2026-10-10", fingerprint: "fp-premium",
     sources: ["https://example.test/tariff.pdf"], notes: "Обслуживание 590 ₽ в месяц не берётся при подписке.",
     terms: {
       statement_day: 1, grace_kind: "windows", window_months: 2, grace_months: 6, grace_all_lost: true, pay_by_period_end: true,
@@ -60,7 +60,7 @@ const catalogFixture = [{
       fees: { cash_free_minor: 10000000, cash_percent: "5.9", cash_fixed_minor: 59000, transfer_percent: "4.9", transfer_fixed_minor: 39000, penalty_daily_percent: "0.1" },
     },
   }, {
-    contracts_from: "2025-04-01", contracts_to: "2025-09-30", revision: "2026-09-10", checked_on: "2026-10-10",
+    contracts_from: "2025-04-01", contracts_to: "2025-09-30", revision: "2026-09-10", checked_on: "2026-10-10", fingerprint: "fp-premium-old",
     sources: ["https://example.test/old.pdf"], notes: "", terms: { grace_kind: "windows", window_months: 2, grace_months: 6 },
   }],
 }];
@@ -155,7 +155,7 @@ describe("CreditCardPanel", () => {
       limit_minor: 300_000_00, grace_kind: "windows", window_months: 2, grace_months: 6, opened_on: "2026-07-10",
       grace_all_lost: true, pay_by_period_end: true, charges_in_full: true, annual_rate: "59.99", min_floor_minor: 500_00,
       fees: { cash_free_minor: 100_000_00, cash_percent: "5.9", cash_fixed_minor: 590_00 },
-      catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-09-10" },
+      catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-09-10", fingerprint: "fp-premium" },
     });
   });
 
@@ -165,21 +165,46 @@ describe("CreditCardPanel", () => {
       "/credit-cards/catalog": catalogFixture,
       "/credit-card": {
         ...base,
-        terms: { ...base.terms, annual_rate: "49.9", catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-01-01" } },
+        terms: { ...base.terms, annual_rate: "49.9", catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-01-01", fingerprint: "fp-old" } },
         catalog_update: {
-          product: "gpb-180-premium", bank: "Газпромбанк", card: "«180 дней Премиум»", revision: "2026-09-10", sources: [],
-          changes: [{ field: "annual_rate", ours: "49.9", theirs: "59.99" }],
+          product: "gpb-180-premium", bank: "Газпромбанк", card: "«180 дней Премиум»", revision: "2026-09-10", fingerprint: "fp-premium",
+          refined: false, sources: [], changes: [{ field: "annual_rate", ours: "49.9", theirs: "59.99" }],
         },
       },
     });
     show(<CreditCardPanel account={account} canEdit />);
     const offer = await screen.findByTestId("card-catalog-update");
+    expect(norm(offer.textContent ?? "")).toContain("тариф обновлён (ред. 10.09.2026)");
     expect(norm(offer.textContent ?? "")).toContain("ставка, %: 49.9 → 59.99");
     await waitFor(() => expect(within(offer).getByRole("button", { name: "Применить" })).not.toBeDisabled());
     fireEvent.click(within(offer).getByRole("button", { name: "Применить" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
-    expect(await put.json()).toMatchObject({ annual_rate: "59.99", catalog: { revision: "2026-09-10" } });
+    expect(await put.json()).toMatchObject({ annual_rate: "59.99", catalog: { revision: "2026-09-10", fingerprint: "fp-premium" } });
+  });
+
+  // The catalog refined within the bank's same revision (#472): said so;
+  // kept as it is, the card remembers the terms it was compared with.
+  it("offers the catalog refined, and remembers it when kept", async () => {
+    const base = card();
+    answer({
+      "/credit-cards/catalog": catalogFixture,
+      "/credit-card": {
+        ...base,
+        terms: { ...base.terms, catalog: { product: "gpb-180-premium", contracts_from: "2025-10-01", revision: "2026-09-10", fingerprint: "" } },
+        catalog_update: {
+          product: "gpb-180-premium", bank: "Газпромбанк", card: "«180 дней Премиум»", revision: "2026-09-10", fingerprint: "fp-premium",
+          refined: true, sources: [], changes: [{ field: "annual_rate", ours: "49.9", theirs: "59.99" }],
+        },
+      },
+    });
+    show(<CreditCardPanel account={account} canEdit />);
+    const offer = await screen.findByTestId("card-catalog-update");
+    expect(norm(offer.textContent ?? "")).toContain("в каталоге тарифов уточнены условия (тариф банка тот же, ред. 10.09.2026)");
+    fireEvent.click(within(offer).getByRole("button", { name: "Оставить как есть" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({ catalog: { revision: "2026-09-10", fingerprint: "fp-premium" } });
   });
 
   // Fees as Т-Банк and ВТБ state them (#462): the yearly fee's statement, the

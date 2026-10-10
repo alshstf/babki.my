@@ -1,7 +1,9 @@
 package creditcard
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -50,12 +52,14 @@ type Version struct {
 }
 
 // CatalogRef is the catalog's version a card's terms were taken from: the
-// product, the version (by its first contract day), and the tariff's
-// revision then.
+// product, the version (by its first contract day), the tariff's revision
+// then, and the fingerprint of the version's terms the card's were last
+// compared with (empty for a card taken before fingerprints).
 type CatalogRef struct {
 	Product       string
 	ContractsFrom *string
 	Revision      string
+	Terms         string
 }
 
 var catalog struct {
@@ -210,24 +214,37 @@ func text(v any) string {
 	return fmt.Sprint(v)
 }
 
-// catalogUpdate is what the catalog's newer revision of the card's version
-// would change in its terms; nil when it changes nothing or the card is
-// not from the catalog.
-func catalogUpdate(t Terms) (*Version, []Change) {
+// Fingerprint names the version's terms as they are: the catalog refined
+// within the same revision of the bank's has another (alshstf/babki.my#472).
+func (v Version) Fingerprint() string {
+	raw, _ := json.Marshal(v.Terms)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:8])
+}
+
+// catalogUpdate is what the catalog's version of the card would change in
+// its terms: a newer revision of the bank's, or the same one the catalog
+// has refined since the card's terms were last compared with it (refined).
+// Nil when it changes nothing or the card is not from the catalog.
+func catalogUpdate(t Terms) (v *Version, changes []Change, refined bool) {
 	if t.Catalog == nil {
-		return nil, nil
+		return nil, nil, false
 	}
 	p, ok := productByID(t.Catalog.Product)
 	if !ok {
-		return nil, nil
+		return nil, nil, false
 	}
-	v, ok := p.version(t.Catalog.ContractsFrom)
-	if !ok || v.Revision <= t.Catalog.Revision {
-		return nil, nil
+	found, ok := p.version(t.Catalog.ContractsFrom)
+	if !ok || found.Revision < t.Catalog.Revision {
+		return nil, nil, false
 	}
-	changes := v.Changes(TermsAPI(t))
+	refined = found.Revision == t.Catalog.Revision
+	if refined && found.Fingerprint() == t.Catalog.Terms {
+		return nil, nil, false
+	}
+	changes = found.Changes(TermsAPI(t))
 	if len(changes) == 0 {
-		return nil, nil
+		return nil, nil, false
 	}
-	return &v, changes
+	return &found, changes, refined
 }

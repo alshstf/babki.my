@@ -270,16 +270,31 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 	}
 	fromCatalog := `{"limit_minor":15000000,"statement_day":1,"payment_days":20,"grace_kind":"statement","grace_days":0,
 		"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":null,
-		"catalog":{"product":%q,"contracts_from":null,"revision":"2026-09-30"}}`
-	if r := apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "no-such-card")); r.StatusCode != http.StatusBadRequest {
+		"catalog":{"product":%q,"contracts_from":null,"revision":"2026-09-30","fingerprint":%q}}`
+	if r := apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "no-such-card", "")); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("a card not in the catalog = %d, want 400", r.StatusCode)
 	}
-	resp = apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "tbank-platinum"))
+	var platinum string
+	for _, p := range catalog {
+		if p.Id == "tbank-platinum" {
+			platinum = p.Versions[0].Fingerprint
+		}
+	}
+	// Taken before fingerprints: what the catalog sets otherwise is offered
+	// once, as the catalog refined (#472).
+	resp = apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "tbank-platinum", ""))
+	apitest.Decode(t, resp, &got)
+	if u, err := got.CatalogUpdate.Get(); err != nil || !u.Refined || u.Fingerprint != platinum || len(u.Changes) == 0 {
+		t.Errorf("a card taken before fingerprints: update %+v (%v)", u, err)
+	}
+	// Kept as it is, against the version's terms as they are: not offered again.
+	resp = apitest.Do(t, c, "PUT", path, fmt.Sprintf(fromCatalog, "tbank-platinum", platinum))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("terms from the catalog = %d", resp.StatusCode)
 	}
 	apitest.Decode(t, resp, &got)
-	if ref, err := got.Terms.Catalog.Get(); err != nil || ref.Product != "tbank-platinum" || ref.Revision != "2026-09-30" || !got.CatalogUpdate.IsNull() {
+	if ref, err := got.Terms.Catalog.Get(); err != nil || ref.Product != "tbank-platinum" || ref.Revision != "2026-09-30" ||
+		ref.Fingerprint != platinum || !got.CatalogUpdate.IsNull() {
 		t.Errorf("catalog ref = %+v (%v), update %+v", ref, err, got.CatalogUpdate)
 	}
 
