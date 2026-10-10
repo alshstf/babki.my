@@ -33,6 +33,7 @@ var owners = map[string]string{
 	"credit_cards":                "internal/creditcard",
 	"push_subscriptions":          "internal/notify",
 	"push_sent":                   "internal/notify",
+	"recurring_hidden":            "internal/recurring",
 	"instruments":                 "internal/instrument",
 	"quotes":                      "internal/marketdata",
 	"fx_rates":                    "internal/marketdata",

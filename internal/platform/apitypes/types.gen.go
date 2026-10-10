@@ -2950,6 +2950,17 @@ type ReceiptMatch struct {
 	OccurredOn string `json:"occurred_on"`
 }
 
+// RecurringKey defines model for RecurringKey.
+type RecurringKey struct {
+	Currency string `json:"currency"`
+
+	// Incoming amount_minor above zero
+	Incoming bool `json:"incoming"`
+
+	// Name RecurringPayment.name; case and «ё» do not matter
+	Name string `json:"name"`
+}
+
 // RecurringPayment defines model for RecurringPayment.
 type RecurringPayment struct {
 	// AccountId The account of the latest payment
@@ -2965,6 +2976,9 @@ type RecurringPayment struct {
 	// Count How many payments the pattern rests on
 	Count    int    `json:"count"`
 	Currency string `json:"currency"`
+
+	// Hidden The family said it is not regular (PUT /recurring/hidden): listed apart, out of the forecast
+	Hidden bool `json:"hidden"`
 
 	// LastOn Date YYYY-MM-DD of the latest payment
 	LastOn string `json:"last_on"`
@@ -3930,6 +3944,12 @@ type StateWithheldAbroadJSONRequestBody = StateWithheldRequest
 
 // SubscribePushJSONRequestBody defines body for SubscribePush for application/json ContentType.
 type SubscribePushJSONRequestBody = PushSubscriptionRequest
+
+// ShowRecurringJSONRequestBody defines body for ShowRecurring for application/json ContentType.
+type ShowRecurringJSONRequestBody = RecurringKey
+
+// HideRecurringJSONRequestBody defines body for HideRecurring for application/json ContentType.
+type HideRecurringJSONRequestBody = RecurringKey
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest

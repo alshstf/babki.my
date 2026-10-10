@@ -136,8 +136,9 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	notify.NewHandler(notify.NewStore(r.pool), pushKeys, pushSender, famAuth, famSM, r.log).Mount(srv)
 	cashflow.NewHandler(cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
-	recurringSvc := recurring.NewService(opStore, accStore)
-	recurring.NewHandler(recurringSvc, famAuth, famSM).Mount(srv)
+	recurringHidden := recurring.NewHidden(r.pool)
+	recurringSvc := recurring.NewService(opStore, accStore, recurringHidden)
+	recurring.NewHandler(recurringSvc, recurringHidden, famAuth, famSM).Mount(srv)
 	forecast.NewHandler(forecast.NewService(accStore, positions, famStore, recurringSvc,
 		loanSvc, converter), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),

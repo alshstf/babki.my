@@ -77,6 +77,9 @@ type Payment struct {
 	// Overdue is a payment whose day has passed without it, within the slack
 	// its pace allows: late, or not entered yet.
 	Overdue bool
+	// Hidden is a payment the family said is not regular: listed apart, left
+	// out of the forecast.
+	Hidden bool
 }
 
 type journals interface {
@@ -87,15 +90,20 @@ type accounts interface {
 	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
 }
 
+type hiddenPayments interface {
+	All(ctx context.Context, spaceID uuid.UUID) (map[Key]bool, error)
+}
+
 // Service finds regular payments.
 type Service struct {
 	journal  journals
 	accounts accounts
+	hidden   hiddenPayments
 	now      func() time.Time
 }
 
-func NewService(j journals, acc accounts) *Service {
-	return &Service{journal: j, accounts: acc, now: time.Now}
+func NewService(j journals, acc accounts, hidden hiddenPayments) *Service {
+	return &Service{journal: j, accounts: acc, hidden: hidden, now: time.Now}
 }
 
 // Find is the space's regular payments, the soonest due first. Only everyday
@@ -123,7 +131,15 @@ func (s *Service) Find(ctx context.Context, spaceID uuid.UUID) ([]Payment, error
 			kept = append(kept, op)
 		}
 	}
-	return find(kept, today), nil
+	found := find(kept, today)
+	hidden, err := s.hidden.All(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range found {
+		found[i].Hidden = hidden[KeyOf(found[i].Name, found[i].Amount > 0, found[i].Currency)]
+	}
+	return found, nil
 }
 
 // key is what makes two rows the same payment: who it is with, which way the

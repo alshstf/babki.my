@@ -9,7 +9,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useRecurring } from "@/api/recurring";
+import { useState } from "react";
+import { EyeOff } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { keyOf, useHideRecurring, useRecurring } from "@/api/recurring";
+import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { formatMinor, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
@@ -24,8 +28,14 @@ export function RecurringPayments() {
   const narrow = useNarrow();
   const recurring = useRecurring();
   const accounts = useAccounts();
-  const list = recurring.data ?? [];
-  if (list.length === 0) return null;
+  const { data: session } = useSession();
+  const hide = useHideRecurring();
+  const [showHidden, setShowHidden] = useState(false);
+  const canEdit = session?.role === "owner" || session?.role === "editor";
+  const all = recurring.data ?? [];
+  const list = all.filter((p) => !p.hidden);
+  const hidden = all.filter((p) => p.hidden);
+  if (all.length === 0) return null;
   const accountName = (id: string) => accounts.data?.find((a) => a.id === id)?.name ?? "—";
   // When the payment is due: a late one in amber, said as expected.
   const nextText = (overdue: boolean, on: string) =>
@@ -45,6 +55,7 @@ export function RecurringPayments() {
               <TableHead className="hidden sm:table-cell">{t("recurring.columns.account")}</TableHead>
               {!narrow && <TableHead>{t("recurring.columns.next")}</TableHead>}
               <TableHead className="text-right">{t("recurring.columns.amount")}</TableHead>
+              {canEdit && <TableHead className="w-10" />}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -65,10 +76,44 @@ export function RecurringPayments() {
                 <TableCell className={cn("text-right tabular-nums", signClass(p.amount_minor))}>
                   {formatMinor(p.amount_minor, p.currency)}
                 </TableCell>
+                {canEdit && (
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={t("recurring.hide")}
+                      title={t("recurring.hide")}
+                      disabled={hide.isPending}
+                      onClick={() => hide.mutate({ key: keyOf(p), hide: true })}
+                    >
+                      <EyeOff className="size-4" />
+                    </Button>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
         </Table>
+        {hidden.length > 0 && (
+          <div className="mt-3 grid gap-1 text-sm" data-testid="recurring-hidden">
+            <Button variant="link" size="sm" className="justify-self-start p-0" onClick={() => setShowHidden(!showHidden)}>
+              {t("recurring.hiddenCount", { count: hidden.length })}
+            </Button>
+            {showHidden &&
+              hidden.map((p) => (
+                <div key={`${p.name}-${p.currency}-${p.amount_minor > 0}-${p.next_on}`} className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                  <span>
+                    {p.name} · {formatMinor(p.amount_minor, p.currency)}
+                  </span>
+                  {canEdit && (
+                    <Button variant="ghost" size="sm" disabled={hide.isPending} onClick={() => hide.mutate({ key: keyOf(p), hide: false })}>
+                      {t("recurring.unhide")}
+                    </Button>
+                  )}
+                </div>
+              ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

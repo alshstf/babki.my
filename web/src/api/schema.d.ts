@@ -162,6 +162,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recurring/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Says a regular payment is not regular — three trips to one shop a month apart are not a subscription. It stays in GET /recurring with hidden true, and leaves the forecast. */
+        put: operations["hideRecurring"];
+        post?: never;
+        /** @description Takes a hidden payment back among the regular ones. */
+        delete: operations["showRecurring"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/forecast": {
         parameters: {
             query?: never;
@@ -2015,6 +2033,15 @@ export interface components {
             count: number;
             /** @description Its day has passed without it — late, or not entered yet */
             overdue: boolean;
+            /** @description The family said it is not regular (PUT /recurring/hidden): listed apart, out of the forecast */
+            hidden: boolean;
+        };
+        RecurringKey: {
+            /** @description RecurringPayment.name; case and «ё» do not matter */
+            name: string;
+            /** @description amount_minor above zero */
+            incoming: boolean;
+            currency: string;
         };
         StructureSlice: {
             /** @description The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN */
@@ -3964,6 +3991,57 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    hideRecurring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecurringKey"];
+            };
+        };
+        responses: {
+            /** @description Hidden */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    showRecurring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecurringKey"];
+            };
+        };
+        responses: {
+            /** @description Shown again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getForecast: {

@@ -201,9 +201,10 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int) (Forecast
 		return Forecast{}, err
 	}
 	for _, p := range payments {
-		// Only what moves the money counted here; and a loan's interest,
-		// written under the loan's name, is already in its schedule.
-		if !inScope[p.AccountID] || loanNames[fold(p.Name)] {
+		// Only what moves the money counted here; a loan's interest, written
+		// under the loan's name, is already in its schedule; and what the
+		// family said is not regular is not.
+		if !inScope[p.AccountID] || loanNames[fold(p.Name)] || p.Hidden {
 			continue
 		}
 		mark, byBalance := markedOn[p.AccountID]
