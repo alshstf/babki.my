@@ -74,6 +74,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/credit-card": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A credit card's terms and where it stands today (decision Р-26). Counted by its journal, the card's withdrawals are its purchases — free of interest until their deadline: the payment date of their statement (grace_kind `statement`), or grace_days from the start of their statement period (`long`) — and its payments clear the oldest debt first; money moved off the card, fees and interest charged owe interest from their day. Counted by its last balance, only the debt, the limit left and an estimated minimum can be told. 404 while no terms are stated. */
+        get: operations["getCreditCard"];
+        /** @description States or restates the card's terms; only a credit card account takes them. */
+        put: operations["setCreditCard"];
+        post?: never;
+        /** @description Forgets the card's terms; its journal stays. */
+        delete: operations["deleteCreditCard"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/credit-cards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every active credit card with terms, where each stands today — for the reminders. */
+        get: operations["listCreditCards"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/forecast": {
         parameters: {
             query?: never;
@@ -1969,6 +2005,102 @@ export interface components {
              */
             left_minor: number;
         };
+        CreditCardTerms: {
+            /** Format: int64 */
+            limit_minor: number;
+            /** @description The day of the month the bank closes a statement period; a short month's last day stands for a later one */
+            statement_day: number;
+            /** @description Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement) */
+            payment_days: number;
+            /** @enum {string} */
+            grace_kind: "statement" | "long";
+            /** @description For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise */
+            grace_days: number;
+            /** @description The minimum payment, percent of the debt the statement shows (decimal) */
+            min_percent: string;
+            /**
+             * Format: int64
+             * @description The smallest minimum payment
+             */
+            min_floor_minor: number;
+            /** @description Percent a year charged once the grace is lost (decimal) */
+            annual_rate: string;
+            /** @description Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named */
+            own_rate: string | null;
+        };
+        CreditCardDue: {
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** Format: int64 */
+            amount_minor: number;
+        };
+        CreditCardLost: {
+            /** @description The statement period's first day */
+            from: string;
+            /** @description Its last day */
+            to: string;
+            /** @description The day its purchases had to be paid by */
+            deadline: string;
+            /**
+             * Format: int64
+             * @description What is still owed of them
+             */
+            amount_minor: number;
+            /**
+             * Format: int64
+             * @description Roughly the interest on it so far, at annual_rate from each purchase's day; the bank counts by its own rules
+             */
+            interest_minor: number;
+        };
+        CreditCardStatus: {
+            /**
+             * Format: int64
+             * @description Owed on the card; below zero the family's own money on it
+             */
+            debt_minor: number;
+            /**
+             * Format: int64
+             * @description What is left of the limit
+             */
+            available_minor: number;
+            /** @description The latest statement day on or before today */
+            last_statement: string;
+            next_statement: string;
+            /**
+             * Format: int64
+             * @description What is still to pay of the minimum payment due on minimum_on
+             */
+            minimum_minor: number;
+            minimum_on: string;
+            /** @description minimum_on has passed with the minimum unpaid */
+            minimum_missed: boolean;
+            /** @description The minimum is worked out from today's debt, not from a statement's */
+            minimum_estimate: boolean;
+            /** @description What to pay by which day so that purchases stay free of interest, soonest first; empty when counted by balance */
+            grace: components["schemas"]["CreditCardDue"][];
+            lost: components["schemas"]["CreditCardLost"][];
+            /**
+             * Format: int64
+             * @description Money moved off the card, fees and interest charged still owed: interest from their day
+             */
+            non_grace_minor: number;
+            /** Format: int64 */
+            non_grace_interest_minor: number;
+        };
+        CreditCard: {
+            terms: components["schemas"]["CreditCardTerms"];
+            status: components["schemas"]["CreditCardStatus"];
+            /** @description The status is worked out from the card's journal; false: from its last balance */
+            by_journal: boolean;
+        };
+        CreditCardSummary: {
+            /** Format: uuid */
+            account_id: string;
+            name: string;
+            currency: string;
+            by_journal: boolean;
+            status: components["schemas"]["CreditCardStatus"];
+        };
         ForecastDay: {
             /** @description Date YYYY-MM-DD */
             on: string;
@@ -3511,6 +3643,104 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getCreditCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditCard"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setCreditCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditCardTerms"];
+            };
+        };
+        responses: {
+            /** @description The card with its terms */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditCard"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteCreditCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listCreditCards: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cards */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditCardSummary"][];
+                };
+            };
             401: components["responses"]["Error"];
         };
     };

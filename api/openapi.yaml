@@ -18,6 +18,7 @@ tags:
   - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
   - { name: recurring, description: "The family's regular payments found in the journal (internal/recurring)." }
   - { name: forecast, description: "The family's everyday money over the coming months (internal/forecast)." }
+  - { name: credit-cards, description: "A credit card's terms and what is due on it (internal/creditcard)." }
   - { name: loans, description: "A loan's terms, its schedule and its payments (internal/loan)." }
 paths:
   /api/v1/structure:
@@ -138,6 +139,71 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/PayoutsForecast" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/credit-card:
+    get:
+      tags: [credit-cards]
+      operationId: getCreditCard
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        A credit card's terms and where it stands today (decision Р-26). Counted by its journal, the
+        card's withdrawals are its purchases — free of interest until their deadline: the payment date of
+        their statement (grace_kind `statement`), or grace_days from the start of their statement period
+        (`long`) — and its payments clear the oldest debt first; money moved off the card, fees and
+        interest charged owe interest from their day. Counted by its last balance, only the debt, the
+        limit left and an estimated minimum can be told. 404 while no terms are stated.
+      responses:
+        "200":
+          description: The card
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditCard" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [credit-cards]
+      operationId: setCreditCard
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: States or restates the card's terms; only a credit card account takes them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreditCardTerms" }
+      responses:
+        "200":
+          description: The card with its terms
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditCard" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [credit-cards]
+      operationId: deleteCreditCard
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: Forgets the card's terms; its journal stays.
+      responses:
+        "204": { description: Forgotten }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/credit-cards:
+    get:
+      tags: [credit-cards]
+      operationId: listCreditCards
+      description: Every active credit card with terms, where each stands today — for the reminders.
+      responses:
+        "200":
+          description: The cards
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/CreditCardSummary" } }
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/forecast:
     get:
@@ -2653,6 +2719,66 @@ components:
         interest_minor: { type: integer, format: int64 }
         principal_minor: { type: integer, format: int64 }
         left_minor: { type: integer, format: int64, description: "The debt after this payment" }
+    CreditCardTerms:
+      type: object
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate]
+      properties:
+        limit_minor: { type: integer, format: int64, minimum: 0 }
+        statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
+        payment_days: { type: integer, minimum: 0, maximum: 60, description: "Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement)" }
+        grace_kind: { type: string, enum: [statement, long] }
+        grace_days: { type: integer, minimum: 0, maximum: 1100, description: "For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise" }
+        min_percent: { type: string, description: "The minimum payment, percent of the debt the statement shows (decimal)" }
+        min_floor_minor: { type: integer, format: int64, minimum: 0, description: "The smallest minimum payment" }
+        annual_rate: { type: string, description: "Percent a year charged once the grace is lost (decimal)" }
+        own_rate: { type: string, nullable: true, description: "Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named" }
+    CreditCardDue:
+      type: object
+      required: [on, amount_minor]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        amount_minor: { type: integer, format: int64 }
+    CreditCardLost:
+      type: object
+      required: [from, to, deadline, amount_minor, interest_minor]
+      properties:
+        from: { type: string, description: "The statement period's first day" }
+        to: { type: string, description: "Its last day" }
+        deadline: { type: string, description: "The day its purchases had to be paid by" }
+        amount_minor: { type: integer, format: int64, description: "What is still owed of them" }
+        interest_minor: { type: integer, format: int64, description: "Roughly the interest on it so far, at annual_rate from each purchase's day; the bank counts by its own rules" }
+    CreditCardStatus:
+      type: object
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor]
+      properties:
+        debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
+        available_minor: { type: integer, format: int64, description: "What is left of the limit" }
+        last_statement: { type: string, description: "The latest statement day on or before today" }
+        next_statement: { type: string }
+        minimum_minor: { type: integer, format: int64, description: "What is still to pay of the minimum payment due on minimum_on" }
+        minimum_on: { type: string }
+        minimum_missed: { type: boolean, description: "minimum_on has passed with the minimum unpaid" }
+        minimum_estimate: { type: boolean, description: "The minimum is worked out from today's debt, not from a statement's" }
+        grace: { type: array, items: { $ref: "#/components/schemas/CreditCardDue" }, description: "What to pay by which day so that purchases stay free of interest, soonest first; empty when counted by balance" }
+        lost: { type: array, items: { $ref: "#/components/schemas/CreditCardLost" } }
+        non_grace_minor: { type: integer, format: int64, description: "Money moved off the card, fees and interest charged still owed: interest from their day" }
+        non_grace_interest_minor: { type: integer, format: int64 }
+    CreditCard:
+      type: object
+      required: [terms, status, by_journal]
+      properties:
+        terms: { $ref: "#/components/schemas/CreditCardTerms" }
+        status: { $ref: "#/components/schemas/CreditCardStatus" }
+        by_journal: { type: boolean, description: "The status is worked out from the card's journal; false: from its last balance" }
+    CreditCardSummary:
+      type: object
+      required: [account_id, name, currency, by_journal, status]
+      properties:
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        currency: { type: string }
+        by_journal: { type: boolean }
+        status: { $ref: "#/components/schemas/CreditCardStatus" }
     ForecastDay:
       type: object
       required: [on, balance_minor]

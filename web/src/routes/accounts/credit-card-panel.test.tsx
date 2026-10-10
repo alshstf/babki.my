@@ -1,0 +1,139 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
+import type { ReactElement } from "react";
+import "@/i18n";
+import { CreditCardPanel } from "./credit-card-panel";
+import { CardReminders } from "./card-reminders";
+import type { AccountWithBalance } from "@/api/accounts";
+import type { CreditCard, CreditCardStatus } from "@/api/credit-cards";
+import { localToday } from "@/lib/dates";
+
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
+const fetchMock = vi.hoisted(() => {
+  const fn = vi.fn();
+  globalThis.fetch = fn as unknown as typeof fetch;
+  return fn;
+});
+
+const norm = (s: string) => s.replace(/[  ]/g, " ");
+const inDays = (n: number) => {
+  const d = new Date(Date.parse(localToday()) + n * 86_400_000);
+  return d.toISOString().slice(0, 10);
+};
+const ru = (iso: string) => iso.split("-").reverse().join(".");
+
+const account: AccountWithBalance = {
+  id: "card-1", name: "Кредитка Альфа", type: "credit_card", currency: "RUB", institution: "", status: "active",
+  created_at: "2026-01-01T00:00:00Z", valued_by_balance: false, trades_abroad: false, kept_by_operations: true,
+  counted_by: "journal", balance: { as_of: "2026-07-20", amount_minor: 0 },
+};
+
+const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
+  debt_minor: 57_300_00, available_minor: 92_700_00, last_statement: inDays(-9), next_statement: inDays(22),
+  minimum_minor: 1_569_00, minimum_on: inDays(11), minimum_missed: false, minimum_estimate: false,
+  grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
+  lost: [], non_grace_minor: 0, non_grace_interest_minor: 0, ...over,
+});
+
+const card = (over: Partial<CreditCardStatus> = {}, byJournal = true): CreditCard => ({
+  terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
+    min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null },
+  status: status(over), by_journal: byJournal,
+});
+
+function answer(routes: Record<string, unknown>) {
+  fetchMock.mockImplementation((input: Request) => {
+    const path = new URL(input.url).pathname;
+    const hit = Object.entries(routes).find(([p]) => path.endsWith(p));
+    const body = hit ? hit[1] : { error: "not found" };
+    return Promise.resolve(new Response(JSON.stringify(input.method === "PUT" ? card() : body), {
+      status: hit || input.method === "PUT" ? 200 : 404, headers: { "Content-Type": "application/json" },
+    }));
+  });
+}
+
+function show(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const root = createRootRoute();
+  const page = createRoute({ getParentRoute: () => root, path: "/", component: () => ui });
+  const detail = createRoute({ getParentRoute: () => root, path: "/accounts/$accountId", component: () => null });
+  const router = createRouter({ routeTree: root.addChildren([page, detail]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
+afterEach(() => {
+  cleanup();
+  fetchMock.mockReset();
+});
+
+describe("CreditCardPanel", () => {
+  it("states the terms from a preset and the numbers typed", async () => {
+    answer({});
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Указать условия карты" }));
+    fireEvent.click(await screen.findByRole("button", { name: "120 дней (как СберКарта)" }));
+    fireEvent.change(screen.getByLabelText(/Кредитный лимит/), { target: { value: "150000" } });
+    fireEvent.change(screen.getByLabelText(/Ставка без льготы/), { target: { value: "39,9" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toEqual({
+      limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120,
+      min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
+    });
+  });
+
+  it("says what to pay by when to keep the grace, and the minimum", async () => {
+    answer({ "/credit-card": card() });
+    show(<CreditCardPanel account={account} canEdit={false} />);
+    expect(norm((await screen.findByTestId("card-available")).textContent ?? "")).toBe("92 700,00 ₽");
+    const grace = norm(screen.getByTestId("card-grace").textContent ?? "");
+    expect(grace).toContain(`внесите 52 300,00 ₽ до ${ru(inDays(5))}`);
+    expect(grace).toContain(`Затем 5 000,00 ₽ до ${ru(inDays(36))}`);
+    expect(norm(screen.getByTestId("card-minimum").textContent ?? "")).toBe("1 569,00 ₽");
+    expect(screen.queryByRole("button", { name: "Изменить условия" })).toBeNull();
+  });
+
+  it("warns of a grace lost, and says what a card kept by its balance cannot tell", async () => {
+    answer({ "/credit-card": card({ grace: [], lost: [{ from: "2026-09-01", to: "2026-09-30", deadline: "2026-10-21", amount_minor: 42_300_00, interest_minor: 1_400_00 }] }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    expect(norm((await screen.findByTestId("card-lost")).textContent ?? "")).toMatch(/01\.09\.2026–30\.09\.2026 сгорела: осталось 42 300,00 ₽, проценты уже ≈ 1 400,00 ₽/);
+    cleanup();
+    answer({ "/credit-card": card({ grace: [] }, false) });
+    show(<CreditCardPanel account={account} canEdit />);
+    expect(await screen.findByTestId("card-by-balance")).toBeTruthy();
+  });
+});
+
+describe("CardReminders", () => {
+  const summary = (over: Partial<CreditCardStatus>) => ({ account_id: "card-1", name: "Кредитка Альфа", currency: "RUB", by_journal: true, status: status(over) });
+
+  it("speaks up a week ahead of the grace's day, and at once for what was missed", async () => {
+    answer({ "/credit-cards": [summary({}), { ...summary({ minimum_missed: true, minimum_on: inDays(-2), grace: [] }), account_id: "card-2", name: "Кредитка Сбер" }] });
+    show(<CardReminders />);
+    const text = norm((await screen.findByTestId("card-reminders")).textContent ?? "");
+    expect(text).toContain(`Кредитка Альфа: 52 300,00 ₽ до ${ru(inDays(5))}, чтобы не платить проценты.`);
+    expect(text).toContain(`Кредитка Сбер: обязательный платёж 1 569,00 ₽ не внесён до ${ru(inDays(-2))}.`);
+  });
+
+  it("stays quiet while nothing is near", async () => {
+    answer({ "/credit-cards": [summary({ grace: [{ on: inDays(20), amount_minor: 1_00 }], minimum_on: inDays(20) })] });
+    show(<CardReminders />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("card-reminders")).toBeNull();
+  });
+});

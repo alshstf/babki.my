@@ -280,6 +280,24 @@ func (e CostBasisPerimeter) Valid() bool {
 	}
 }
 
+// Defines values for CreditCardTermsGraceKind.
+const (
+	Long      CreditCardTermsGraceKind = "long"
+	Statement CreditCardTermsGraceKind = "statement"
+)
+
+// Valid indicates whether the value is a known member of the CreditCardTermsGraceKind enum.
+func (e CreditCardTermsGraceKind) Valid() bool {
+	switch e {
+	case Long:
+		return true
+	case Statement:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ForecastEventKind.
 const (
 	ForecastEventKindLoan    ForecastEventKind = "loan"
@@ -1727,6 +1745,109 @@ type CreateTinvestConnectionRequest struct {
 	// Token A read-only T-Invest API token. Checked against the broker before anything is written, then stored encrypted; only its last characters are ever published again (TinvestConnection.token_last4).
 	Token string `json:"token"`
 }
+
+// CreditCard defines model for CreditCard.
+type CreditCard struct {
+	// ByJournal The status is worked out from the card's journal; false: from its last balance
+	ByJournal bool             `json:"by_journal"`
+	Status    CreditCardStatus `json:"status"`
+	Terms     CreditCardTerms  `json:"terms"`
+}
+
+// CreditCardDue defines model for CreditCardDue.
+type CreditCardDue struct {
+	AmountMinor int64 `json:"amount_minor"`
+
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+}
+
+// CreditCardLost defines model for CreditCardLost.
+type CreditCardLost struct {
+	// AmountMinor What is still owed of them
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Deadline The day its purchases had to be paid by
+	Deadline string `json:"deadline"`
+
+	// From The statement period's first day
+	From string `json:"from"`
+
+	// InterestMinor Roughly the interest on it so far, at annual_rate from each purchase's day; the bank counts by its own rules
+	InterestMinor int64 `json:"interest_minor"`
+
+	// To Its last day
+	To string `json:"to"`
+}
+
+// CreditCardStatus defines model for CreditCardStatus.
+type CreditCardStatus struct {
+	// AvailableMinor What is left of the limit
+	AvailableMinor int64 `json:"available_minor"`
+
+	// DebtMinor Owed on the card; below zero the family's own money on it
+	DebtMinor int64 `json:"debt_minor"`
+
+	// Grace What to pay by which day so that purchases stay free of interest, soonest first; empty when counted by balance
+	Grace []CreditCardDue `json:"grace"`
+
+	// LastStatement The latest statement day on or before today
+	LastStatement string           `json:"last_statement"`
+	Lost          []CreditCardLost `json:"lost"`
+
+	// MinimumEstimate The minimum is worked out from today's debt, not from a statement's
+	MinimumEstimate bool `json:"minimum_estimate"`
+
+	// MinimumMinor What is still to pay of the minimum payment due on minimum_on
+	MinimumMinor int64 `json:"minimum_minor"`
+
+	// MinimumMissed minimum_on has passed with the minimum unpaid
+	MinimumMissed         bool   `json:"minimum_missed"`
+	MinimumOn             string `json:"minimum_on"`
+	NextStatement         string `json:"next_statement"`
+	NonGraceInterestMinor int64  `json:"non_grace_interest_minor"`
+
+	// NonGraceMinor Money moved off the card, fees and interest charged still owed: interest from their day
+	NonGraceMinor int64 `json:"non_grace_minor"`
+}
+
+// CreditCardSummary defines model for CreditCardSummary.
+type CreditCardSummary struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+	ByJournal bool               `json:"by_journal"`
+	Currency  string             `json:"currency"`
+	Name      string             `json:"name"`
+	Status    CreditCardStatus   `json:"status"`
+}
+
+// CreditCardTerms defines model for CreditCardTerms.
+type CreditCardTerms struct {
+	// AnnualRate Percent a year charged once the grace is lost (decimal)
+	AnnualRate string `json:"annual_rate"`
+
+	// GraceDays For grace_kind long: the days a period's purchases stay free from the period's start; 0 otherwise
+	GraceDays  int                      `json:"grace_days"`
+	GraceKind  CreditCardTermsGraceKind `json:"grace_kind"`
+	LimitMinor int64                    `json:"limit_minor"`
+
+	// MinFloorMinor The smallest minimum payment
+	MinFloorMinor int64 `json:"min_floor_minor"`
+
+	// MinPercent The minimum payment, percent of the debt the statement shows (decimal)
+	MinPercent string `json:"min_percent"`
+
+	// OwnRate Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named
+	OwnRate nullable.Nullable[string] `json:"own_rate"`
+
+	// PaymentDays Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement)
+	PaymentDays int `json:"payment_days"`
+
+	// StatementDay The day of the month the bank closes a statement period; a short month's last day stands for a later one
+	StatementDay int `json:"statement_day"`
+}
+
+// CreditCardTermsGraceKind defines model for CreditCardTerms.GraceKind.
+type CreditCardTermsGraceKind string
 
 // CurrencyAmount One amount in one currency. Used where a figure cannot be added across currencies and is published per currency instead.
 type CurrencyAmount struct {
@@ -3641,6 +3762,9 @@ type UpdateAccountJSONRequestBody = UpdateAccountRequest
 
 // SetAccountBalanceJSONRequestBody defines body for SetAccountBalance for application/json ContentType.
 type SetAccountBalanceJSONRequestBody = SetBalanceRequest
+
+// SetCreditCardJSONRequestBody defines body for SetCreditCard for application/json ContentType.
+type SetCreditCardJSONRequestBody = CreditCardTerms
 
 // ImportTableJSONRequestBody defines body for ImportTable for application/json ContentType.
 type ImportTableJSONRequestBody = ImportTableRequest
