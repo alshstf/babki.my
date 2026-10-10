@@ -33,3 +33,91 @@ versions:
         transfer_percent: "4.9"
         transfer_fixed_minor: 39000
         penalty_daily_percent: "0.1"
+  - contracts_from: 2025-04-01
+    contracts_to: 2025-09-30
+    revision: 2026-09-10
+    checked_on: 2026-10-10
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/29d/k2arrhnv5jw2zr5ak0vozczwzne8tbw5/76-Tarify-na-vypusk-i-obsluzhivanie-kart-Premium-180-dney-s-01.04.2025-_red.-10.09.2026_.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/c6f/ue7oz6k8pbv144ne4e27azwiu4dcxvfc/V3-s-25.05.2026-OUD_-Dolgiy-lgotnyy-period.pdf
+      - https://www.gazprombank.ru/download/7858543/
+    notes: >-
+      Ставка — от 56,42 до 59,99 % годовых, у каждого своя: укажите свою. Обслуживание 590 ₽ в месяц
+      не берётся при действующем сервисе «Газпром Бонус Премиум» — если подписки нет, укажите его в
+      платах. Окна отсчитываются от месяца договора: укажите дату договора.
+    terms:
+      statement_day: 1
+      grace_kind: windows
+      window_months: 2
+      grace_months: 6
+      grace_all_lost: true
+      pay_by_period_end: true
+      charges_in_full: true
+      min_percent: "3"
+      min_floor_minor: 50000
+      fees:
+        cash_free_minor: 10000000
+        cash_percent: "5.9"
+        cash_fixed_minor: 59000
+        transfer_percent: "4.9"
+        transfer_fixed_minor: 39000
+        penalty_daily_percent: "0.1"
+  - contracts_from: 2025-01-14
+    contracts_to: 2025-03-31
+    revision: 2026-09-10
+    checked_on: 2026-10-10
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/8c8/slc4nhjbqra00elntp1x0ka1760dcejw/75-Tarify-na-vypusk-i-obsluzhivanie-kart-Premium-180-dney-s-14.01.2025-_red.-10.09.20026_.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/c6f/ue7oz6k8pbv144ne4e27azwiu4dcxvfc/V3-s-25.05.2026-OUD_-Dolgiy-lgotnyy-period.pdf
+      - https://www.gazprombank.ru/download/7858543/
+    notes: >-
+      Обслуживание 590 ₽ в месяц не берётся при действующем сервисе «Газпром Бонус Премиум» — если
+      подписки нет, укажите его в платах. Окна отсчитываются от месяца договора: укажите дату договора.
+    terms:
+      statement_day: 1
+      grace_kind: windows
+      window_months: 2
+      grace_months: 6
+      grace_all_lost: true
+      pay_by_period_end: true
+      charges_in_full: true
+      min_percent: "3"
+      min_floor_minor: 50000
+      annual_rate: "54.9"
+      fees:
+        cash_free_minor: 10000000
+        cash_percent: "5.9"
+        cash_fixed_minor: 59000
+        transfer_percent: "4.9"
+        transfer_fixed_minor: 39000
+        penalty_daily_percent: "0.1"
+  - contracts_from: 2024-06-11
+    contracts_to: 2025-01-13
+    revision: 2026-09-10
+    checked_on: 2026-10-10
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/789/vkr4tx9ajem4owvpq8tszxsn7pc1effl/74-Tarify-na-vypusk-i-obsluzhivanie-kart-Premium-180-dney-s-11.06.2024-_red.-10.09.2026_.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/c6f/ue7oz6k8pbv144ne4e27azwiu4dcxvfc/V3-s-25.05.2026-OUD_-Dolgiy-lgotnyy-period.pdf
+      - https://www.gazprombank.ru/download/7858543/
+    notes: >-
+      Ставка у каждого своя: на покупки без льготы — от 24,9 до 39,9 % годовых, на снятие и переводы —
+      от 24,9 до 49,9 %; укажите свою (программа держит одну ставку на всё). Обслуживание 590 ₽ в
+      месяц не берётся при действующем сервисе «Газпром Бонус Премиум» — если подписки нет, укажите его
+      в платах. Окна отсчитываются от месяца договора: укажите дату договора.
+    terms:
+      statement_day: 1
+      grace_kind: windows
+      window_months: 2
+      grace_months: 6
+      grace_all_lost: true
+      pay_by_period_end: true
+      charges_in_full: true
+      min_percent: "3"
+      min_floor_minor: 50000
+      fees:
+        cash_free_minor: 10000000
+        cash_percent: "5.9"
+        cash_fixed_minor: 59000
+        transfer_percent: "4.9"
+        transfer_fixed_minor: 39000
+        penalty_daily_percent: "0.1"
