@@ -43,6 +43,16 @@ var cadences = []struct {
 	{Yearly, 350, 380, 2, func(t time.Time) time.Time { return t.AddDate(1, 0, 0) }},
 }
 
+// After is the day a payment of this cadence comes next after one on t.
+func (c Cadence) After(t time.Time) time.Time {
+	for _, x := range cadences {
+		if x.cadence == c {
+			return x.next(t)
+		}
+	}
+	return t.AddDate(0, 1, 0)
+}
+
 // lookback is how far back the journal is read: a yearly payment needs two
 // years to show twice.
 const lookback = 2*365 + 30
@@ -160,6 +170,15 @@ func find(ops []operation.Operation, today time.Time) []Payment {
 		if p, ok := regular(rows, today); ok {
 			p.Name = shown[k]
 			out = append(out, p)
+			continue
+		}
+		// Twice a month from one payee — a salary and its advance — is two
+		// monthly payments, told apart by the day of the month each comes on.
+		for _, half := range byDayOfMonth(rows) {
+			if p, ok := regular(half, today); ok && p.Cadence == Monthly {
+				p.Name = shown[k]
+				out = append(out, p)
+			}
 		}
 	}
 	slices.SortFunc(out, func(a, b Payment) int {
@@ -224,6 +243,83 @@ func regular(rows []operation.Operation, today time.Time) (Payment, bool) {
 		}, true
 	}
 	return Payment{}, false
+}
+
+// halfSpread is how many days either side of its usual day a payment of a
+// twice-monthly pair may come — a weekend moves it — and still be that one.
+const halfSpread = 7
+
+// byDayOfMonth splits a payee's rows in two by the day of the month, where the
+// days fall in two bunches with a clear gap between them (the 5th and the
+// 25th; the 4th–6th and the 24th–26th); nil otherwise. The month is taken
+// round, so the 30th and the 1st sit together.
+func byDayOfMonth(rows []operation.Operation) [][]operation.Operation {
+	seen := map[int]bool{}
+	for _, r := range rows {
+		seen[r.OccurredOn.Day()] = true
+	}
+	days := make([]int, 0, len(seen))
+	for d := range seen {
+		days = append(days, d)
+	}
+	slices.Sort(days)
+	if len(days) < 2 {
+		return nil
+	}
+	n := len(days)
+	gap := func(i int) int { return (days[(i+1)%n] - days[i] + 31) % 31 }
+	// The two widest gaps cut the round month into the two bunches.
+	first, second := -1, -1
+	for i := range n {
+		switch {
+		case first < 0 || gap(i) > gap(first):
+			first, second = i, first
+		case second < 0 || gap(i) > gap(second):
+			second = i
+		}
+	}
+	// A bunch runs from the day after one cut to the day before the next.
+	bunch := func(from, to int) map[int]bool {
+		in := map[int]bool{}
+		for i := (from + 1) % n; ; i = (i + 1) % n {
+			in[days[i]] = true
+			if i == to {
+				break
+			}
+		}
+		return in
+	}
+	spread := func(from, to int) int { return (days[to] - days[(from+1)%n] + 31) % 31 }
+	if spread(first, second) > 2*halfSpread || spread(second, first) > 2*halfSpread || gap(second) <= halfSpread {
+		return nil
+	}
+	a := bunch(first, second)
+	var one, two []operation.Operation
+	for _, r := range rows {
+		if a[r.OccurredOn.Day()] {
+			one = append(one, r)
+		} else {
+			two = append(two, r)
+		}
+	}
+	// Each half is one payment a month: two in one month is a shop visited
+	// twice, not a salary.
+	if !oncePerMonth(one) || !oncePerMonth(two) {
+		return nil
+	}
+	return [][]operation.Operation{one, two}
+}
+
+func oncePerMonth(rows []operation.Operation) bool {
+	seen := map[[2]int]bool{}
+	for _, r := range rows {
+		m := [2]int{r.OccurredOn.Year(), int(r.OccurredOn.Month())}
+		if seen[m] {
+			return false
+		}
+		seen[m] = true
+	}
+	return true
 }
 
 func sortedMedian(xs []int) int {

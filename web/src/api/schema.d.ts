@@ -74,6 +74,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's money to live on — active cards, current and savings accounts and cash, each counted the way the total counts it (by its journal or by its last balance) — today and day by day ahead, in the base currency at today's rates: the regular payments of GET /recurring on those accounts on their pace (an overdue one today, unless the account is counted by a balance marked on or after its day, which holds it already), and every loan's scheduled payments (a regular payment named as a loan account is its interest and is left to the schedule). Deposits, brokers' accounts and loans' own balances are not in it. Twice a month from one payee (a salary and its advance) counts as two monthly payments. */
+        get: operations["getForecast"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recurring": {
         parameters: {
             query?: never;
@@ -1952,6 +1969,62 @@ export interface components {
              */
             left_minor: number;
         };
+        ForecastDay: {
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /**
+             * Format: int64
+             * @description The money at the end of the day, in the base currency
+             */
+            balance_minor: number;
+        };
+        ForecastEvent: {
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** @description The payee, or the loan account's name */
+            name: string;
+            /** @enum {string} */
+            kind: "regular" | "loan";
+            /** Format: uuid */
+            account_id: string;
+            /**
+             * Format: int64
+             * @description Signed as the journal signs it, in currency
+             */
+            amount_minor: number;
+            currency: string;
+            /**
+             * Format: int64
+             * @description The same in the base currency at today's rate
+             */
+            in_base_minor: number;
+            /** @description A regular payment whose day has passed without it: expected today */
+            overdue: boolean;
+        };
+        Forecast: {
+            base_currency: string;
+            days: number;
+            /**
+             * Format: int64
+             * @description The money today
+             */
+            start_minor: number;
+            /** @description How many accounts the money is on */
+            accounts_counted: number;
+            /** @description Today and each day after, `days` of them */
+            series: components["schemas"]["ForecastDay"][];
+            events: components["schemas"]["ForecastEvent"][];
+            lowest: components["schemas"]["ForecastDay"];
+            /** @description The next salary: the next regular income of at least half the largest; null without one in sight */
+            next_income: components["schemas"]["ForecastEvent"] | null;
+            /**
+             * Format: int64
+             * @description The lowest the money gets before next_income: what can be spent until then without going below zero (below zero: what is short)
+             */
+            free_until_income_minor: number | null;
+            /** @description Currencies left out for want of today's rate */
+            missing_rates: string[];
+        };
         Loan: {
             terms: components["schemas"]["LoanTerms"];
             schedule: components["schemas"]["LoanRow"][];
@@ -3435,6 +3508,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PayoutsForecast"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getForecast: {
+        parameters: {
+            query?: {
+                /** @description How far ahead, in days; 90 when absent */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The forecast */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Forecast"];
                 };
             };
             400: components["responses"]["Error"];

@@ -77,6 +77,26 @@ func (s *Service) Terms(ctx context.Context, spaceID, accountID uuid.UUID) (Term
 	return t, nil
 }
 
+// All is every loan's terms in the space.
+func (s *Service) All(ctx context.Context, spaceID uuid.UUID) ([]Terms, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT account_id, principal_minor, annual_rate, term_months, issued_on, kind
+		FROM loans WHERE space_id = $1 ORDER BY issued_on`, spaceID)
+	if err != nil {
+		return nil, fmt.Errorf("loan: all: %w", err)
+	}
+	defer rows.Close()
+	var out []Terms
+	for rows.Next() {
+		var t Terms
+		if err := rows.Scan(&t.AccountID, &t.Principal, &t.AnnualRate, &t.TermMonths, &t.IssuedOn, &t.Kind); err != nil {
+			return nil, fmt.Errorf("loan: all: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // SetTerms states or restates a loan account's terms.
 func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Terms, error) {
 	if err := t.Validate(); err != nil {
