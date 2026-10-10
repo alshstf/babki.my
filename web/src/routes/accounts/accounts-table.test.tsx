@@ -13,6 +13,7 @@ import { AccountsTable } from "./accounts-table";
 import type { AccountWithBalance } from "@/api/accounts";
 import { formatMinor } from "@/lib/money";
 import { announcedText, visibleText } from "@/test-utils";
+import { pretendNarrow } from "@/test-narrow";
 
 // Row links need a router context, so a minimal router wraps the table.
 function wrap(ui: ReactElement) {
@@ -165,5 +166,17 @@ describe("AccountsTable busy accounts", () => {
     expect(marks).toHaveLength(1);
     expect(marks[0].getAttribute("aria-label")).toBe("Идёт загрузка — числа этого счёта ещё не окончательные");
     expect(marks[0].closest("tr")?.textContent).toContain("Т-Брокер");
+  });
+});
+
+describe("AccountsTable on a phone", () => {
+  it("folds the kind and whose it is under the name, leaving the worth beside it", async () => {
+    pretendNarrow();
+    const account = makeAccount({ name: "Кредитка Альфа", type: "credit_card", currency: "RUB" });
+    wrap(<AccountsTable accounts={[account]} mode="native" baseCurrency="RUB" />);
+
+    await screen.findByText("Кредитка Альфа");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Название", "Стоимость"]);
+    expect(screen.getByText(/кредитка · общий/)).toBeTruthy();
   });
 });

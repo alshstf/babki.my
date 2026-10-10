@@ -24,3 +24,14 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+
+// Installed on a phone, the app needs a worker to say «нет связи» rather than
+// the browser's error page (public/sw.js). Not in development: Vite serves
+// its own files and a worker would only get in its way.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Without the worker the app works the same, only offline it shows the browser's own page.
+    });
+  });
+}

@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
+import { useNarrow } from "@/lib/use-narrow";
 import { Pencil, Trash2 } from "lucide-react";
 import {
   Table,
@@ -206,6 +207,7 @@ export function OperationsTable({
   accountShared?: boolean;
 }) {
   const { t } = useTranslation();
+  const narrow = useNarrow();
   // "Show more" appends the next page (see useOperations); the order is
   // stable, so pages neither repeat nor skip rows.
   const [filter, setFilter] = useState<JournalFilter>({});
@@ -348,12 +350,18 @@ export function OperationsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>{t("operations.columns.date")}</TableHead>
-            <TableHead>{t("operations.columns.type")}</TableHead>
-            <TableHead>{t("operations.columns.instrument")}</TableHead>
-            <TableHead className="text-right">{t("operations.columns.qty")}</TableHead>
+            {narrow ? (
+              <TableHead>{t("operations.columns.dateAndType")}</TableHead>
+            ) : (
+              <>
+                <TableHead>{t("operations.columns.date")}</TableHead>
+                <TableHead>{t("operations.columns.type")}</TableHead>
+              </>
+            )}
+            {!narrow && <TableHead>{t("operations.columns.instrument")}</TableHead>}
+            {!narrow && <TableHead className="text-right">{t("operations.columns.qty")}</TableHead>}
             <TableHead className="text-right">{t("operations.columns.amount")}</TableHead>
-            <TableHead className="text-right">{t("operations.columns.fee")}</TableHead>
+            {!narrow && <TableHead className="text-right">{t("operations.columns.fee")}</TableHead>}
             {canDelete && <TableHead className="w-10" />}
           </TableRow>
         </TableHeader>
@@ -416,10 +424,96 @@ export function OperationsTable({
                 : t("operations.convertedAtEarlierDate", { date: rateDate });
             };
             const unconvertedTitle = rowGapTitle(t, operation.in_base_gap);
+            // The instrument with its note, how many at what price, and the fee:
+            // columns of their own on a wide screen, lines under the type on a
+            // phone (useNarrow).
+            const instrumentBlock = (
+              <>
+              {instrumentLinks && operation.instrument_id ? (
+                <Link
+                  to="/instruments/$instrumentId"
+                  params={{ instrumentId: operation.instrument_id }}
+                  className="hover:underline"
+                >
+                  {instrumentName(operation.instrument_id)}
+                </Link>
+              ) : (
+                instrumentName(operation.instrument_id)
+              )}
+              {onPurchasePrice &&
+                operation.type === "transfer_in" &&
+                operation.transfer_group_id == null &&
+                operation.instrument_id && (
+                  <button
+                    type="button"
+                    data-testid="operation-purchase-price"
+                    className="ml-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    onClick={() => {
+                      const found = instrumentOf(operation.instrument_id);
+                      onPurchasePrice({
+                        id: operation.instrument_id as string,
+                        name: found?.name ?? instrumentName(operation.instrument_id),
+                        ticker: found?.ticker ?? "",
+                      });
+                    }}
+                  >
+                    {t("operations.purchasePrice")}
+                  </button>
+                )}
+              {/* The broker's (or person's) own note, under the instrument: the badge
+                 says the category, the note the event («Погашение Инарктика
+                 001Р-01»). Shown as written. */}
+              {operation.note && (
+                <div
+                  data-testid="operation-note"
+                  className="text-xs text-muted-foreground"
+                >
+                  {operation.note}
+                </div>
+              )}
+              </>
+            );
+            const quantityBlock = (
+              <>
+              {operation.quantity && operation.price ? (
+                <>
+                  {operation.quantity} ×{" "}
+                  <span data-testid="operation-price">
+                    {/* The price carries the operation's own currency (#114), read off
+                       the operation, never off the row's other figures, which convert in
+                       base mode while the price never does. On every row, so it does not
+                       change with the toggle (as the positions screen's quote, #76).
+                       formatPriceIn shares formatPrice's parse, keeping sub-cent prices
+                       readable (#30). Unparseable input is shown raw, without a
+                       currency. */}
+                    {formatPriceIn(operation.price, operation.currency) ?? operation.price}
+                  </span>
+                </>
+              ) : (
+                "—"
+              )}
+              </>
+            );
+            const feeBlock = (
+              <>
+              {/* A zero fee is nothing in any currency; the dash stays. */}
+              {operation.fee_minor > 0 ? (
+                <MoneyCell
+                  resolved={resolvedFee}
+                  notConvertedTitle={unconvertedTitle}
+                  convertedTitle={convertedTitle}
+                  testId="operation-fee"
+                />
+              ) : (
+                "—"
+              )}
+              </>
+            );
             return (
               <TableRow key={operation.id}>
-                <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>
-                <TableCell>
+                {!narrow && <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>}
+                <TableCell className={narrow ? "whitespace-normal" : undefined}>
+                  {narrow && <div className="text-xs text-muted-foreground">{formatDate(operation.occurred_on)}</div>}
                   <div className="flex flex-wrap items-center gap-1">
                     <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
                     <SourceBadge operation={operation} />
@@ -482,78 +576,42 @@ export function OperationsTable({
                       {operation.counterparty}
                     </div>
                   )}
-                </TableCell>
-                <TableCell>
-                  {instrumentLinks && operation.instrument_id ? (
-                    <Link
-                      to="/instruments/$instrumentId"
-                      params={{ instrumentId: operation.instrument_id }}
-                      className="hover:underline"
-                    >
-                      {instrumentName(operation.instrument_id)}
-                    </Link>
-                  ) : (
-                    instrumentName(operation.instrument_id)
-                  )}
-                  {onPurchasePrice &&
-                    operation.type === "transfer_in" &&
-                    operation.transfer_group_id == null &&
-                    operation.instrument_id && (
-                      <button
-                        type="button"
-                        data-testid="operation-purchase-price"
-                        className="ml-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                        onClick={() => {
-                          const found = instrumentOf(operation.instrument_id);
-                          onPurchasePrice({
-                            id: operation.instrument_id as string,
-                            name: found?.name ?? instrumentName(operation.instrument_id),
-                            ticker: found?.ticker ?? "",
-                          });
-                        }}
-                      >
-                        {t("operations.purchasePrice")}
-                      </button>
-                    )}
-                  {/* The broker's (or person's) own note, under the instrument: the badge
-                     says the category, the note the event («Погашение Инарктика
-                     001Р-01»). Shown as written. */}
-                  {operation.note && (
-                    <div
-                      data-testid="operation-note"
-                      className="text-xs text-muted-foreground"
-                    >
-                      {operation.note}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  // On the whole cell: "100 ×" is most of its width.
-                  title={
-                    operation.quantity && operation.price
-                      ? priceTitle(instrumentOf(operation.instrument_id))
-                      : undefined
-                  }
-                >
-                  {operation.quantity && operation.price ? (
+                  {narrow && (
                     <>
-                      {operation.quantity} ×{" "}
-                      <span data-testid="operation-price">
-                        {/* The price carries the operation's own currency (#114), read off
-                           the operation, never off the row's other figures, which convert in
-                           base mode while the price never does. On every row, so it does not
-                           change with the toggle (as the positions screen's quote, #76).
-                           formatPriceIn shares formatPrice's parse, keeping sub-cent prices
-                           readable (#30). Unparseable input is shown raw, without a
-                           currency. */}
-                        {formatPriceIn(operation.price, operation.currency) ?? operation.price}
-                      </span>
+                      {operation.instrument_id ? (
+                        <div className="mt-1">{instrumentBlock}</div>
+                      ) : (
+                        operation.note && (
+                          <div data-testid="operation-note" className="text-xs text-muted-foreground">
+                            {operation.note}
+                          </div>
+                        )
+                      )}
+                      {operation.quantity && operation.price && (
+                        <div className="text-xs text-muted-foreground tabular-nums">{quantityBlock}</div>
+                      )}
+                      {operation.fee_minor > 0 && (
+                        <div className="text-xs text-muted-foreground">
+                          {t("operations.columns.fee")}: {feeBlock}
+                        </div>
+                      )}
                     </>
-                  ) : (
-                    "—"
                   )}
                 </TableCell>
+                {!narrow && <TableCell>{instrumentBlock}</TableCell>}
+                {!narrow && (
+                  <TableCell
+                    className="text-right tabular-nums"
+                    // On the whole cell: "100 ×" is most of its width.
+                    title={
+                      operation.quantity && operation.price
+                        ? priceTitle(instrumentOf(operation.instrument_id))
+                        : undefined
+                    }
+                  >
+                    {quantityBlock}
+                  </TableCell>
+                )}
                 <TableCell className="text-right tabular-nums">
                   <MoneyCell
                     resolved={resolvedAmount}
@@ -566,24 +624,15 @@ export function OperationsTable({
                     testId="operation-amount"
                   />
                 </TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {/* A zero fee is nothing in any currency; the dash stays. */}
-                  {operation.fee_minor > 0 ? (
-                    <MoneyCell
-                      resolved={resolvedFee}
-                      notConvertedTitle={unconvertedTitle}
-                      convertedTitle={convertedTitle}
-                      testId="operation-fee"
-                    />
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
+                {!narrow && (
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{feeBlock}</TableCell>
+                )}
                 {/* The cell stays so imported rows keep their columns; only the action
                    goes (see isImported). */}
                 {canDelete && (
                   <TableCell>
-                    <div className="flex">
+                    {/* Side by side on a wide screen, one above the other on a phone. */}
+                    <div className={narrow ? "flex flex-col" : "flex"}>
                       {onEdit && editDialogOf(operation) ? (
                         <Button
                           variant="ghost"

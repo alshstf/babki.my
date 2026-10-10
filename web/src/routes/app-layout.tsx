@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BackgroundActivity } from "@/components/background-activity";
+import { QuickAdd } from "@/components/quick-add";
 import { DisplayCurrencyToggle } from "@/components/display-currency-toggle";
 import { useLogout, useSession } from "@/api/session";
 import { PasswordDialog } from "@/components/password-dialog";
@@ -80,6 +81,8 @@ export function AppLayout() {
           <header className="border-b px-4 py-3 flex items-center justify-end gap-3 md:px-6">
             {session && (
               <>
+                {/* A viewer reads; the quick add is for those who write. */}
+                {session.role !== "viewer" && <QuickAdd />}
                 {/* Who is signed in, from sm up: on a phone the row is the
                     currency toggle's and the sign-out's. */}
                 <span className="hidden text-sm sm:inline">{session.user.display_name}</span>
@@ -119,7 +122,9 @@ export function AppLayout() {
               <AlertDescription>{t("auth.signOutFailed")}</AlertDescription>
             </Alert>
           )}
-          <main className="min-w-0 flex-1 p-4 md:p-6">
+          {/* On a phone the quick add's round button floats over the screen's
+              foot: room below the last row so it covers nothing. */}
+          <main className="min-w-0 flex-1 p-4 pb-24 md:p-6">
             <Outlet />
           </main>
           <PasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />

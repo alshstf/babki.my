@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { useNarrow } from "@/lib/use-narrow";
 import {
   Table,
   TableBody,
@@ -243,6 +244,14 @@ function unrealizedPercent(
   }).format(ratio);
 }
 
+// The name column on a phone: it wraps instead of stretching, and stays at the
+// left edge while the figures scroll under it.
+const STICKY_NAME = "sticky left-0 z-10 min-w-32 max-w-40 whitespace-normal bg-background";
+// The worth and the profit beside it: their notes («указать текущую цену») wrap
+// on a phone so both columns fit on the screen; a sum never breaks, its
+// spaces being non-breaking.
+const FIGURE_NARROW = "min-w-24 whitespace-normal";
+
 export function PositionsTable({
   positions,
   cash,
@@ -280,6 +289,9 @@ export function PositionsTable({
   rowLabel?: (position: Position) => { key: string; label: ReactNode };
 }) {
   const { t } = useTranslation();
+  // On a phone the name stays put while the figures scroll beside it, and
+  // what the paper is worth comes first (see useNarrow).
+  const narrow = useNarrow();
   // Every cell gets wording of its own: its figures are in the position's,
   // the quote's or a face currency, never "the account's". The cause comes from the
   // server (in_base_gap, market_value_gap) through rowGapTitle and
@@ -338,21 +350,31 @@ export function PositionsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>
+            <TableHead className={narrow ? STICKY_NAME : undefined}>
               {rowLabel ? t("positions.columns.account") : t("positions.columns.instrument")}
             </TableHead>
-            <TableHead className="text-right">
-              {t("positions.columns.quantity")}
-            </TableHead>
-            <TableHead className="text-right">
-              {t("positions.columns.cost")}
-            </TableHead>
-            <TableHead className="text-right">
-              {t("positions.columns.market")}
-            </TableHead>
-            <TableHead className="text-right">
-              {t("positions.columns.profit")}
-            </TableHead>
+            {narrow ? (
+              <>
+                <TableHead className="text-right">{t("positions.columns.market")}</TableHead>
+                <TableHead className="text-right">{t("positions.columns.profit")}</TableHead>
+                <TableHead className="text-right">{t("positions.columns.cost")}</TableHead>
+              </>
+            ) : (
+              <>
+                <TableHead className="text-right">
+                  {t("positions.columns.quantity")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("positions.columns.cost")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("positions.columns.market")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("positions.columns.profit")}
+                </TableHead>
+              </>
+            )}
             <TableHead className="text-right">
               {t("positions.columns.settled")}
             </TableHead>
@@ -511,323 +533,359 @@ export function PositionsTable({
               : t("positions.profitNeedsValuation") +
                 "\n" +
                 valuationUnconvertedTitle;
+            const nameCell = (
+              <TableCell className={narrow ? STICKY_NAME : undefined}>
+                <div className="font-medium">
+                  {custom ? (
+                    custom.label
+                  ) : instrumentLinks ? (
+                    <Link
+                      to="/instruments/$instrumentId"
+                      params={{ instrumentId: position.instrument.id }}
+                      className="hover:underline"
+                    >
+                      {position.instrument.name}
+                    </Link>
+                  ) : (
+                    position.instrument.name
+                  )}
+                  {!custom && position.instrument.frozen && (
+                    <Badge variant="outline" className="ml-2">
+                      {t("positions.frozen")}
+                    </Badge>
+                  )}
+                  {closed && (
+                    <Badge variant="outline" className="ml-2">
+                      {t("positions.closed")}
+                    </Badge>
+                  )}
+                </div>
+                {!custom && (
+                  <div className="text-xs text-muted-foreground">
+                    {position.instrument.ticker}
+                  </div>
+                )}
+                {narrow && (
+                  <div className="text-xs text-muted-foreground tabular-nums" data-testid="position-quantity-under">
+                    {t("positions.quantityUnder", { quantity: position.quantity })}
+                  </div>
+                )}
+              </TableCell>
+            );
+            const quantityCell = (
+              <TableCell className="text-right tabular-nums">
+                {position.quantity}
+              </TableCell>
+            );
+            const costCell = (
+              <TableCell className="text-right tabular-nums">
+                <MoneyCell
+                  resolved={resolvedCost}
+                  notConvertedTitle={unconvertedTitle}
+                  convertedTitle={costConvertedTitle}
+                  testId="position-cost"
+                />
+                {/* Russia's external loan bonds: the rouble cost is the face
+                   currency's at the sale's rate (decision Р-21). */}
+                {position.cost_at_sale_rate && (
+                  <div
+                    data-testid="position-cost-at-sale-rate"
+                    className="text-xs text-muted-foreground"
+                    title={t("positions.costAtSaleRateHint")}
+                  >
+                    {t("positions.costAtSaleRate")}
+                  </div>
+                )}
+                {/* Shares that arrived with no purchase price count as bought for
+                   nothing, so every profit on this row is overstated; said on the
+                   paper, held or sold. */}
+                {position.has_unknown_cost && (
+                  <div className="text-xs text-amber-600">
+                    <span data-testid="position-unknown-cost" title={t("positions.unknownCostHint")}>
+                      {t("positions.unknownCost")}
+                    </span>
+                    {onPriceUnknown && (
+                      <>
+                        {" · "}
+                        <button
+                          type="button"
+                          data-testid="position-unknown-cost-action"
+                          className="underline underline-offset-2 hover:text-amber-700"
+                          onClick={() =>
+                            onPriceUnknown({
+                              id: position.instrument.id,
+                              name: position.instrument.name,
+                              ticker: position.instrument.ticker,
+                            })
+                          }
+                        >
+                          {t("positions.unknownCostAction")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </TableCell>
+            );
+            const marketCell = (
+              <TableCell className={cn("text-right tabular-nums", narrow && FIGURE_NARROW)}>
+                {hasMarketValue && resolvedMarketValue ? (
+                  <>
+                    <MoneyCell
+                      resolved={resolvedMarketValue}
+                      notConvertedTitle={valuationUnconvertedTitle}
+                      testId="position-market-value"
+                    />
+                    {hint && (
+                      <div
+                        data-testid="position-price"
+                        className="text-xs font-normal text-muted-foreground"
+                        title={hint.title}
+                      >
+                        {hint.price}
+                      </div>
+                    )}
+                    {/* CoinGecko asks to be named where its prices are shown
+                       (decision Р-20). */}
+                    {position.instrument.type === "crypto" && !position.price_by_hand && (
+                      <div data-testid="position-price-coingecko" className="text-xs text-muted-foreground">
+                        {t("positions.priceCoinGecko")}
+                      </div>
+                    )}
+                    {/* A stale quote is still what the valuation and totals use, so its
+                       age is shown on the row. */}
+                    {position.price_by_hand && (
+                      <div data-testid="position-price-by-hand" className="text-xs text-muted-foreground">
+                        {t("positions.priceByHand")}
+                        {onStatePrice && (
+                          <>
+                            {" · "}
+                            <button
+                              type="button"
+                              className="underline underline-offset-2"
+                              onClick={() =>
+                                onStatePrice({
+                                  id: position.instrument.id,
+                                  name: position.instrument.name,
+                                  currency: position.instrument.currency,
+                                  bond: position.instrument.type === "bond",
+                                })
+                              }
+                            >
+                              {t("positions.statePriceAgain")}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {position.price_source === "nav" && (
+                      <div data-testid="position-price-nav" className="text-xs text-muted-foreground" title={t("positions.priceNavHint")}>
+                        {t("positions.priceNav")}
+                      </div>
+                    )}
+                    {position.price_source === "foreign" && (
+                      <div data-testid="position-price-foreign" className="text-xs text-muted-foreground" title={t("positions.priceForeignHint")}>
+                        {t("positions.priceForeign")}
+                      </div>
+                    )}
+                    {/* What can be sold now, beside the full valuation above (decision
+                       Р-11): the «Итого» counts this one. */}
+                    {position.quantity !== "0" &&
+                      (position.liquid_value_minor == null ? (
+                        <div data-testid="position-not-traded" className="text-xs text-amber-600" title={t("positions.notTradedHint")}>
+                          {position.last_traded_on
+                            ? t("positions.notTradedSince", { date: formatDate(position.last_traded_on) })
+                            : t("positions.notTraded")}
+                        </div>
+                      ) : (
+                        position.liquid_value_minor !== position.market_value_minor && (
+                          <div data-testid="position-liquid" className="text-xs text-muted-foreground" title={t("positions.liquidHint")}>
+                            {t("positions.liquid", {
+                              amount:
+                                mode === "base" && position.liquid_value_in_base_minor != null
+                                  ? formatMinor(position.liquid_value_in_base_minor, baseCurrency)
+                                  : formatMinor(position.liquid_value_minor, position.currency),
+                            })}
+                          </div>
+                        )
+                      ))}
+                    {/* «Не торгуется с …» already dates a stale market price. */}
+                    {position.price_on && staleSince(position.price_on) && position.last_traded_on !== position.price_on && (
+                      <div
+                        data-testid="position-price-stale"
+                        className="text-xs text-amber-600"
+                        title={t("positions.priceStaleHint")}
+                      >
+                        {t("positions.priceStale", {
+                          date: staleSince(position.price_on) as string,
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span
+                    data-testid="position-no-quote"
+                    className="text-muted-foreground"
+                    title={valuationUnconvertedTitle}
+                  >
+                    {/* The dash is hidden from assistive technology and the sentence
+                       beside it is read (#31). */}
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">
+                      {valuationUnconvertedTitle}
+                    </span>
+                    {onStatePrice && position.market_value_gap === "no_quote" && (
+                      <button
+                        type="button"
+                        data-testid="position-state-price"
+                        className="block text-xs text-amber-600 underline underline-offset-2"
+                        onClick={() =>
+                          onStatePrice({
+                            id: position.instrument.id,
+                            name: position.instrument.name,
+                            currency: position.instrument.currency,
+                            bond: position.instrument.type === "bond",
+                          })
+                        }
+                      >
+                        {t("positions.statePrice")}
+                      </button>
+                    )}
+                  </span>
+                )}
+              </TableCell>
+            );
+            const profitCell = (
+              <TableCell className={cn("text-right tabular-nums", narrow && FIGURE_NARROW)}>
+                {resolvedUnrealized ? (
+                  <>
+                    <MoneyCell
+                      resolved={resolvedUnrealized}
+                      className={signClass(resolvedUnrealized.amountMinor)}
+                      notConvertedTitle={unconvertedTitle}
+                      convertedTitle={profitConvertedTitle}
+                      testId="position-profit-amount"
+                    />
+                    {unrealizedPct && (
+                      <div
+                        data-testid="position-profit-percent"
+                        className="text-xs font-normal text-muted-foreground"
+                        title={unrealizedPctTitle}
+                      >
+                        {unrealizedPct}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span
+                    data-testid="position-profit-dash"
+                    className="text-muted-foreground"
+                    title={profitDashHint}
+                  >
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">{profitDashHint}</span>
+                  </span>
+                )}
+                {/* The realized result, under the unrealized one rather than
+                   instead of it: one cell, one figure, one caption. Drawn only
+                   when there is one. */}
+                {resolvedRealized && resolvedRealized.amountMinor !== 0 && (
+                  <div
+                    data-testid="position-realized"
+                    className="text-xs font-normal text-muted-foreground"
+                    title={t("positions.realizedHintRow")}
+                  >
+                    {t("positions.realizedOnRow", {
+                      amount: formatMinor(
+                        resolvedRealized.amountMinor,
+                        resolvedRealized.currency,
+                      ),
+                    })}
+                  </div>
+                )}
+              </TableCell>
+            );
+            const settledCell = (
+              <TableCell
+                className="text-right tabular-nums"
+                title={settledHint}
+              >
+                {resolvedSettled ? (
+                  <MoneyCell
+                    resolved={resolvedSettled}
+                    notConvertedTitle={unconvertedTitle}
+                    convertedTitle={settledConvertedTitle}
+                    testId="position-settled"
+                  />
+                ) : (
+                  <span
+                    data-testid="position-settled-dash"
+                    className="text-muted-foreground"
+                  >
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">{settledHint}</span>
+                  </span>
+                )}
+                {otherIncome && (
+                  <div
+                    data-testid="position-income-other-currency"
+                    className="text-xs font-normal text-muted-foreground"
+                    title={t("positions.incomeOtherCurrencyHint")}
+                  >
+                    {t("positions.incomeOtherCurrency", {
+                      amounts: otherIncome,
+                    })}
+                  </div>
+                )}
+              </TableCell>
+            );
+            const totalCell = (
+              <TableCell
+                className="text-right tabular-nums"
+                title={t("positions.totalHint")}
+              >
+                {resolvedTotal ? (
+                  <MoneyCell
+                    resolved={resolvedTotal}
+                    notConvertedTitle={unconvertedTitle}
+                    convertedTitle={totalConvertedTitle}
+                    testId="position-total"
+                  />
+                ) : (
+                  <span
+                    data-testid="position-total-dash"
+                    className="text-muted-foreground"
+                  >
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">
+                      {t("positions.totalMissing")}
+                    </span>
+                  </span>
+                )}
+              </TableCell>
+            );
             return (
               <TableRow
                 key={custom?.key ?? position.instrument.id}
                 className={cn(closed && "opacity-50")}
               >
-                <TableCell>
-                  <div className="font-medium">
-                    {custom ? (
-                      custom.label
-                    ) : instrumentLinks ? (
-                      <Link
-                        to="/instruments/$instrumentId"
-                        params={{ instrumentId: position.instrument.id }}
-                        className="hover:underline"
-                      >
-                        {position.instrument.name}
-                      </Link>
-                    ) : (
-                      position.instrument.name
-                    )}
-                    {!custom && position.instrument.frozen && (
-                      <Badge variant="outline" className="ml-2">
-                        {t("positions.frozen")}
-                      </Badge>
-                    )}
-                    {closed && (
-                      <Badge variant="outline" className="ml-2">
-                        {t("positions.closed")}
-                      </Badge>
-                    )}
-                  </div>
-                  {!custom && (
-                    <div className="text-xs text-muted-foreground">
-                      {position.instrument.ticker}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {position.quantity}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  <MoneyCell
-                    resolved={resolvedCost}
-                    notConvertedTitle={unconvertedTitle}
-                    convertedTitle={costConvertedTitle}
-                    testId="position-cost"
-                  />
-                  {/* Russia's external loan bonds: the rouble cost is the face
-                     currency's at the sale's rate (decision Р-21). */}
-                  {position.cost_at_sale_rate && (
-                    <div
-                      data-testid="position-cost-at-sale-rate"
-                      className="text-xs text-muted-foreground"
-                      title={t("positions.costAtSaleRateHint")}
-                    >
-                      {t("positions.costAtSaleRate")}
-                    </div>
-                  )}
-                  {/* Shares that arrived with no purchase price count as bought for
-                     nothing, so every profit on this row is overstated; said on the
-                     paper, held or sold. */}
-                  {position.has_unknown_cost && (
-                    <div className="text-xs text-amber-600">
-                      <span data-testid="position-unknown-cost" title={t("positions.unknownCostHint")}>
-                        {t("positions.unknownCost")}
-                      </span>
-                      {onPriceUnknown && (
-                        <>
-                          {" · "}
-                          <button
-                            type="button"
-                            data-testid="position-unknown-cost-action"
-                            className="underline underline-offset-2 hover:text-amber-700"
-                            onClick={() =>
-                              onPriceUnknown({
-                                id: position.instrument.id,
-                                name: position.instrument.name,
-                                ticker: position.instrument.ticker,
-                              })
-                            }
-                          >
-                            {t("positions.unknownCostAction")}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {hasMarketValue && resolvedMarketValue ? (
-                    <>
-                      <MoneyCell
-                        resolved={resolvedMarketValue}
-                        notConvertedTitle={valuationUnconvertedTitle}
-                        testId="position-market-value"
-                      />
-                      {hint && (
-                        <div
-                          data-testid="position-price"
-                          className="text-xs font-normal text-muted-foreground"
-                          title={hint.title}
-                        >
-                          {hint.price}
-                        </div>
-                      )}
-                      {/* CoinGecko asks to be named where its prices are shown
-                         (decision Р-20). */}
-                      {position.instrument.type === "crypto" && !position.price_by_hand && (
-                        <div data-testid="position-price-coingecko" className="text-xs text-muted-foreground">
-                          {t("positions.priceCoinGecko")}
-                        </div>
-                      )}
-                      {/* A stale quote is still what the valuation and totals use, so its
-                         age is shown on the row. */}
-                      {position.price_by_hand && (
-                        <div data-testid="position-price-by-hand" className="text-xs text-muted-foreground">
-                          {t("positions.priceByHand")}
-                          {onStatePrice && (
-                            <>
-                              {" · "}
-                              <button
-                                type="button"
-                                className="underline underline-offset-2"
-                                onClick={() =>
-                                  onStatePrice({
-                                    id: position.instrument.id,
-                                    name: position.instrument.name,
-                                    currency: position.instrument.currency,
-                                    bond: position.instrument.type === "bond",
-                                  })
-                                }
-                              >
-                                {t("positions.statePriceAgain")}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                      {position.price_source === "nav" && (
-                        <div data-testid="position-price-nav" className="text-xs text-muted-foreground" title={t("positions.priceNavHint")}>
-                          {t("positions.priceNav")}
-                        </div>
-                      )}
-                      {position.price_source === "foreign" && (
-                        <div data-testid="position-price-foreign" className="text-xs text-muted-foreground" title={t("positions.priceForeignHint")}>
-                          {t("positions.priceForeign")}
-                        </div>
-                      )}
-                      {/* What can be sold now, beside the full valuation above (decision
-                         Р-11): the «Итого» counts this one. */}
-                      {position.quantity !== "0" &&
-                        (position.liquid_value_minor == null ? (
-                          <div data-testid="position-not-traded" className="text-xs text-amber-600" title={t("positions.notTradedHint")}>
-                            {position.last_traded_on
-                              ? t("positions.notTradedSince", { date: formatDate(position.last_traded_on) })
-                              : t("positions.notTraded")}
-                          </div>
-                        ) : (
-                          position.liquid_value_minor !== position.market_value_minor && (
-                            <div data-testid="position-liquid" className="text-xs text-muted-foreground" title={t("positions.liquidHint")}>
-                              {t("positions.liquid", {
-                                amount:
-                                  mode === "base" && position.liquid_value_in_base_minor != null
-                                    ? formatMinor(position.liquid_value_in_base_minor, baseCurrency)
-                                    : formatMinor(position.liquid_value_minor, position.currency),
-                              })}
-                            </div>
-                          )
-                        ))}
-                      {/* «Не торгуется с …» already dates a stale market price. */}
-                      {position.price_on && staleSince(position.price_on) && position.last_traded_on !== position.price_on && (
-                        <div
-                          data-testid="position-price-stale"
-                          className="text-xs text-amber-600"
-                          title={t("positions.priceStaleHint")}
-                        >
-                          {t("positions.priceStale", {
-                            date: staleSince(position.price_on) as string,
-                          })}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span
-                      data-testid="position-no-quote"
-                      className="text-muted-foreground"
-                      title={valuationUnconvertedTitle}
-                    >
-                      {/* The dash is hidden from assistive technology and the sentence
-                         beside it is read (#31). */}
-                      <span aria-hidden="true">—</span>
-                      <span className="sr-only">
-                        {valuationUnconvertedTitle}
-                      </span>
-                      {onStatePrice && position.market_value_gap === "no_quote" && (
-                        <button
-                          type="button"
-                          data-testid="position-state-price"
-                          className="block text-xs text-amber-600 underline underline-offset-2"
-                          onClick={() =>
-                            onStatePrice({
-                              id: position.instrument.id,
-                              name: position.instrument.name,
-                              currency: position.instrument.currency,
-                              bond: position.instrument.type === "bond",
-                            })
-                          }
-                        >
-                          {t("positions.statePrice")}
-                        </button>
-                      )}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {resolvedUnrealized ? (
-                    <>
-                      <MoneyCell
-                        resolved={resolvedUnrealized}
-                        className={signClass(resolvedUnrealized.amountMinor)}
-                        notConvertedTitle={unconvertedTitle}
-                        convertedTitle={profitConvertedTitle}
-                        testId="position-profit-amount"
-                      />
-                      {unrealizedPct && (
-                        <div
-                          data-testid="position-profit-percent"
-                          className="text-xs font-normal text-muted-foreground"
-                          title={unrealizedPctTitle}
-                        >
-                          {unrealizedPct}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span
-                      data-testid="position-profit-dash"
-                      className="text-muted-foreground"
-                      title={profitDashHint}
-                    >
-                      <span aria-hidden="true">—</span>
-                      <span className="sr-only">{profitDashHint}</span>
-                    </span>
-                  )}
-                  {/* The realized result, under the unrealized one rather than
-                     instead of it: one cell, one figure, one caption. Drawn only
-                     when there is one. */}
-                  {resolvedRealized && resolvedRealized.amountMinor !== 0 && (
-                    <div
-                      data-testid="position-realized"
-                      className="text-xs font-normal text-muted-foreground"
-                      title={t("positions.realizedHintRow")}
-                    >
-                      {t("positions.realizedOnRow", {
-                        amount: formatMinor(
-                          resolvedRealized.amountMinor,
-                          resolvedRealized.currency,
-                        ),
-                      })}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  title={settledHint}
-                >
-                  {resolvedSettled ? (
-                    <MoneyCell
-                      resolved={resolvedSettled}
-                      notConvertedTitle={unconvertedTitle}
-                      convertedTitle={settledConvertedTitle}
-                      testId="position-settled"
-                    />
-                  ) : (
-                    <span
-                      data-testid="position-settled-dash"
-                      className="text-muted-foreground"
-                    >
-                      <span aria-hidden="true">—</span>
-                      <span className="sr-only">{settledHint}</span>
-                    </span>
-                  )}
-                  {otherIncome && (
-                    <div
-                      data-testid="position-income-other-currency"
-                      className="text-xs font-normal text-muted-foreground"
-                      title={t("positions.incomeOtherCurrencyHint")}
-                    >
-                      {t("positions.incomeOtherCurrency", {
-                        amounts: otherIncome,
-                      })}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  title={t("positions.totalHint")}
-                >
-                  {resolvedTotal ? (
-                    <MoneyCell
-                      resolved={resolvedTotal}
-                      notConvertedTitle={unconvertedTitle}
-                      convertedTitle={totalConvertedTitle}
-                      testId="position-total"
-                    />
-                  ) : (
-                    <span
-                      data-testid="position-total-dash"
-                      className="text-muted-foreground"
-                    >
-                      <span aria-hidden="true">—</span>
-                      <span className="sr-only">
-                        {t("positions.totalMissing")}
-                      </span>
-                    </span>
-                  )}
-                </TableCell>
+                {nameCell}
+                {narrow ? (
+                  <>
+                    {marketCell}
+                    {profitCell}
+                    {costCell}
+                  </>
+                ) : (
+                  <>
+                    {quantityCell}
+                    {costCell}
+                    {marketCell}
+                    {profitCell}
+                  </>
+                )}
+                {settledCell}
+                {totalCell}
               </TableRow>
             );
           })}
@@ -838,121 +896,153 @@ export function PositionsTable({
             const inBase = money.in_base;
             const showInBase =
               mode === "base" && money.currency !== baseCurrency;
-            return (
-              <TableRow key={`cash-${money.currency}`} data-testid="cash-row">
-                <TableCell>
-                  <div className="font-medium" data-testid="cash-currency">
-                    {t("positions.cashName", { currency: money.currency })}
+            const cashName = (
+              <TableCell className={narrow ? STICKY_NAME : undefined}>
+                <div className="font-medium" data-testid="cash-currency">
+                  {t("positions.cashName", { currency: money.currency })}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {t("positions.cashKind")}
+                </div>
+                {/* An overdraft has no gain to publish; the cell says the journal is
+                   missing operations rather than staying empty. */}
+                {money.amount_minor < 0 && (
+                  <div
+                    data-testid="cash-overdraft"
+                    className="text-xs text-amber-600"
+                    title={t("positions.cashOverdraftHint")}
+                  >
+                    {t("positions.cashOverdraft")}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {t("positions.cashKind")}
-                  </div>
-                  {/* An overdraft has no gain to publish; the cell says the journal is
-                     missing operations rather than staying empty. */}
-                  {money.amount_minor < 0 && (
-                    <div
-                      data-testid="cash-overdraft"
-                      className="text-xs text-amber-600"
-                      title={t("positions.cashOverdraftHint")}
+                )}
+                {money.amount_minor < 0 &&
+                  money.overdrawn_since != null &&
+                  onOpeningBalance && (
+                    <button
+                      type="button"
+                      data-testid="cash-opening-balance"
+                      className="text-xs underline underline-offset-2 hover:text-foreground"
+                      title={t("positions.openingBalanceHint")}
+                      onClick={() =>
+                        onOpeningBalance({
+                          ...money,
+                          overdrawn_since: money.overdrawn_since as string,
+                        })
+                      }
                     >
-                      {t("positions.cashOverdraft")}
+                      {t("positions.openingBalance")}
+                    </button>
+                  )}
+              </TableCell>
+            );
+            const cashAmount = (
+              <TableCell
+                className="text-right tabular-nums"
+                data-testid="cash-amount"
+              >
+                {formatMinor(money.amount_minor, money.currency)}
+              </TableCell>
+            );
+            const cashCost = (
+              <TableCell
+                className="text-right tabular-nums"
+                data-testid="cash-cost"
+              >
+                {showInBase && inBase.cost_minor != null
+                  ? formatMinor(inBase.cost_minor, inBase.currency)
+                  : ""}
+              </TableCell>
+            );
+            const cashValue = (
+              <TableCell
+                className="text-right tabular-nums"
+                data-testid="cash-value"
+              >
+                {showInBase && inBase.value_minor != null
+                  ? formatMinor(inBase.value_minor, inBase.currency)
+                  : narrow && !showInBase
+                    ? formatMinor(money.amount_minor, money.currency)
+                    : ""}
+              </TableCell>
+            );
+            const cashProfit = (
+              <TableCell
+                className="text-right tabular-nums"
+                title={showInBase ? t("positions.cashProfitHint") : undefined}
+              >
+                {/* An empty cell can mean an overdraft (noted under the name) or a
+                   missing rate, which has nowhere else to appear (gold under a
+                   currency the Bank of Russia does not quote). */}
+                {showInBase &&
+                  inBase.unrealized_pnl_minor == null &&
+                  money.amount_minor >= 0 && (
+                    <span
+                      data-testid="cash-no-rate"
+                      className="text-muted-foreground"
+                      title={t("positions.cashNoRateHint")}
+                    >
+                      {t("positions.cashNoRate")}
+                    </span>
+                  )}
+                {showInBase && inBase.unrealized_pnl_minor != null ? (
+                  <span
+                    data-testid="cash-profit"
+                    className={signClass(inBase.unrealized_pnl_minor)}
+                  >
+                    {formatMinor(
+                      inBase.unrealized_pnl_minor,
+                      inBase.currency,
+                    )}
+                  </span>
+                ) : (
+                  ""
+                )}
+                {/* What this money already earned, under what it earns now, as on a
+                   paper's row. Drawn only when there is one. */}
+                {showInBase &&
+                  inBase.realized_pnl_minor != null &&
+                  inBase.realized_pnl_minor !== 0 && (
+                    <div
+                      data-testid="cash-realized"
+                      className="text-xs font-normal text-muted-foreground"
+                      title={t("positions.cashRealizedHint")}
+                    >
+                      {t("positions.cashRealizedOnRow", {
+                        amount: formatMinor(
+                          inBase.realized_pnl_minor,
+                          inBase.currency,
+                        ),
+                      })}
                     </div>
                   )}
-                  {money.amount_minor < 0 &&
-                    money.overdrawn_since != null &&
-                    onOpeningBalance && (
-                      <button
-                        type="button"
-                        data-testid="cash-opening-balance"
-                        className="text-xs underline underline-offset-2 hover:text-foreground"
-                        title={t("positions.openingBalanceHint")}
-                        onClick={() =>
-                          onOpeningBalance({
-                            ...money,
-                            overdrawn_since: money.overdrawn_since as string,
-                          })
-                        }
-                      >
-                        {t("positions.openingBalance")}
-                      </button>
-                    )}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  data-testid="cash-amount"
-                >
-                  {formatMinor(money.amount_minor, money.currency)}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  data-testid="cash-cost"
-                >
-                  {showInBase && inBase.cost_minor != null
-                    ? formatMinor(inBase.cost_minor, inBase.currency)
-                    : ""}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  data-testid="cash-value"
-                >
-                  {showInBase && inBase.value_minor != null
-                    ? formatMinor(inBase.value_minor, inBase.currency)
-                    : ""}
-                </TableCell>
-                <TableCell
-                  className="text-right tabular-nums"
-                  title={showInBase ? t("positions.cashProfitHint") : undefined}
-                >
-                  {/* An empty cell can mean an overdraft (noted under the name) or a
-                     missing rate, which has nowhere else to appear (gold under a
-                     currency the Bank of Russia does not quote). */}
-                  {showInBase &&
-                    inBase.unrealized_pnl_minor == null &&
-                    money.amount_minor >= 0 && (
-                      <span
-                        data-testid="cash-no-rate"
-                        className="text-muted-foreground"
-                        title={t("positions.cashNoRateHint")}
-                      >
-                        {t("positions.cashNoRate")}
-                      </span>
-                    )}
-                  {showInBase && inBase.unrealized_pnl_minor != null ? (
-                    <span
-                      data-testid="cash-profit"
-                      className={signClass(inBase.unrealized_pnl_minor)}
-                    >
-                      {formatMinor(
-                        inBase.unrealized_pnl_minor,
-                        inBase.currency,
-                      )}
-                    </span>
-                  ) : (
-                    ""
-                  )}
-                  {/* What this money already earned, under what it earns now, as on a
-                     paper's row. Drawn only when there is one. */}
-                  {showInBase &&
-                    inBase.realized_pnl_minor != null &&
-                    inBase.realized_pnl_minor !== 0 && (
-                      <div
-                        data-testid="cash-realized"
-                        className="text-xs font-normal text-muted-foreground"
-                        title={t("positions.cashRealizedHint")}
-                      >
-                        {t("positions.cashRealizedOnRow", {
-                          amount: formatMinor(
-                            inBase.realized_pnl_minor,
-                            inBase.currency,
-                          ),
-                        })}
-                      </div>
-                    )}
-                </TableCell>
-                {/* Settled and total belong to papers; left empty, not noughts that
-                   would read as figures. */}
-                <TableCell />
-                <TableCell />
+              </TableCell>
+            );
+            // Settled and total belong to papers; left empty, not noughts that would read as figures.
+            const cashSettled = (
+              <TableCell />
+            );
+            const cashTotal = (
+              <TableCell />
+            );
+            return (
+              <TableRow key={`cash-${money.currency}`} data-testid="cash-row">
+                {cashName}
+                {narrow ? (
+                  <>
+                    {cashValue}
+                    {cashProfit}
+                    {cashCost}
+                  </>
+                ) : (
+                  <>
+                    {cashAmount}
+                    {cashCost}
+                    {cashValue}
+                    {cashProfit}
+                  </>
+                )}
+                {cashSettled}
+                {cashTotal}
               </TableRow>
             );
           })}

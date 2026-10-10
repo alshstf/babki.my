@@ -9,6 +9,7 @@ import {
 } from "@/lib/screen-currencies";
 import { formatMinor } from "@/lib/money";
 import { visibleText } from "@/test-utils";
+import { pretendNarrow } from "@/test-narrow";
 import type { Instrument } from "@/api/instruments";
 import { formatDate, localToday } from "@/lib/dates";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
@@ -1635,5 +1636,34 @@ describe("OperationsTable — the tax withheld abroad", () => {
       "title",
       "Календаря дивидендов по этой бумаге нет — оценить не из чего",
     );
+  });
+});
+
+// On a phone the journal keeps date, kind and amount side by side and folds
+// the paper, its count and price, and the fee under the kind: once each.
+describe("OperationsTable on a phone", () => {
+  it("folds the paper, the count at a price and the fee under the kind", async () => {
+    pretendNarrow();
+    renderTable({
+      operations: [
+        makeOperation({
+          type: "buy",
+          instrument_id: "instr-1",
+          quantity: "10",
+          price: "250.5",
+          currency: "RUB",
+          amount_minor: -2_505_00,
+          fee_minor: 3_00,
+          note: "Покупка",
+        }),
+      ],
+      instruments: [makeInstrument()],
+    });
+
+    await screen.findByText("Сбербанк");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Дата и тип", "Сумма"]);
+    expect(screen.getAllByTestId("operation-note")).toHaveLength(1);
+    expect(norm(screen.getByTestId("operation-price").textContent ?? "")).toBe(norm("250,50 ₽"));
+    expect(norm(screen.getByTestId("operation-fee").textContent ?? "")).toBe(norm(formatMinor(3_00, "RUB")));
   });
 });
