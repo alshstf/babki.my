@@ -72,11 +72,11 @@ describe("BudgetCard", () => {
     show();
     const lines = await screen.findAllByTestId("budget-line");
     expect(lines).toHaveLength(3);
-    expect(norm(lines[2].textContent)).toContain("Путешествия · копилка: +15 000,00 ₽");
-    expect(norm(lines[1].textContent)).toContain("-1 100,00 ₽");
+    expect(norm(lines[2].textContent)).toContain("Путешествия · копилка: +15 000 ₽");
+    expect(norm(lines[1].textContent)).toContain("-1 100 ₽");
     expect(within(lines[1]).getAllByRole("cell")[3].className).toContain("text-red-700");
-    expect(norm(screen.getByTestId("budget-sums").textContent)).toContain("54 000,00 ₽");
-    expect(norm(screen.getByTestId("budget-unlimited").textContent)).toContain("52 990,00 ₽");
+    expect(norm(screen.getByTestId("budget-sums").textContent)).toContain("54 000 ₽");
+    expect(norm(screen.getByTestId("budget-unlimited").textContent)).toContain("52 990 ₽");
   });
 
   it("changes a line's limit and takes one off from the month shown", async () => {
