@@ -13,6 +13,8 @@ import (
 	"github.com/riverqueue/river"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/budget"
+	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
@@ -163,8 +165,10 @@ func NewWorkers(
 			log.Error("push keys", "error", err)
 		}
 	}
+	report := cashflow.NewService(operations, accounts, category.NewStore(pool), spaces, marketdata.NewConverter(mdStore))
 	river.AddWorker(workers, notify.NewRemindersWorker(notify.NewStore(pool),
-		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)), sender, log))
+		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
+		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log))
 	return workers
 }
 

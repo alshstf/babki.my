@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 
+	"babki.my/babki/internal/budget"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/creditcard"
 )
 
@@ -26,19 +28,29 @@ type cards interface {
 	All(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Card, error)
 }
 
+type budgets interface {
+	Month(ctx context.Context, spaceID uuid.UUID, m time.Time) (budget.Month, error)
+}
+
+type categories interface {
+	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
+}
+
 type remindersWorker struct {
 	river.WorkerDefaults[SendRemindersArgs]
-	store  *Store
-	cards  cards
-	sender Sender
-	log    *slog.Logger
-	now    func() time.Time
+	store      *Store
+	cards      cards
+	budgets    budgets
+	categories categories
+	sender     Sender
+	log        *slog.Logger
+	now        func() time.Time
 }
 
 // NewRemindersWorker pushes the reminders; with no sender (no encryption key
 // to derive the push keys from) it does nothing.
-func NewRemindersWorker(store *Store, c cards, sender Sender, log *slog.Logger) river.Worker[SendRemindersArgs] {
-	return &remindersWorker{store: store, cards: c, sender: sender, log: log, now: time.Now}
+func NewRemindersWorker(store *Store, c cards, b budgets, cats categories, sender Sender, log *slog.Logger) river.Worker[SendRemindersArgs] {
+	return &remindersWorker{store: store, cards: c, budgets: b, categories: cats, sender: sender, log: log, now: time.Now}
 }
 
 func (w *remindersWorker) Timeout(*river.Job[SendRemindersArgs]) time.Duration {
@@ -60,11 +72,33 @@ func (w *remindersWorker) Work(ctx context.Context, _ *river.Job[SendRemindersAr
 		if err != nil {
 			return err
 		}
-		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, CardReminders(list, today)); err != nil {
+		reminders := CardReminders(list, today)
+		more, err := w.budgetReminders(ctx, spaceID, today)
+		if err != nil {
+			return err
+		}
+		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, append(reminders, more...)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// budgetReminders are the month's budget pushes for the space.
+func (w *remindersWorker) budgetReminders(ctx context.Context, spaceID uuid.UUID, today time.Time) ([]Reminder, error) {
+	b, err := w.budgets.Month(ctx, spaceID, today)
+	if err != nil || len(b.Lines) == 0 {
+		return nil, err
+	}
+	cats, err := w.categories.List(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[uuid.UUID]string, len(cats))
+	for _, c := range cats {
+		names[c.ID] = c.Name
+	}
+	return BudgetReminders(b, names), nil
 }
 
 // Deliver sends each reminder to every member it is for who has a device and

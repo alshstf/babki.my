@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/platform/secretbox"
 )
@@ -138,5 +139,39 @@ func TestAmountsAreWrittenTheRussianWay(t *testing.T) {
 	}
 	if got := amount(10_00, "GBP"); got != "10,00 GBP" {
 		t.Errorf("GBP = %q", got)
+	}
+}
+
+// The budget's pushes (decision Р-25): nine tenths of a limit with its
+// копилка spent, and past it; each once a month, to the whole family.
+func TestTheBudgetCallsForItsReminders(t *testing.T) {
+	food, cafe, trips, gifts := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	b := budget.Month{Month: d("2026-09-01"), BaseCurrency: "RUB", Lines: []budget.Line{
+		{CategoryID: food, Limit: 30_000_00, Spent: 27_000_00, Left: 3_000_00},
+		{CategoryID: cafe, Limit: 4_000_00, Spent: 5_100_00, Left: -1_100_00},
+		{CategoryID: trips, Limit: 5_000_00, Rollover: true, Carried: 15_000_00, Spent: 18_500_00, Left: 1_500_00},
+		{CategoryID: gifts, Limit: 2_000_00, Rollover: true, Carried: 2_000_00, Spent: 1_000_00, Left: 3_000_00},
+	}}
+	names := map[uuid.UUID]string{food: "Продукты", cafe: "Кафе", trips: "Путешествия", gifts: "Подарки"}
+	got := map[string]Reminder{}
+	for _, r := range BudgetReminders(b, names) {
+		got[r.Key] = r
+		if r.Owner != nil || r.URL != "/money" {
+			t.Errorf("%s: owner %v, url %q", r.Key, r.Owner, r.URL)
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("reminders = %v, want food, the café and the trip", got)
+	}
+	// Amounts keep their parts together with no-break spaces.
+	text := func(r Reminder) string { return strings.ReplaceAll(r.Body, "\u00a0", " ") }
+	if r := got["budget:"+cafe.String()+":2026-09:over"]; r.Title != "Бюджет: Кафе" || text(r) != "Лимит превышен на 1 100,00 ₽: потрачено 5 100,00 ₽ из 4 000,00 ₽." {
+		t.Errorf("café = %+v", r)
+	}
+	if r := got["budget:"+food.String()+":2026-09:near"]; text(r) != "Потрачено 27 000,00 ₽ из 30 000,00 ₽ — до конца месяца осталось 3 000,00 ₽." {
+		t.Errorf("food = %+v", r)
+	}
+	if _, ok := got["budget:"+trips.String()+":2026-09:near"]; !ok {
+		t.Error("the trip at 18 500 of 20 000 is not warned of")
 	}
 }
