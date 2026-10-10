@@ -3008,7 +3008,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3031,6 +3031,8 @@ components:
         opened_on: { type: string, nullable: true, description: "For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise" }
         grace_all_lost: { type: boolean, description: "A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is" }
         pay_by_period_end: { type: boolean, description: "The minimum is due by the last day of the period after the statement, not payment_days after it" }
+        pay_day: { type: integer, minimum: 0, maximum: 31, description: "The minimum is due by this day of the month, the first after the statement (ВТБ: 20); 0 for none. Not with pay_by_period_end" }
+        min_round_up_minor: { type: integer, format: int64, minimum: 0, description: "The minimum is rounded up to a multiple of it (100 ₽ = 10000), never past the debt; 0 for none" }
         charges_in_full: { type: boolean, description: "The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full" }
         transfer_categories:
           type: array
@@ -3094,7 +3096,7 @@ components:
         early: { type: boolean, description: "The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost)" }
     CreditCardStatus:
       type: object
-      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, cashback_expected_minor, cashback_on]
+      required: [debt_minor, available_minor, last_statement, next_statement, minimum_minor, minimum_on, minimum_missed, minimum_estimate, grace, lost, non_grace_minor, non_grace_interest_minor, grace_off_since, grace_off_by_minimum, to_restore_minor, cash_this_period_minor, penalty_minor, minimum_overdue_minor, cashback_expected_minor, cashback_on]
       properties:
         debt_minor: { type: integer, format: int64, description: "Owed on the card; below zero the family's own money on it" }
         available_minor: { type: integer, format: int64, description: "What is left of the limit" }
@@ -3113,6 +3115,7 @@ components:
         to_restore_minor: { type: integer, format: int64, description: "While the grace is off: what is left to repay for the purchases after it to be free again — the purchases owed, or after a missed minimum the whole debt; 0 otherwise" }
         cash_this_period_minor: { type: integer, format: int64, description: "Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor" }
         penalty_minor: { type: integer, format: int64, description: "Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed" }
+        minimum_overdue_minor: { type: integer, format: int64, description: "The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once" }
         cashback_expected_minor: { type: integer, format: int64, description: "The cashback this period's purchases so far bring by the card's rules, capped" }
         cashback_on: { type: string, nullable: true, description: "The day it comes; null when the card names no cashback rules" }
     CreditCardBenefit:

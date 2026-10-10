@@ -50,11 +50,11 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   grace: [{ on: inDays(5), amount_minor: 52_300_00 }, { on: inDays(36), amount_minor: 5_000_00 }],
   lost: [], non_grace_minor: 0, non_grace_interest_minor: 0,
   grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0,
-  cashback_expected_minor: 0, cashback_on: null, ...over,
+  cashback_expected_minor: 0, cashback_on: null, minimum_overdue_minor: 0, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
-  terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0, grace_run_from: "purchase",
+  terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0, grace_run_from: "purchase", pay_day: 0, min_round_up_minor: 0,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
     transfer_categories: [], fees: noFees, cashback: noCashback },
@@ -102,7 +102,7 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toEqual({
-      limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120, grace_run_from: "purchase",
+      limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120, grace_run_from: "purchase", pay_day: 0, min_round_up_minor: 0,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
       transfer_categories: [], fees: noFees, cashback: noCashback,
@@ -120,7 +120,8 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({
-      grace_kind: "running", grace_days: 110, grace_run_from: "month_start", statement_day: 1, payment_days: 19,
+      grace_kind: "running", grace_days: 110, grace_run_from: "month_start", statement_day: 1, pay_day: 20,
+      pay_by_period_end: false, min_round_up_minor: 100_00,
     });
   });
 
@@ -168,6 +169,12 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({ transfer_categories: ["c-wallets"] });
+  });
+
+  it("says which part of the minimum is overdue from before", async () => {
+    answer({ "/credit-card": card({ minimum_minor: 1_590_00, minimum_overdue_minor: 500_00 }) });
+    show(<CreditCardPanel account={account} canEdit />);
+    expect(norm((await screen.findByTestId("card-minimum-overdue")).textContent ?? "")).toBe("в том числе просрочено 500,00 ₽ — внесите сразу");
   });
 
   it("tells the cashback this month's purchases bring by the card's rules", async () => {

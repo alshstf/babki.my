@@ -2287,6 +2287,13 @@ export interface components {
             grace_all_lost: boolean;
             /** @description The minimum is due by the last day of the period after the statement, not payment_days after it */
             pay_by_period_end: boolean;
+            /** @description The minimum is due by this day of the month, the first after the statement (ВТБ: 20); 0 for none. Not with pay_by_period_end */
+            pay_day: number;
+            /**
+             * Format: int64
+             * @description The minimum is rounded up to a multiple of it (100 ₽ = 10000), never past the debt; 0 for none
+             */
+            min_round_up_minor: number;
             /** @description The minimum is min_percent of the debt less the interest and fees charged (not less than min_floor_minor), plus those in full */
             charges_in_full: boolean;
             /** @description The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family */
@@ -2433,6 +2440,11 @@ export interface components {
              * @description Roughly the penalty for the minimum missed so far, at fees.penalty_daily_percent; 0 when none is missed
              */
             penalty_minor: number;
+            /**
+             * Format: int64
+             * @description The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once
+             */
+            minimum_overdue_minor: number;
             /**
              * Format: int64
              * @description The cashback this period's purchases so far bring by the card's rules, capped

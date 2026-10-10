@@ -97,6 +97,12 @@ type Terms struct {
 	// PayByPeriodEnd: the minimum is due by the last day of the period after
 	// the statement, not PaymentDays after it.
 	PayByPeriodEnd bool
+	// PayDay: the minimum is due by this day of the month, the first one
+	// after the statement (ВТБ: the 20th); 0 for none.
+	PayDay int
+	// MinRoundUp: the minimum is rounded up to a multiple of it (ВТБ,
+	// Т-Банк: 100 ₽), never past the debt; 0 for none.
+	MinRoundUp int64
 	// ChargesInFull: the minimum is MinPercent of the debt for purchases,
 	// cash and transfers (not less than MinFloor) plus the interest and fees
 	// charged, in full.
@@ -197,6 +203,10 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: windows count from the day the card's contract was made", family.ErrValidation)
 	case t.MinPercent.IsNegative() || t.MinPercent.GreaterThan(hundred):
 		return fmt.Errorf("%w: the minimum payment is 0 to 100 percent of the debt", family.ErrValidation)
+	case t.PayDay < 0 || t.PayDay > 31 || t.PayDay > 0 && t.PayByPeriodEnd:
+		return fmt.Errorf("%w: the minimum is due by a day of the month (1 to 31) or by the period's end, not both", family.ErrValidation)
+	case t.MinRoundUp < 0:
+		return fmt.Errorf("%w: the minimum's rounding cannot be below zero", family.ErrValidation)
 	case t.MinFloor < 0:
 		return fmt.Errorf("%w: the smallest minimum payment cannot be below zero", family.ErrValidation)
 	case !rate(t.AnnualRate):
@@ -245,8 +255,17 @@ func (t Terms) statementAfter(s time.Time, n int) time.Time {
 // dueOn is the day a statement on day s is to be paid by: PaymentDays after
 // it, or the last day of the period it opens.
 func (t Terms) dueOn(s time.Time) time.Time {
-	if t.PayByPeriodEnd {
+	switch {
+	case t.PayByPeriodEnd:
 		return t.statementAfter(s, 1).AddDate(0, 0, -1)
+	case t.PayDay > 0:
+		for m := 0; ; m++ {
+			first := time.Date(s.Year(), s.Month()+time.Month(m), 1, 0, 0, 0, 0, time.UTC)
+			last := first.AddDate(0, 1, -1).Day()
+			if d := first.AddDate(0, 0, min(t.PayDay, last)-1); d.After(s) {
+				return d
+			}
+		}
 	}
 	return s.AddDate(0, 0, t.PaymentDays)
 }
@@ -344,6 +363,9 @@ type Status struct {
 	// Penalty is roughly what the bank charges for the minimum missed so
 	// far, at Fees.PenaltyDaily.
 	Penalty int64
+	// MinimumOverdue is the part of Minimum that is earlier minimums missed:
+	// the bank adds them to the next one, and they are due at once.
+	MinimumOverdue int64
 	// CashbackExpected is the cashback this period's purchases so far bring
 	// by the card's rules, capped; it comes on CashbackOn (zero time when
 	// the card names no rules).
@@ -629,9 +651,22 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 		fee = t.Fees.Monthly
 	}
 	st.MinimumOn = t.dueOn(st.LastStatement)
-	if minimum := t.minimum(atStatement+fee, charges+fee); minimum > paidSince {
-		st.Minimum = minimum - paidSince
+	// Since the statement, payments go to the minimums missed first.
+	paid := paidSince
+	if stated {
+		paid = paidToward
+	}
+	if minimum := t.minimum(atStatement+fee, charges+fee); minimum > paid {
+		st.Minimum = minimum - paid
 		st.MinimumMissed = st.MinimumOn.Before(today)
+	}
+	switch {
+	case st.MinimumMissed:
+		// Past its day, this one is among the missed already.
+		st.Minimum, st.MinimumOverdue = max(st.Minimum, overdue), overdue
+	case overdue > 0:
+		st.Minimum += overdue
+		st.MinimumOverdue = overdue
 	}
 	if st.Minimum == 0 && st.MinimumOn.Before(today) {
 		fee = 0
@@ -690,7 +725,11 @@ func (t Terms) minimum(debt, charges int64) int64 {
 	}
 	charges = min(max(charges, 0), debt)
 	share, _ := money.Minor(decimal.NewFromInt(debt - charges).Mul(t.MinPercent).Div(hundred))
-	return min(max(share, t.MinFloor)+charges, debt)
+	minimum := max(share, t.MinFloor) + charges
+	if r := t.MinRoundUp; r > 0 && minimum%r != 0 {
+		minimum += r - minimum%r
+	}
+	return min(minimum, debt)
 }
 
 // ByBalance is the status of a card known only by its balance: the debt, the

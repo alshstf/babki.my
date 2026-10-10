@@ -74,6 +74,11 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
               {st.minimum_missed ? t("card.minimumMissed", { date: formatDate(st.minimum_on) }) : t("card.by", { date: formatDate(st.minimum_on) })}
             </div>
           )}
+          {st.minimum_overdue_minor > 0 && !st.minimum_missed && (
+            <div className="text-xs text-red-700 dark:text-red-400" data-testid="card-minimum-overdue">
+              {t("card.minimumOverdue", { amount: formatMinor(st.minimum_overdue_minor, c) })}
+            </div>
+          )}
           {st.penalty_minor > 0 && (
             <div className="text-xs text-red-700 dark:text-red-400" data-testid="card-penalty">
               {t("card.penalty", { amount: formatMinor(st.penalty_minor, c) })}
@@ -152,7 +157,11 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       <div className="text-xs text-muted-foreground">
         {t("card.termsLine", {
           day: data.terms.statement_day,
-          pay: data.terms.pay_by_period_end ? t("card.payByPeriodEndShort") : t("card.payDays", { days: data.terms.payment_days }),
+          pay: data.terms.pay_by_period_end
+            ? t("card.payByPeriodEndShort")
+            : data.terms.pay_day > 0
+              ? t("card.payDayShort", { day: data.terms.pay_day })
+              : t("card.payDays", { days: data.terms.payment_days }),
           grace: graceLine(t, data.terms),
           min: pct(data.terms.min_percent),
           floor: formatMinor(data.terms.min_floor_minor, c),
@@ -242,7 +251,7 @@ function BenefitBlock({ benefit, currency, ownRate }: { benefit: NonNullable<Cre
 }
 
 // Typical terms to start from; the bank's statement has the real ones.
-const LENIENT = { graceAllLost: false, payByPeriodEnd: false, chargesInFull: false };
+const LENIENT = { graceAllLost: false, dueMode: "days" as const, chargesInFull: false, minRound: "0" };
 const PRESETS: Record<string, Partial<Form>> = {
   statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT },
   sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3", ...LENIENT, chargesInFull: true },
@@ -251,14 +260,14 @@ const PRESETS: Record<string, Partial<Form>> = {
   // the first purchase's month, renewed once the debt is repaid; the minimum
   // by the 20th.
   vtb110: {
-    kind: "running", graceDays: "110", runFrom: "month_start", statementDay: "1", paymentDays: "19", minPercent: "3",
-    minFloor: "0", ...LENIENT,
+    kind: "running", graceDays: "110", runFrom: "month_start", statementDay: "1", minPercent: "3",
+    minFloor: "0", ...LENIENT, dueMode: "day", payDay: "20", minRound: "100",
   },
   // Газпромбанк «180 дней» (decision Р-28): two months of purchases, paid by
   // the end of the sixth; the minimum by the end of the next month.
   gpb180: {
     kind: "windows", windowMonths: "2", graceMonths: "6", statementDay: "1", minPercent: "3", minFloor: "500",
-    rate: "59.99", graceAllLost: true, payByPeriodEnd: true, chargesInFull: true,
+    rate: "59.99", graceAllLost: true, dueMode: "periodEnd", chargesInFull: true, minRound: "0",
     cashFree: "100000", cashPercent: "5.9", cashFixed: "590", transferPercent: "4.9", transferFixed: "390", penaltyDaily: "0.1",
   },
 };
@@ -278,7 +287,9 @@ interface Form {
   rate: string;
   ownRate: string;
   graceAllLost: boolean;
-  payByPeriodEnd: boolean;
+  dueMode: "days" | "periodEnd" | "day";
+  payDay: string;
+  minRound: string;
   chargesInFull: boolean;
   transferCategories: string[];
   monthlyFee: string;
@@ -314,7 +325,9 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     rate: terms?.annual_rate ?? "",
     ownRate: terms?.own_rate ?? "",
     graceAllLost: terms?.grace_all_lost ?? false,
-    payByPeriodEnd: terms?.pay_by_period_end ?? false,
+    dueMode: terms?.pay_by_period_end ? "periodEnd" : terms && terms.pay_day > 0 ? "day" : "days",
+    payDay: terms && terms.pay_day > 0 ? String(terms.pay_day) : "20",
+    minRound: terms ? minorToInput(terms.min_round_up_minor) : "0",
     chargesInFull: terms?.charges_in_full ?? false,
     transferCategories: terms?.transfer_categories ?? [],
     monthlyFee: terms ? minorToInput(terms.fees.monthly_minor) : "0",
@@ -353,7 +366,8 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     f.cashbackCategories.every((c) => decimalOk(c.percent, 100));
   const valid =
     limit !== null && limit >= 0 && floor !== null && floor >= 0 &&
-    int(f.statementDay, 1, 31) && (f.payByPeriodEnd || int(f.paymentDays, 0, 60)) &&
+    int(f.statementDay, 1, 31) && (f.dueMode !== "days" || int(f.paymentDays, 0, 60)) &&
+    (f.dueMode !== "day" || int(f.payDay, 1, 31)) && money(f.minRound) !== null &&
     ((f.kind !== "long" && f.kind !== "running") || int(f.graceDays, 1, 1100)) &&
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
@@ -374,7 +388,9 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
         grace_months: f.kind === "windows" ? Number(f.graceMonths) : 0,
         opened_on: f.kind === "windows" ? f.openedOn : null,
         grace_all_lost: f.graceAllLost,
-        pay_by_period_end: f.payByPeriodEnd,
+        pay_by_period_end: f.dueMode === "periodEnd",
+        pay_day: f.dueMode === "day" ? Number(f.payDay) : 0,
+        min_round_up_minor: money(f.minRound) ?? 0,
         charges_in_full: f.chargesInFull,
         transfer_categories: f.transferCategories,
         fees: {
@@ -415,7 +431,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
-  type Switch = "graceAllLost" | "payByPeriodEnd" | "chargesInFull" | "cashbackPoints";
+  type Switch = "graceAllLost" | "chargesInFull" | "cashbackPoints";
   const toggle = (id: Switch, label: string, hint: string) => (
     <div className="flex items-start gap-2">
       <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
@@ -454,8 +470,21 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           </div>
           {field("limit", t("card.limit", { currency: account.currency }))}
           {field("statementDay", t("card.statementDay"), t("card.statementDayHint"))}
-          {toggle("payByPeriodEnd", t("card.payByPeriodEnd"), t("card.payByPeriodEndHint"))}
-          {!f.payByPeriodEnd && field("paymentDays", t("card.paymentDays"), t("card.paymentDaysHint"))}
+          <div className="grid gap-1">
+            <Label>{t("card.dueMode")}</Label>
+            <Select value={f.dueMode} onValueChange={(v) => set({ dueMode: v as Form["dueMode"] })}>
+              <SelectTrigger aria-label={t("card.dueMode")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="days">{t("card.dueDays")}</SelectItem>
+                <SelectItem value="periodEnd">{t("card.payByPeriodEnd")}</SelectItem>
+                <SelectItem value="day">{t("card.dueDay")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {f.dueMode === "days" && field("paymentDays", t("card.paymentDays"), t("card.paymentDaysHint"))}
+          {f.dueMode === "day" && field("payDay", t("card.payDay"))}
           <div className="grid gap-1">
             <Label>{t("card.graceKind")}</Label>
             <Select value={f.kind} onValueChange={(v) => set({ kind: v as Form["kind"] })}>
@@ -497,6 +526,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           {toggle("graceAllLost", t("card.graceAllLost"), t("card.graceAllLostHint"))}
           {field("minPercent", t("card.minPercent"))}
           {field("minFloor", t("card.minFloor", { currency: account.currency }))}
+          {field("minRound", t("card.minRound", { currency: account.currency }), t("card.minRoundHint"))}
           {toggle("chargesInFull", t("card.chargesInFull"), t("card.chargesInFullHint"))}
           <div className="grid gap-1" data-testid="card-transfer-categories">
             <Label htmlFor="card-transfer-add">{t("card.transferCategories")}</Label>

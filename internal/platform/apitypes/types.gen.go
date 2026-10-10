@@ -2111,8 +2111,11 @@ type CreditCardStatus struct {
 	MinimumMinor int64 `json:"minimum_minor"`
 
 	// MinimumMissed minimum_on has passed with the minimum unpaid
-	MinimumMissed         bool   `json:"minimum_missed"`
-	MinimumOn             string `json:"minimum_on"`
+	MinimumMissed bool   `json:"minimum_missed"`
+	MinimumOn     string `json:"minimum_on"`
+
+	// MinimumOverdueMinor The part of minimum_minor that is earlier minimums missed: the bank adds them to the next one, due at once
+	MinimumOverdueMinor   int64  `json:"minimum_overdue_minor"`
 	NextStatement         string `json:"next_statement"`
 	NonGraceInterestMinor int64  `json:"non_grace_interest_minor"`
 
@@ -2171,6 +2174,9 @@ type CreditCardTerms struct {
 	// MinPercent The minimum payment, percent of the debt the statement shows (decimal)
 	MinPercent string `json:"min_percent"`
 
+	// MinRoundUpMinor The minimum is rounded up to a multiple of it (100 ₽ = 10000), never past the debt; 0 for none
+	MinRoundUpMinor int64 `json:"min_round_up_minor"`
+
 	// OpenedOn For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise
 	OpenedOn nullable.Nullable[string] `json:"opened_on"`
 
@@ -2179,6 +2185,9 @@ type CreditCardTerms struct {
 
 	// PayByPeriodEnd The minimum is due by the last day of the period after the statement, not payment_days after it
 	PayByPeriodEnd bool `json:"pay_by_period_end"`
+
+	// PayDay The minimum is due by this day of the month, the first after the statement (ВТБ: 20); 0 for none. Not with pay_by_period_end
+	PayDay int `json:"pay_day"`
 
 	// PaymentDays Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end
 	PaymentDays int `json:"payment_days"`

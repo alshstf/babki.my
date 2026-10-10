@@ -78,7 +78,7 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
 		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
 		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
-		RunFrom:        RunFrom(req.GraceRunFrom),
+		RunFrom: RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
 		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
 	}
 	var err error
@@ -236,7 +236,7 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		MinPercent: t.MinPercent.String(), MinFloorMinor: t.MinFloor,
 		AnnualRate: t.AnnualRate.String(), OwnRate: own,
 		WindowMonths: t.WindowMonths, GraceMonths: t.GraceMonths, OpenedOn: opened,
-		GraceRunFrom: apitypes.CreditCardTermsGraceRunFrom(t.RunFrom),
+		GraceRunFrom: apitypes.CreditCardTermsGraceRunFrom(t.RunFrom), PayDay: t.PayDay, MinRoundUpMinor: t.MinRoundUp,
 		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
 		TransferCategories: t.TransferCategories,
 		Fees: apitypes.CreditCardFees{
@@ -274,7 +274,7 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		MinimumEstimate: st.MinimumEstimate, NonGraceMinor: st.NonGrace, NonGraceInterestMinor: st.NonGraceInterest,
 		Grace: make([]apitypes.CreditCardDue, 0, len(st.Grace)), Lost: make([]apitypes.CreditCardLost, 0, len(st.Lost)),
 		GraceOffSince: nullable.NewNullNullable[string](), GraceOffByMinimum: st.GraceOffByMinimum, ToRestoreMinor: st.ToRestore,
-		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty,
+		CashThisPeriodMinor: st.CashThisPeriod, PenaltyMinor: st.Penalty, MinimumOverdueMinor: st.MinimumOverdue,
 		CashbackExpectedMinor: st.CashbackExpected, CashbackOn: nullable.NewNullNullable[string](),
 	}
 	if !st.CashbackOn.IsZero() {

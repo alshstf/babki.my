@@ -163,7 +163,7 @@ const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, 
 	grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, monthly_fee_minor, cash_free_minor,
 	cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor, penalty_daily_percent,
 	cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points, cashback_credit_days,
-	grace_run_from`
+	grace_run_from, pay_day, min_round_up_minor`
 
 func scan(row pgx.Row) (Terms, error) {
 	var t Terms
@@ -173,7 +173,7 @@ func scan(row pgx.Row) (Terms, error) {
 		&t.GraceAllLost, &t.PayByPeriodEnd, &t.ChargesInFull, &t.TransferCategories, &t.Fees.Monthly, &t.Fees.CashFree,
 		&t.Fees.CashPercent, &t.Fees.CashFixed, &t.Fees.TransferPercent, &t.Fees.TransferFixed, &t.Fees.PenaltyDaily,
 		&t.Cashback.BasePercent, &t.Cashback.Categories, &t.Cashback.MonthlyCap, &t.Cashback.Points, &t.Cashback.CreditDays,
-		&t.RunFrom)
+		&t.RunFrom, &t.PayDay, &t.MinRoundUp)
 	if own.Valid {
 		t.OwnRate = &own.Decimal
 	}
@@ -230,9 +230,9 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, monthly_fee_minor,
 			cash_free_minor, cash_fee_percent, cash_fee_fixed_minor, transfer_fee_percent, transfer_fee_fixed_minor,
 			penalty_daily_percent, cashback_base_percent, cashback_categories, cashback_cap_minor, cashback_points,
-			cashback_credit_days, grace_run_from)
+			cashback_credit_days, grace_run_from, pay_day, min_round_up_minor)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
+			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
 		ON CONFLICT (account_id) DO UPDATE SET limit_minor = EXCLUDED.limit_minor,
 			statement_day = EXCLUDED.statement_day, payment_days = EXCLUDED.payment_days,
 			grace_kind = EXCLUDED.grace_kind, grace_days = EXCLUDED.grace_days, min_percent = EXCLUDED.min_percent,
@@ -249,13 +249,13 @@ func (s *Service) SetTerms(ctx context.Context, spaceID uuid.UUID, t Terms) (Ter
 			cashback_base_percent = EXCLUDED.cashback_base_percent, cashback_categories = EXCLUDED.cashback_categories,
 			cashback_cap_minor = EXCLUDED.cashback_cap_minor, cashback_points = EXCLUDED.cashback_points,
 			cashback_credit_days = EXCLUDED.cashback_credit_days, grace_run_from = EXCLUDED.grace_run_from,
-			updated_at = now()`,
+			pay_day = EXCLUDED.pay_day, min_round_up_minor = EXCLUDED.min_round_up_minor, updated_at = now()`,
 		t.AccountID, spaceID, t.Limit, t.StatementDay, t.PaymentDays, t.GraceKind, t.GraceDays,
 		t.MinPercent, t.MinFloor, t.AnnualRate, own, t.WindowMonths, t.GraceMonths, t.OpenedOn,
 		t.GraceAllLost, t.PayByPeriodEnd, t.ChargesInFull, t.TransferCategories, t.Fees.Monthly, t.Fees.CashFree,
 		t.Fees.CashPercent, t.Fees.CashFixed, t.Fees.TransferPercent, t.Fees.TransferFixed, t.Fees.PenaltyDaily,
 		t.Cashback.BasePercent, t.Cashback.Categories, t.Cashback.MonthlyCap, t.Cashback.Points, t.Cashback.CreditDays,
-		t.RunFrom)
+		t.RunFrom, t.PayDay, t.MinRoundUp)
 	if err != nil {
 		return Terms{}, fmt.Errorf("credit card: set terms: %w", err)
 	}
