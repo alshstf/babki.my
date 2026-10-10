@@ -242,6 +242,27 @@ func TestAStatementCompletesAndSplits(t *testing.T) {
 	if len(list) != 1 || list[0].Fd != "3" || !list[0].OperationId.IsNull() {
 		t.Errorf("waiting = %+v", list)
 	}
+	// The waiting one: its row written later is offered, and it is attached.
+	waitingID := list[0].Id.String()
+	cash := row("2026-10-07", -99_900)
+	var lookup apitypes.ReceiptLookup
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/receipts/match?fn=1&fd=3&kind=purchase&total_minor=99900&issued_at=2026-10-07T09:00", ""), &lookup)
+	if lookup.Receipt.IsNull() || !lookup.WrittenTo.IsNull() || len(lookup.Candidates) != 1 || lookup.Candidates[0].Id.String() != cash {
+		t.Errorf("a waiting receipt's lookup = %+v", lookup)
+	}
+	attach := func(op string) *http.Response {
+		return apitest.Do(t, c, "PUT", url+"/api/v1/receipts/"+waitingID+"/operation", fmt.Sprintf(`{"operation_id":%q}`, op))
+	}
+	if r := attach(supermarket); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("attach to another total = %d, want 400", r.StatusCode)
+	}
+	if r := attach(cash); r.StatusCode != http.StatusOK {
+		t.Errorf("attach = %d", r.StatusCode)
+	}
+	if r := attach(cash); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("attach again = %d, want 400", r.StatusCode)
+	}
+
 	// Again: nothing new.
 	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/receipts/import", statement), &res)
 	if res.Known != 3 || res.Attached+res.Waiting+res.Enriched+res.Split != 0 {

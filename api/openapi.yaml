@@ -614,7 +614,8 @@ paths:
       operationId: matchReceipt
       description: >-
         Where a cash receipt goes: `receipt` when it is written already (its numbers fn and fd name it
-        for good), and otherwise `candidates` — the family's spending (a purchase, a payout's refund)
+        for good) — with `written_to`, the row it completes, or when it waits for one, `candidates` —
+        and otherwise `candidates` — the family's spending (a purchase, a payout's refund)
         or earning (a refund, a payout) rows of exactly its total in roubles within a day of its time,
         on any account but a broker's, that no receipt completes yet; nearest first, at most five. The
         bank's row of a card purchase is such a candidate: the receipt completes it rather than
@@ -660,6 +661,93 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/mailbox:
+    get:
+      tags: [receipts]
+      operationId: getReceiptMailbox
+      description: The mailbox read for receipts (decision Р-35), without its password; 404 when none is stated.
+      responses:
+        "200":
+          description: The mailbox
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mailbox" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [receipts]
+      operationId: setReceiptMailbox
+      description: >-
+        States the mailbox read for receipts: a box kept for receipts alone, read over IMAP with TLS
+        by its app password, which is sealed and never shown again. A new box needs the password;
+        a box stated again keeps its password when `password` is null, and is read anew from its
+        first letter when the server, the login or the folder change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MailboxSettings" }
+      responses:
+        "200":
+          description: The mailbox
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mailbox" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [receipts]
+      operationId: deleteReceiptMailbox
+      description: Forgets the mailbox and its password.
+      responses:
+        "204": { description: Forgotten }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/mailbox/check:
+    post:
+      tags: [receipts]
+      operationId: checkReceiptMailbox
+      description: >-
+        Reads the letters that came since the last reading (the program also does it every hour) and
+        takes the receipts they hold, as POST /receipts/import does: the receipt's QR line in the
+        letter, or its fiscal numbers, total and time in the text. A failure to reach or read the box
+        is `mailbox.problem`, not an error of the call.
+      responses:
+        "200":
+          description: The mailbox and what its new letters brought
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MailboxCheck" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/{receiptId}/operation:
+    put:
+      tags: [receipts]
+      operationId: attachReceipt
+      description: >-
+        Makes a receipt waiting for a row complete the row named — the one written for it, or the
+        bank's found later — of exactly its total in roubles, the right way; the row is divided by
+        the item rules. 400 for a receipt completing a row already or a row it cannot complete.
+      parameters:
+        - { name: receiptId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttachReceiptRequest" }
+      responses:
+        "200":
+          description: The receipt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Receipt" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/receipts/{receiptId}/split:
     post:
       tags: [receipts]
@@ -3675,6 +3763,40 @@ components:
         address: { type: string, nullable: true }
         items: { type: array, items: { $ref: "#/components/schemas/ReceiptItem" } }
         source: { type: string, enum: [qr, fns, mail, file] }
+    Mailbox:
+      type: object
+      required: [host, port, username, folder, checked_at, problem, last_found]
+      properties:
+        host: { type: string }
+        port: { type: integer }
+        username: { type: string }
+        folder: { type: string }
+        checked_at: { type: string, format: date-time, nullable: true, description: "When it was read last; null before the first reading" }
+        problem:
+          type: string
+          enum: ["", connect, login, folder, read]
+          description: "What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well"
+        last_found: { type: integer, description: "Receipts the last reading's new letters held" }
+    MailboxSettings:
+      type: object
+      required: [host, port, username, folder]
+      properties:
+        host: { type: string, description: "The IMAP server, e.g. imap.yandex.ru" }
+        port: { type: integer, description: "993: IMAP with TLS" }
+        username: { type: string, description: "The box's address" }
+        folder: { type: string, description: "INBOX unless the letters are put elsewhere" }
+        password: { type: string, nullable: true, description: "The app password; null keeps the stored one" }
+    MailboxCheck:
+      type: object
+      required: [mailbox, result]
+      properties:
+        mailbox: { $ref: "#/components/schemas/Mailbox" }
+        result: { $ref: "#/components/schemas/ReceiptImportResult" }
+    AttachReceiptRequest:
+      type: object
+      required: [operation_id]
+      properties:
+        operation_id: { type: string, format: uuid }
     ReceiptSplitResult:
       type: object
       required: [split]

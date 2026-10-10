@@ -42,6 +42,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/receipts", view(h.handleList))
 	srv.Mount("POST /api/v1/receipts/import", edit(h.handleImport))
 	srv.Mount("POST /api/v1/receipts/{receiptId}/split", edit(h.handleResplit))
+	srv.Mount("PUT /api/v1/receipts/{receiptId}/operation", edit(h.handleAttach))
 }
 
 func (h *Handler) handleMatch(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +109,25 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusCreated, API(created))
+}
+
+func (h *Handler) handleAttach(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("receiptId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "receiptId must be a uuid")
+		return
+	}
+	var req apitypes.AttachReceiptRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	attached, err := h.svc.Attach(r.Context(), p.SpaceID, id, req.OperationId)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, API(attached))
 }
 
 func (h *Handler) handleResplit(w http.ResponseWriter, r *http.Request) {

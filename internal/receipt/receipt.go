@@ -28,11 +28,12 @@ const (
 	PayoutRefund Kind = "payout_refund"
 )
 
-// Where a receipt came from: its QR code read here, or a statement of the
-// tax service's app «Проверка чеков».
+// Where a receipt came from: its QR code read here, a statement of the tax
+// service's app «Проверка чеков», or a letter with an electronic receipt.
 const (
-	SourceQR  = "qr"
-	SourceFNS = "fns"
+	SourceQR   = "qr"
+	SourceFNS  = "fns"
+	SourceMail = "mail"
 )
 
 // IssuedAtLayout is a receipt's time as the API writes it, to the minute.

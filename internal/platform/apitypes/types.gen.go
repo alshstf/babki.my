@@ -721,6 +721,33 @@ func (e LoanTermsKind) Valid() bool {
 	}
 }
 
+// Defines values for MailboxProblem.
+const (
+	Connect MailboxProblem = "connect"
+	Empty   MailboxProblem = ""
+	Folder  MailboxProblem = "folder"
+	Login   MailboxProblem = "login"
+	Read    MailboxProblem = "read"
+)
+
+// Valid indicates whether the value is a known member of the MailboxProblem enum.
+func (e MailboxProblem) Valid() bool {
+	switch e {
+	case Connect:
+		return true
+	case Empty:
+		return true
+	case Folder:
+		return true
+	case Login:
+		return true
+	case Read:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MarketValueGap.
 const (
 	NoFaceValue             MarketValueGap = "no_face_value"
@@ -1593,6 +1620,11 @@ type ArrivalPurchase struct {
 // ArrivalsResponse defines model for ArrivalsResponse.
 type ArrivalsResponse struct {
 	Arrivals []Arrival `json:"arrivals"`
+}
+
+// AttachReceiptRequest defines model for AttachReceiptRequest.
+type AttachReceiptRequest struct {
+	OperationId openapi_types.UUID `json:"operation_id"`
 }
 
 // BackgroundTask defines model for BackgroundTask.
@@ -3230,6 +3262,49 @@ type LoanTermsKind string
 // LoginRequest Neither field states the shape SetupRequest requires, on purpose: login checks no shape, and every failure — a malformed name, an unknown one, a wrong password — is the same 401, so users cannot be enumerated. A length rule here would lock out passwords set under an earlier rule.
 type LoginRequest struct {
 	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+// Mailbox defines model for Mailbox.
+type Mailbox struct {
+	// CheckedAt When it was read last; null before the first reading
+	CheckedAt nullable.Nullable[time.Time] `json:"checked_at"`
+	Folder    string                       `json:"folder"`
+	Host      string                       `json:"host"`
+
+	// LastFound Receipts the last reading's new letters held
+	LastFound int `json:"last_found"`
+	Port      int `json:"port"`
+
+	// Problem What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well
+	Problem  MailboxProblem `json:"problem"`
+	Username string         `json:"username"`
+}
+
+// MailboxProblem What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well
+type MailboxProblem string
+
+// MailboxCheck defines model for MailboxCheck.
+type MailboxCheck struct {
+	Mailbox Mailbox             `json:"mailbox"`
+	Result  ReceiptImportResult `json:"result"`
+}
+
+// MailboxSettings defines model for MailboxSettings.
+type MailboxSettings struct {
+	// Folder INBOX unless the letters are put elsewhere
+	Folder string `json:"folder"`
+
+	// Host The IMAP server, e.g. imap.yandex.ru
+	Host string `json:"host"`
+
+	// Password The app password; null keeps the stored one
+	Password nullable.Nullable[string] `json:"password,omitempty"`
+
+	// Port 993: IMAP with TLS
+	Port int `json:"port"`
+
+	// Username The box's address
 	Username string `json:"username"`
 }
 
@@ -4907,6 +4982,12 @@ type CreateReceiptJSONRequestBody = ReceiptNew
 
 // ImportReceiptsJSONRequestBody defines body for ImportReceipts for application/json ContentType.
 type ImportReceiptsJSONRequestBody = ImportReceiptsJSONBody
+
+// SetReceiptMailboxJSONRequestBody defines body for SetReceiptMailbox for application/json ContentType.
+type SetReceiptMailboxJSONRequestBody = MailboxSettings
+
+// AttachReceiptJSONRequestBody defines body for AttachReceipt for application/json ContentType.
+type AttachReceiptJSONRequestBody = AttachReceiptRequest
 
 // ShowRecurringJSONRequestBody defines body for ShowRecurring for application/json ContentType.
 type ShowRecurringJSONRequestBody = RecurringKey

@@ -31,6 +31,7 @@ import (
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/loan"
+	"babki.my/babki/internal/mailbox"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/cbr"
 	"babki.my/babki/internal/marketdata/coingecko"
@@ -145,6 +146,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	budget.NewHandler(budgetSvc, famAuth, famSM).Mount(srv)
 	receiptSvc := receipt.NewService(r.pool, opStore, accStore, category.NewStore(r.pool), opSvc)
 	receipt.NewHandler(receiptSvc, famAuth, famSM).Mount(srv)
+	mailbox.NewHandler(mailbox.NewService(r.pool, r.box, mailbox.IMAP{}, receiptSvc, r.log), famAuth, famSM).Mount(srv)
 	payouts.NewHandler(payouts.NewService(opStore, accStore, mdStore, famStore, converter), famAuth, famSM).Mount(srv)
 	recurringHidden := recurring.NewHidden(r.pool)
 	recurringSvc := recurring.NewService(opStore, accStore, recurringHidden)
