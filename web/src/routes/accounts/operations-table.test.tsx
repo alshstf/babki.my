@@ -69,6 +69,8 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     // True only for a transfer with a stored breakdown; set explicitly by
     // the transfer tests.
     assembled_from_lots: false,
+    categorizable: false,
+    counterparty: "",
     ...overrides,
   };
 }
@@ -1531,6 +1533,11 @@ describe("OperationsTable — an instrument the first page of the catalog does n
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : String(input);
       const parsed = new URL(url, "http://localhost");
+      if (parsed.pathname.endsWith("/categories")) {
+        return Promise.resolve(
+          new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }
       if (parsed.pathname.endsWith("/instruments")) {
         const offset = parsed.searchParams.get("offset") ?? "0";
         asked.push(offset);

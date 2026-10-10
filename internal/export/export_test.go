@@ -16,6 +16,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
@@ -50,7 +51,8 @@ func newStack(t *testing.T) stack {
 	account.NewHandler(accStore, famStore, marketdata.NewConverter(md), nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(operation.NewService(opStore), opStore, famStore, marketdata.NewConverter(md), auth, sm).Mount(srv)
-	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, auth, sm).Mount(srv)
+	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
+	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -201,6 +203,60 @@ func TestTheExportHoldsTheWholeSpace(t *testing.T) {
 	}
 	if len(doc.InstrumentEvents) != 1 || doc.InstrumentEvents[0]["kind"] != "split" {
 		t.Errorf("events = %v, want SBER's split", doc.InstrumentEvents)
+	}
+}
+
+// The family's categories leave with the journal, and so does how each row was
+// filed and with whom.
+func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
+	s := newStack(t)
+	card := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Карта","type":"checking","currency":"RUB"}`, http.StatusCreated)["id"].(string)
+	resp := get(t, s.c, s.url+"/api/v1/categories")
+	var cats []struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cats); err != nil {
+		t.Fatal(err)
+	}
+	var salary string
+	for _, c := range cats {
+		if c.Kind == "income" && c.Name == "Зарплата" {
+			salary = c.ID
+		}
+	}
+	post(t, s.c, s.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-09-05","amount_minor":18000000,"currency":"RUB","category_id":%q,"counterparty":"ООО Ромашка"}`, card, salary), http.StatusCreated)
+
+	raw, _ := io.ReadAll(get(t, s.c, s.url+"/api/v1/export").Body)
+	var doc struct {
+		Categories []struct {
+			ID       string  `json:"id"`
+			ParentID *string `json:"parent_id"`
+		} `json:"categories"`
+		Accounts []struct {
+			Operations []struct {
+				CategoryID   *string `json:"category_id"`
+				Counterparty string  `json:"counterparty"`
+			} `json:"operations"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Categories) != len(cats) {
+		t.Errorf("categories = %d, want the family's %d", len(doc.Categories), len(cats))
+	}
+	seen := map[string]bool{}
+	for _, c := range doc.Categories {
+		if c.ParentID != nil && !seen[*c.ParentID] {
+			t.Errorf("category %s comes before its parent", c.ID)
+		}
+		seen[c.ID] = true
+	}
+	ops := doc.Accounts[0].Operations
+	if len(ops) != 1 || ops[0].CategoryID == nil || *ops[0].CategoryID != salary || ops[0].Counterparty != "ООО Ромашка" {
+		t.Errorf("the salary as exported: %+v", ops)
 	}
 }
 

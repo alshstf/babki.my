@@ -7,6 +7,7 @@ package export
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
@@ -56,6 +58,10 @@ type events interface {
 	List(ctx context.Context) ([]corporateaction.Event, error)
 }
 
+type categories interface {
+	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
+}
+
 type prices interface {
 	PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]marketdata.Quote, error)
 }
@@ -68,13 +74,19 @@ type Handler struct {
 	instruments instruments
 	events      events
 	prices      prices
+	categories  categories
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
 }
 
-func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events, pr prices, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, auth: auth, sm: sm, now: time.Now}
+func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events, pr prices, cats categories,
+	auth *family.Auth, sm *scs.SessionManager,
+) *Handler {
+	return &Handler{
+		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
+		auth: auth, sm: sm, now: time.Now,
+	}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -113,6 +125,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		Instruments:      []apitypes.ExportInstrument{},
 		InstrumentEvents: []apitypes.ExportInstrumentEvent{},
 		ManualPrices:     []apitypes.ExportManualPrice{},
+		Categories:       []apitypes.ExportCategory{},
 	}
 	usernames := make(map[uuid.UUID]string, len(members))
 	for _, m := range members {
@@ -150,6 +163,25 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 
 	if err := h.addPapers(ctx, &doc, papers); err != nil {
 		return apitypes.SpaceExport{}, err
+	}
+	// The top level first, then the ones under it, so a reader rebuilding the
+	// tree meets every parent before its children; within each, the list's order.
+	cats, err := h.categories.List(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	slices.SortStableFunc(cats, func(a, b category.Category) int {
+		return cmp.Compare(boolRank(a.ParentID != nil), boolRank(b.ParentID != nil))
+	})
+	for _, c := range cats {
+		out := apitypes.ExportCategory{
+			Id: c.ID, Kind: string(c.Kind), Name: c.Name, ParentId: nullable.NewNullNullable[uuid.UUID](),
+			Archived: c.Archived, Position: c.Position,
+		}
+		if c.ParentID != nil {
+			out.ParentId = nullable.NewNullableWithValue(*c.ParentID)
+		}
+		doc.Categories = append(doc.Categories, out)
 	}
 	return doc, nil
 }
@@ -227,6 +259,13 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 	return out
 }
 
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func exportOperation(o operation.Operation) apitypes.ExportOperation {
 	out := apitypes.ExportOperation{
 		Id: o.ID, Type: string(o.Type), OccurredOn: o.OccurredOn.Format(time.DateOnly),
@@ -237,6 +276,10 @@ func exportOperation(o operation.Operation) apitypes.ExportOperation {
 		SplitRatio: nullable.NewNullNullable[string](), FaceBeforeMinor: nullable.NewNullNullable[int64](),
 		Source: o.Source, ExternalId: nullable.NewNullNullable[string](),
 		CreatedAt: o.CreatedAt, Lots: []apitypes.ExportLot{},
+		CategoryId: nullable.NewNullNullable[uuid.UUID](), Counterparty: o.Counterparty,
+	}
+	if o.CategoryID != nil {
+		out.CategoryId = nullable.NewNullableWithValue(*o.CategoryID)
 	}
 	if o.SettledOn != nil {
 		out.SettledOn = nullable.NewNullableWithValue(o.SettledOn.Format(time.DateOnly))

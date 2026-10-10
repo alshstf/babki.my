@@ -921,6 +921,11 @@ paths:
         - { name: instrument_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Only operations naming this paper" }
         - { name: from, in: query, required: false, schema: { type: string }, description: "Only operations on or after this date, YYYY-MM-DD" }
         - { name: to, in: query, required: false, schema: { type: string }, description: "Only operations on or before this date, YYYY-MM-DD" }
+        - name: category
+          in: query
+          required: false
+          description: "A category's id: only rows filed under it or under a category inside it; 400 when the family has no such category. `none`: only the rows that can take a category (Operation.categorizable) and have none."
+          schema: { type: string }
       responses:
         "200":
           description: One page of the account's journal, newest first, saying whether there is more behind it
@@ -1143,6 +1148,35 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/{operationId}/category:
+    put:
+      tags: [journal]
+      operationId: setOperationCategory
+      description: >-
+        Files a row under a category, or takes it out of one (null). Any row that can take a
+        category (Operation.categorizable), a broker's included: the category is the family's
+        reading of the row, and an import keeps it — a row it leaves alone keeps its category,
+        and a corrected record (same account, external id and type) takes over the category
+        of the one it replaces. A deposit or interest takes an income category, a withdrawal,
+        fee or tax an expense one; an archived category only where the row already has it.
+        Anything else is a 400. Nothing the figures are computed from changes.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetCategoryRequest" }
+      responses:
+        "200":
+          description: The row as it now stands
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}/withheld-abroad:
     put:
       tags: [journal]
@@ -2033,7 +2067,7 @@ components:
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     SpaceExport:
       type: object
-      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices]
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories]
       properties:
         format: { type: string, enum: [babki.my/space-export] }
         version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
@@ -2054,6 +2088,20 @@ components:
         manual_prices:
           type: array
           items: { $ref: "#/components/schemas/ExportManualPrice" }
+        categories:
+          type: array
+          description: "The family's categories of spending and earning, archived ones too, each parent before its children"
+          items: { $ref: "#/components/schemas/ExportCategory" }
+    ExportCategory:
+      type: object
+      required: [id, kind, name, parent_id, archived, position]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, description: "expense or income" }
+        name: { type: string }
+        parent_id: { type: string, format: uuid, nullable: true }
+        archived: { type: boolean }
+        position: { type: integer }
     ExportSpace:
       type: object
       required: [id, name, base_currency, tax_residency]
@@ -2105,7 +2153,7 @@ components:
           items: { $ref: "#/components/schemas/ExportWithheldStated" }
     ExportOperation:
       type: object
-      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots]
+      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty]
       properties:
         id: { type: string, format: uuid }
         type: { type: string }
@@ -2125,6 +2173,8 @@ components:
         source: { type: string }
         external_id: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+        category_id: { type: string, format: uuid, nullable: true, description: "One of the document's categories" }
+        counterparty: { type: string }
         lots:
           type: array
           description: "The purchases a move carried — quantity, cost and day bought — when it carried any"
@@ -2553,10 +2603,13 @@ components:
       enum: [buy, sell, redemption, deposit, withdrawal, dividend, coupon, amortization, fee, tax, transfer_in, transfer_out, exchange_out, exchange_in, spinoff_out, spinoff_in, split, interest, conversion]
     Operation:
       type: object
-      required: [id, account_id, type, occurred_on, amount_minor, currency, fee_minor, note, source, created_at, has_undated_lots, assembled_from_lots]
+      required: [id, account_id, type, occurred_on, amount_minor, currency, fee_minor, note, source, created_at, has_undated_lots, assembled_from_lots, categorizable, counterparty]
       properties:
         id: { type: string, format: uuid }
         account_id: { type: string, format: uuid }
+        categorizable: { type: boolean, description: "Whether the row can take a category: a deposit, withdrawal, interest, fee or tax that is not half of a transfer between the family's accounts" }
+        category_id: { type: string, format: uuid, nullable: true, description: "The family's category the row is filed under (GET /api/v1/categories); null when none" }
+        counterparty: { type: string, description: "Who the money came from or went to, as typed or as the source named them; empty when unknown" }
         instrument_id: { type: string, format: uuid, nullable: true }
         type: { $ref: "#/components/schemas/OperationType" }
         occurred_on: { type: string, description: "Date YYYY-MM-DD" }
@@ -2700,6 +2753,8 @@ components:
           maximum: 1000000000000000
           description: "What this operation cost to make, in `currency`, as a POSITIVE figure whichever way `amount_minor` went — it is money charged, never money returned. That is why the floor here is 0 rather than the -10^15 the amount gets: a negative fee is refused by a rule of its own. Omitted or 0 means no fee. The ceiling is the same 10^15 minor units the amount stops at, for the same reason — it is money in the same currency on the same row. Past either end, 400."
         note: { type: string, maxLength: 1000 }
+        category_id: { type: string, format: uuid, nullable: true, description: "A category of the family's, on a row that can take one (Operation.categorizable): an income category on a deposit or interest, an expense one on a withdrawal, fee or tax; not an archived one unless the row already has it. On an update, omitting it takes the row out of its category." }
+        counterparty: { type: string, maxLength: 200, description: "Who the money came from or went to. On an update, omitting it clears it." }
         split_ratio: { type: string, nullable: true, description: "Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow." }
         face_before_minor:
           type: integer
@@ -2708,6 +2763,11 @@ components:
           minimum: 1
           maximum: 1000000000000000
           description: "On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it."
+    SetCategoryRequest:
+      type: object
+      required: [category_id]
+      properties:
+        category_id: { type: string, format: uuid, nullable: true, description: "The category to file the row under; null takes it out of its category" }
     TransferRequest:
       type: object
       required: [from_account_id, to_account_id, instrument_id, quantity, occurred_on]

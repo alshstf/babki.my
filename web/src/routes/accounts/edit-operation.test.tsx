@@ -17,6 +17,9 @@ const fetchMock = vi.hoisted(() => {
   return fn;
 });
 fetchMock.mockImplementation(async (input: Request) => {
+  if (input.method === "GET" && new URL(input.url).pathname.endsWith("/categories")) {
+    return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   if (input.method === "GET") {
     // The instrument picker's catalog: nothing to list.
     return new Response(JSON.stringify({ instruments: [], has_more: false }), {
@@ -99,7 +102,7 @@ describe("editing a recorded operation", () => {
     expect((screen.getByLabelText(/Комментарий|Заметка|Примечание/) as HTMLInputElement).value).toBe(
       "на отпуск",
     );
-    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Тип операции" })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/Сумма/), { target: { value: "12000" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));

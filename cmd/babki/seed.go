@@ -170,7 +170,7 @@ func seedDemoTx(ctx context.Context, tx pgx.Tx) error {
 	if err := seedTinvestDemo(ctx, tx, owner.SpaceID, accIDs["Брокерский Т-Банк"], d); err != nil {
 		return err
 	}
-	return nil
+	return seedHousehold(ctx, tx, owner.SpaceID, accIDs, d)
 }
 
 // seedTinvestDemo gives the demo a T-Invest connection with something on every

@@ -1,6 +1,7 @@
 package operation
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +74,15 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		v := req.FaceBeforeMinor.MustGet()
 		faceBefore = &v
 	}
+	var categoryID *uuid.UUID
+	if req.CategoryId.IsSpecified() && !req.CategoryId.IsNull() {
+		v := req.CategoryId.MustGet()
+		categoryID = &v
+	}
+	counterparty := ""
+	if req.Counterparty != nil {
+		counterparty = strings.TrimSpace(*req.Counterparty)
+	}
 
 	return Operation{
 		AccountID:       req.AccountId,
@@ -88,6 +98,8 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		Note:            note,
 		SplitRatio:      splitRatio,
 		FaceBeforeMinor: faceBefore,
+		CategoryID:      categoryID,
+		Counterparty:    counterparty,
 	}, nil
 }
 

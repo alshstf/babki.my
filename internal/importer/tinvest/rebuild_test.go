@@ -1578,6 +1578,7 @@ func comparedFields(t *testing.T) []comparedField {
 		{"Currency", "currency", func(o *operation.Operation) { o.Currency = "USD" }},
 		{"FeeMinor", "fee", func(o *operation.Operation) { o.FeeMinor = 826 }},
 		{"Note", "note", func(o *operation.Operation) { o.Note = "что-то другое" }},
+		{"Counterparty", "counterparty", func(o *operation.Operation) { o.Counterparty = "ООО Ромашка" }},
 		{"Source", "source", func(o *operation.Operation) { o.Source = "csv" }},
 		{"TransferGroupID", "transfer group", func(o *operation.Operation) { o.TransferGroupID = &groupA }},
 		{"SplitRatio", "split ratio", func(o *operation.Operation) { r := decimal.RequireFromString("2"); o.SplitRatio = &r }},
@@ -1596,6 +1597,8 @@ var notComparedFields = map[string]string{
 	"ExternalID": "what the two rows were matched BY, so it is equal by construction",
 	"CreatedAt": "the journal's own numbering of the row within its day, " +
 		"assigned by the write path; the projection never has one",
+	"CategoryID": "the family's filing of the row, never the broker's: a rebuild leaves it alone on a row " +
+		"it keeps, and operation.Store.ApplyDelta carries it over to a corrected record",
 	"TransferLots": "the parcel the write path released from the source account's history — " +
 		"a property of the journal, and the projection never has it (operation.checkImportContract " +
 		"refuses one supplied)",

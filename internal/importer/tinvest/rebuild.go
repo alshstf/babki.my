@@ -887,6 +887,7 @@ func sameJournalRow(want, stored operation.Operation) bool {
 		want.Type != stored.Type ||
 		want.Currency != stored.Currency ||
 		want.Note != stored.Note ||
+		want.Counterparty != stored.Counterparty ||
 		want.Source != stored.Source ||
 		want.FeeMinor != stored.FeeMinor {
 		return false

@@ -1,0 +1,115 @@
+package operation
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"babki.my/babki/internal/category"
+	"babki.my/babki/internal/family"
+)
+
+// MaxCounterpartyRunes is the longest counterparty a row takes, in code points,
+// as the column's CHECK counts them.
+const MaxCounterpartyRunes = 200
+
+// Categorizable reports whether a row can carry a category: money that came
+// into or left the family's accounts, or that the bank or the state took. A
+// transfer between the family's own accounts is neither a spending nor an
+// earning, and a trade or an investment payout is the portfolio's, reported
+// there.
+func Categorizable(o Operation) bool {
+	if o.TransferGroupID != nil {
+		return false
+	}
+	return slices.Contains(categorizableTypes, string(o.Type))
+}
+
+// categorizableTypes are the types Categorizable admits, for SQL.
+var categorizableTypes = []string{string(TypeDeposit), string(TypeWithdrawal), string(TypeInterest), string(TypeFee), string(TypeTax)}
+
+func notCategorizable(o Operation) error {
+	return fmt.Errorf("%w: a category goes on money that came or went (deposit, withdrawal, interest, fee, tax), not on %s or a transfer between accounts",
+		family.ErrValidation, o.Type)
+}
+
+// categoryKind is the kind of category a categorizable row takes: money in
+// earns, money out spends.
+func categoryKind(t Type) category.Kind {
+	switch t {
+	case TypeDeposit, TypeInterest:
+		return category.KindIncome
+	}
+	return category.KindExpense
+}
+
+// checkCounterparty refuses a counterparty longer than the column holds.
+func checkCounterparty(counterparty string) error {
+	if utf8.RuneCountInString(counterparty) > MaxCounterpartyRunes {
+		return fmt.Errorf("%w: counterparty must be at most %d characters", family.ErrValidation, MaxCounterpartyRunes)
+	}
+	return nil
+}
+
+// checkCategory holds op's category to the rules: one of the space's own, of the
+// kind the row's direction takes, and not archived — unless the row already
+// had it (old), so an old row keeps the category it was filed under.
+func (s *Store) checkCategory(ctx context.Context, spaceID uuid.UUID, op Operation, old *Operation) error {
+	if op.CategoryID == nil {
+		return nil
+	}
+	if !Categorizable(op) {
+		return notCategorizable(op)
+	}
+	c, err := category.NewStore(s.db).Get(ctx, spaceID, *op.CategoryID)
+	if errors.Is(err, category.ErrNotFound) {
+		return fmt.Errorf("%w: category_id is not one of this family's categories", family.ErrValidation)
+	}
+	if err != nil {
+		return err
+	}
+	if want := categoryKind(op.Type); c.Kind != want {
+		return fmt.Errorf("%w: a %s takes a category of %s, and %q is of %s", family.ErrValidation, op.Type, want, c.Name, c.Kind)
+	}
+	kept := old != nil && old.CategoryID != nil && *old.CategoryID == c.ID
+	if c.Archived && !kept {
+		return fmt.Errorf("%w: category %q is archived", family.ErrValidation, c.Name)
+	}
+	return nil
+}
+
+// SetCategory files a row under a category, or takes it out of one (nil). It
+// works on any categorizable row, a broker's included: the category is the
+// family's reading of the row, not a fact the importer reported, and an
+// importer leaves alone the rows it has not changed. Nothing the engine
+// reads changes, so no journal is replayed.
+func (s *Service) SetCategory(ctx context.Context, spaceID, id uuid.UUID, categoryID *uuid.UUID) (Operation, error) {
+	tx, err := s.store.db.Begin(ctx)
+	if err != nil {
+		return Operation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	st := NewStore(tx)
+	old, err := st.ByID(ctx, spaceID, id)
+	if err != nil {
+		return Operation{}, err
+	}
+	if !Categorizable(old) {
+		return Operation{}, notCategorizable(old)
+	}
+	op := old
+	op.CategoryID = categoryID
+	if err := st.checkCategory(ctx, spaceID, op, &old); err != nil {
+		return Operation{}, err
+	}
+	stored, err := scan(tx.QueryRow(ctx, `UPDATE operations SET category_id = $3 WHERE space_id = $1 AND id = $2 RETURNING `+cols,
+		spaceID, id, categoryID))
+	if err != nil {
+		return Operation{}, err
+	}
+	return stored, tx.Commit(ctx)
+}

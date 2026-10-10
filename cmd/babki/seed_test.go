@@ -1275,3 +1275,32 @@ func TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain(t *testing.T) {
 		t.Fatalf("login demo after the second seed: %v %+v", err, p)
 	}
 }
+
+// The demo family's card has two months of spending, each under a category and
+// with whom it was; the current account keeps one spending unfiled.
+func TestSeedDemoFamilySpendsUnderCategories(t *testing.T) {
+	d := seeded(t)
+	byName := map[string]uuid.UUID{}
+	for _, a := range d.accounts {
+		byName[a.Name] = a.ID
+	}
+	card, err := d.ops.ListForEngine(d.ctx, d.space, byName["Кредитка Альфа"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(card) == 0 {
+		t.Fatal("the card has no spending")
+	}
+	for _, op := range card {
+		if op.Type != operation.TypeWithdrawal || op.CategoryID == nil || op.Counterparty == "" {
+			t.Errorf("a card row is not a filed spending: %s %v %q", op.Type, op.CategoryID, op.Counterparty)
+		}
+	}
+	current, _, err := d.ops.ListByAccount(d.ctx, d.space, byName["Текущий Сбер"], 100, 0, operation.JournalFilter{Uncategorized: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current) != 1 || current[0].AmountMinor != -15_000_00 {
+		t.Errorf("unfiled on the current account: %+v, want the one transfer to Иван", current)
+	}
+}
