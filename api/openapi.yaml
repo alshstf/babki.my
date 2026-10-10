@@ -482,9 +482,13 @@ paths:
         marked on or after its day, which holds it already), and every loan's scheduled payments
         (a regular payment named as a loan account is its interest and is left to the schedule).
         Deposits, brokers' accounts and loans' own balances are not in it. Twice a month from one
-        payee (a salary and its advance) counts as two monthly payments.
+        payee (a salary and its advance) counts as two monthly payments. With budget=true, the spending
+        the budget's limits expect is in it too: this month what is left of each limit, a later month the
+        whole limit (a копилка's carried money aside), less the regular payments of the same categories in
+        that month, laid out in even parts every seven days.
       parameters:
         - { name: days, in: query, required: false, schema: { type: integer, minimum: 7, maximum: 366 }, description: "How far ahead, in days; 90 when absent" }
+        - { name: budget, in: query, required: false, schema: { type: boolean }, description: "Whether the budget's expected spending is in it; false when absent" }
       responses:
         "200":
           description: The forecast
@@ -3851,9 +3855,9 @@ components:
       required: [on, name, kind, account_id, amount_minor, currency, in_base_minor, overdue]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD" }
-        name: { type: string, description: "The payee, or the loan account's name" }
-        kind: { type: string, enum: [regular, loan, cashback], description: "regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)" }
-        account_id: { type: string, format: uuid }
+        name: { type: string, description: "The payee, or the loan account's name; empty for the budget's" }
+        kind: { type: string, enum: [regular, loan, cashback, budget], description: "regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days" }
+        account_id: { type: string, format: uuid, nullable: true, description: "The account it moves; null for the budget's, which is no account's" }
         amount_minor: { type: integer, format: int64, description: "Signed as the journal signs it, in currency" }
         currency: { type: string }
         in_base_minor: { type: integer, format: int64, description: "The same in the base currency at today's rate" }
