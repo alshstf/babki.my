@@ -16,6 +16,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
@@ -58,7 +59,8 @@ func newStack(t *testing.T) stack {
 	cardSvc := creditcard.NewService(pool, accStore, opStore, category.NewStore(pool))
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
-	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc, auth, sm).Mount(srv)
+	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
+		budget.NewService(pool, nil, category.NewStore(pool)), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

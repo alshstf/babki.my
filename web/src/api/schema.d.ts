@@ -352,6 +352,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The month's budget (decision Р-25): each spending category with a limit in force, in the categories' order — its limit, what its «копилка» carried in from the months before (what was left unspent goes on, an overspend does not), what was spent and what is left. The spending is GET /cashflow's: in the base currency at each row's day, a category with its subcategories. `planned_minor`, `spent_minor` and `left_minor` sum the lines, a limited subcategory under a limited parent counted in the parent's only; `unlimited_minor` is the month's other spending. */
+        get: operations["getBudget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/budget/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every limit stated, by category and the month it runs from. */
+        get: operations["listBudgetLimits"];
+        /** @description States a category's limit from a month on, until a later one of the category; over one stated from the same month. 0 without rollover takes the limit off from that month. 400 for a category that is not one of the family's spending ones. */
+        put: operations["setBudgetLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/budget/limits/{categoryId}/{fromMonth}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Takes back the limit stated from that month; the one before it stands again. */
+        delete: operations["deleteBudgetLimit"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/categories": {
         parameters: {
             query?: never;
@@ -1952,6 +2004,8 @@ export interface components {
             categories: components["schemas"]["ExportCategory"][];
             /** @description The family's filing rules in the order they are tried */
             category_rules: components["schemas"]["CategoryRule"][];
+            /** @description The budget's limits, by category and the month each runs from (GET /budget/limits) */
+            budget_limits: components["schemas"]["BudgetLimit"][];
         };
         ExportCategory: {
             /** Format: uuid */
@@ -2917,6 +2971,62 @@ export interface components {
             payouts: components["schemas"]["CashflowFlow"];
             interest: components["schemas"]["CashflowFlow"];
             costs: components["schemas"]["CashflowFlow"];
+        };
+        BudgetLimit: {
+            /** Format: uuid */
+            category_id: string;
+            /** @description The month it runs from, YYYY-MM */
+            from_month: string;
+            /**
+             * Format: int64
+             * @description The limit a month, in the base currency; 0 without rollover takes the limit off
+             */
+            amount_minor: number;
+            /** @description A «копилка»: what is left unspent goes on to the next month */
+            rollover: boolean;
+        };
+        BudgetLine: {
+            /** Format: uuid */
+            category_id: string;
+            /** Format: int64 */
+            limit_minor: number;
+            rollover: boolean;
+            /** @description The month the limit in force runs from, YYYY-MM */
+            since: string;
+            /**
+             * Format: int64
+             * @description What the «копилка» brought from the months before; 0 without one
+             */
+            carried_minor: number;
+            /** Format: int64 */
+            spent_minor: number;
+            /**
+             * Format: int64
+             * @description carried + limit − spent; below zero when overspent
+             */
+            left_minor: number;
+        };
+        Budget: {
+            /** @description YYYY-MM */
+            month: string;
+            base_currency: string;
+            lines: components["schemas"]["BudgetLine"][];
+            /**
+             * Format: int64
+             * @description The limits with what the «копилки» carried
+             */
+            planned_minor: number;
+            /** Format: int64 */
+            spent_minor: number;
+            /** Format: int64 */
+            left_minor: number;
+            /**
+             * Format: int64
+             * @description The month's other spending: categories without a limit, the bank's fees and taxes; rows not yet filed under a category are not in it
+             */
+            unlimited_minor: number;
+            /** @description Currencies of rows left out for want of a rate on their day */
+            missing_rates: string[];
         };
         CashflowReport: {
             base_currency: string;
@@ -4898,6 +5008,103 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getBudget: {
+        parameters: {
+            query: {
+                /** @description The month, YYYY-MM */
+                month: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The month's budget */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Budget"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    listBudgetLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetLimit"][];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    setBudgetLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetLimit"];
+            };
+        };
+        responses: {
+            /** @description Stated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    deleteBudgetLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                categoryId: string;
+                /** @description YYYY-MM */
+                fromMonth: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Taken back */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listCategories: {

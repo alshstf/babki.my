@@ -1585,6 +1585,55 @@ type Benchmarks struct {
 	To         string      `json:"to"`
 }
 
+// Budget defines model for Budget.
+type Budget struct {
+	BaseCurrency string       `json:"base_currency"`
+	LeftMinor    int64        `json:"left_minor"`
+	Lines        []BudgetLine `json:"lines"`
+
+	// MissingRates Currencies of rows left out for want of a rate on their day
+	MissingRates []string `json:"missing_rates"`
+
+	// Month YYYY-MM
+	Month string `json:"month"`
+
+	// PlannedMinor The limits with what the «копилки» carried
+	PlannedMinor int64 `json:"planned_minor"`
+	SpentMinor   int64 `json:"spent_minor"`
+
+	// UnlimitedMinor The month's other spending: categories without a limit, the bank's fees and taxes; rows not yet filed under a category are not in it
+	UnlimitedMinor int64 `json:"unlimited_minor"`
+}
+
+// BudgetLimit defines model for BudgetLimit.
+type BudgetLimit struct {
+	// AmountMinor The limit a month, in the base currency; 0 without rollover takes the limit off
+	AmountMinor int64              `json:"amount_minor"`
+	CategoryId  openapi_types.UUID `json:"category_id"`
+
+	// FromMonth The month it runs from, YYYY-MM
+	FromMonth string `json:"from_month"`
+
+	// Rollover A «копилка»: what is left unspent goes on to the next month
+	Rollover bool `json:"rollover"`
+}
+
+// BudgetLine defines model for BudgetLine.
+type BudgetLine struct {
+	// CarriedMinor What the «копилка» brought from the months before; 0 without one
+	CarriedMinor int64              `json:"carried_minor"`
+	CategoryId   openapi_types.UUID `json:"category_id"`
+
+	// LeftMinor carried + limit − spent; below zero when overspent
+	LeftMinor  int64 `json:"left_minor"`
+	LimitMinor int64 `json:"limit_minor"`
+	Rollover   bool  `json:"rollover"`
+
+	// Since The month the limit in force runs from, YYYY-MM
+	Since      string `json:"since"`
+	SpentMinor int64  `json:"spent_minor"`
+}
+
 // CapitalAccount defines model for CapitalAccount.
 type CapitalAccount struct {
 	AccountId   openapi_types.UUID      `json:"account_id"`
@@ -3734,6 +3783,9 @@ type SetupStatus struct {
 type SpaceExport struct {
 	Accounts []ExportAccount `json:"accounts"`
 
+	// BudgetLimits The budget's limits, by category and the month each runs from (GET /budget/limits)
+	BudgetLimits []BudgetLimit `json:"budget_limits"`
+
 	// Categories The family's categories of spending and earning, archived ones too, each parent before its children
 	Categories []ExportCategory `json:"categories"`
 
@@ -4383,6 +4435,12 @@ type GetAccountReturnParams struct {
 	To string `form:"to" json:"to"`
 }
 
+// GetBudgetParams defines parameters for GetBudget.
+type GetBudgetParams struct {
+	// Month The month, YYYY-MM
+	Month string `form:"month" json:"month"`
+}
+
 // GetCapitalParams defines parameters for GetCapital.
 type GetCapitalParams struct {
 	// From Date YYYY-MM-DD the series starts on
@@ -4567,6 +4625,9 @@ type LoginJSONRequestBody = LoginRequest
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePasswordRequest
+
+// SetBudgetLimitJSONRequestBody defines body for SetBudgetLimit for application/json ContentType.
+type SetBudgetLimitJSONRequestBody = BudgetLimit
 
 // CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
 type CreateCategoryJSONRequestBody = CreateCategoryRequest
