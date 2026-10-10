@@ -50,6 +50,7 @@ const card: AccountWithBalance = {
 
 function makeOperation(overrides: Partial<Operation> = {}): Operation {
   return {
+    parts: [],
     id: "op-1",
     account_id: "acc-1",
     instrument_id: null,
@@ -203,6 +204,22 @@ describe("the journal's categories", () => {
     const put = sent.find((s) => s.method === "PUT");
     expect(put?.path).toBe("/api/v1/operations/op-1/category");
     expect(put?.body).toEqual({ category_id: "c-taxi" });
+  });
+
+  // Decision Р-36: a split row names its parts, its chip says so, and the
+  // chip's list leads to the parts.
+  it("shows a split row's parts and leads to them from the category's list", async () => {
+    journal = [makeOperation({ category_id: "c-food", parts: [
+      { category_id: "c-food", amount_minor: 1_800_00 }, { category_id: "c-taxi", amount_minor: 700_00 },
+    ] })];
+    renderTable();
+    const chip = await screen.findByTestId("operation-category");
+    expect(chip.textContent).toBe("Продукты +");
+    expect((screen.getByTestId("operation-parts").textContent ?? "").replace(/\s/g, " ")).toBe("Продукты 1 800,00 ₽ · Транспорт › Такси 700,00 ₽");
+    fireEvent.click(chip);
+    fireEvent.click(await screen.findByTestId("category-split"));
+    const dialog = await screen.findByTestId("parts-dialog");
+    expect((within(dialog).getByLabelText("Сумма части 2") as HTMLInputElement).value).toBe("700");
   });
 
   it("finds a category by a word of it or of its parent", async () => {

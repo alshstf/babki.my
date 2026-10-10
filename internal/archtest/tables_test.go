@@ -49,6 +49,7 @@ var owners = map[string]string{
 	"instrument_dividends":        "internal/marketdata",
 	"operations":                  "internal/operation",
 	"operation_transfer_lots":     "internal/operation",
+	"operation_parts":             "internal/operation",
 	"operation_stated_purchases":  "internal/operation",
 	"dividend_withheld_stated":    "internal/operation",
 	"instrument_events":           "internal/corporateaction",

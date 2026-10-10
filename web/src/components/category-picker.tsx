@@ -85,6 +85,8 @@ export function CategoryChip({
   onChange,
   counterparty,
   onRemember,
+  onSplit,
+  split,
 }: {
   categories: Category[];
   kind: CategoryKind;
@@ -96,6 +98,10 @@ export function CategoryChip({
   // next rows from it the same way (onRemember gets the category picked).
   counterparty?: string;
   onRemember?: (categoryId: string) => void;
+  // Splitting the row across categories (decision Р-36), offered at the
+  // list's foot; split says it is split already.
+  onSplit?: () => void;
+  split?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -142,9 +148,12 @@ export function CategoryChip({
           )}
         >
           {label ?? t("categoryPicker.choose")}
+          {split && " +"}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-1">
+      {/* No taller than the room the screen has: the list scrolls, the
+          search and the footer stay in view. */}
+      <PopoverContent align="start" className="flex max-h-[var(--radix-popover-content-available-height)] w-64 flex-col p-1">
         <Input
           autoFocus
           value={query}
@@ -153,7 +162,7 @@ export function CategoryChip({
           aria-label={t("categoryPicker.search")}
           className="mb-1 h-8"
         />
-        <ul className="max-h-72 overflow-y-auto text-sm" role="listbox" aria-label={t("categoryPicker.title")}>
+        <ul className="max-h-72 min-h-0 flex-1 overflow-y-auto text-sm" role="listbox" aria-label={t("categoryPicker.title")}>
           {value && !wanted && (
             <li>
               <button
@@ -197,6 +206,19 @@ export function CategoryChip({
             />
             {t("categoryPicker.remember", { name: rulePattern(counterparty ?? "") })}
           </label>
+        )}
+        {onSplit && (
+          <button
+            type="button"
+            data-testid="category-split"
+            className="mt-1 w-full border-t px-2 pt-2 pb-1 text-left text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setOpen(false);
+              onSplit();
+            }}
+          >
+            {split ? t("categoryPicker.splitEdit") : t("categoryPicker.split")}
+          </button>
         )}
       </PopoverContent>
     </Popover>

@@ -58,7 +58,8 @@ import {
 } from "@/api/operations";
 import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import { rulePattern, treeOf, useCategories, useCreateCategoryRule, type Category } from "@/api/categories";
-import { CategoryChip, categoryKindOf } from "@/components/category-picker";
+import { CategoryChip, categoryKindOf, categoryLabel } from "@/components/category-picker";
+import { PartsDialog } from "./parts-dialog";
 import { MemberChip } from "@/components/member-picker";
 import { useMembers } from "@/api/members";
 import type { CostBasisRules } from "@/api/tax-residencies";
@@ -219,6 +220,8 @@ export function OperationsTable({
   const instruments = useInstrumentIndex();
   const deleteOperation = useDeleteOperation();
   const [deleteTarget, setDeleteTarget] = useState<Operation | null>(null);
+  // The row being split across categories (decision Р-36).
+  const [splitting, setSplitting] = useState<Operation | null>(null);
   // The family's categories name the rows' ones; a journal still reads
   // without them.
   const categories = useCategories();
@@ -558,6 +561,8 @@ export function OperationsTable({
                         onChange={(categoryId) => setCategory.mutate({ operationId: operation.id, categoryId })}
                         counterparty={operation.counterparty || operation.note}
                         onRemember={(categoryId) => remember(operation.counterparty || operation.note, categoryId)}
+                        onSplit={operation.type === "withdrawal" || operation.type === "deposit" ? () => setSplitting(operation) : undefined}
+                        split={(operation.parts ?? []).length > 0}
                       />
                       {family.length > 0 && (
                         <MemberChip
@@ -569,6 +574,13 @@ export function OperationsTable({
                           shared={accountShared}
                         />
                       )}
+                    </div>
+                  )}
+                  {(operation.parts ?? []).length > 0 && (
+                    <div className="text-xs text-muted-foreground" data-testid="operation-parts">
+                      {operation.parts
+                        .map((part) => `${categoryLabel(categoryList, part.category_id) ?? "?"} ${formatMinor(part.amount_minor, operation.currency)}`)
+                        .join(" · ")}
                     </div>
                   )}
                   {operation.counterparty && (
@@ -727,6 +739,7 @@ export function OperationsTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {splitting && <PartsDialog operation={splitting} onClose={() => setSplitting(null)} />}
     </div>
   );
 }

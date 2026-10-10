@@ -577,7 +577,8 @@ func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *u
 			AND ($6::uuid IS NULL OR instrument_id = $6)
 			AND ($7::date IS NULL OR occurred_on >= $7)
 			AND ($8::date IS NULL OR occurred_on <= $8)
-			AND ($9::uuid[] IS NULL OR category_id = ANY($9))
+			AND ($9::uuid[] IS NULL OR category_id = ANY($9) OR EXISTS (SELECT 1 FROM operation_parts p
+				WHERE p.operation_id = operations.id AND p.category_id = ANY($9)))
 			AND (NOT $10::boolean OR (category_id IS NULL AND transfer_group_id IS NULL AND type = ANY($11)))
 		`+listingOrder+` LIMIT $3 OFFSET $4`,
 		spaceID, accountID, limit+1, offset, types, f.InstrumentID, f.From, f.To,
@@ -591,6 +592,9 @@ func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *u
 	}
 	// After the trim: the probe row is not part of the page.
 	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
+		return nil, false, err
+	}
+	if err := s.attachParts(ctx, spaceID, ops); err != nil {
 		return nil, false, err
 	}
 	return ops, hasMore, nil
@@ -609,10 +613,14 @@ func (s *Store) ListMoneyFlows(ctx context.Context, spaceID uuid.UUID, from, to 
 	for i, t := range MoneyFlowTypes {
 		types[i] = string(t)
 	}
-	return s.list(ctx, `SELECT `+cols+` FROM operations
+	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND occurred_on BETWEEN $2 AND $3
 			AND transfer_group_id IS NULL AND type = ANY($4)
 		`+engineOrder, spaceID, from, to, types)
+	if err != nil {
+		return nil, err
+	}
+	return ops, s.attachParts(ctx, spaceID, ops)
 }
 
 // ByAmount is the space's spending or earning rows of exactly amountMinor in
@@ -639,7 +647,7 @@ func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID)
 	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
 		return nil, err
 	}
-	return ops, nil
+	return ops, s.attachParts(ctx, spaceID, ops)
 }
 
 // attachTransferLots fills TransferLots on ops with a separate query, so a
@@ -737,8 +745,16 @@ func (s *Store) ByIDs(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (
 }
 
 func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, error) {
-	return scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM operations
+	op, err := scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND id = $2`, spaceID, id))
+	if err != nil {
+		return Operation{}, err
+	}
+	ops := []Operation{op}
+	if err := s.attachParts(ctx, spaceID, ops); err != nil {
+		return Operation{}, err
+	}
+	return ops[0], nil
 }
 
 // ByTransferGroup returns the two legs of a transfer pair, which live on two

@@ -76,6 +76,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
 	srv.Mount("POST /api/v1/operations/file-by-rules", edit(h.handleFileByRules))
 	srv.Mount("PUT /api/v1/operations/{operationId}/category", edit(h.handleSetCategory))
+	srv.Mount("PUT /api/v1/operations/{operationId}/parts", edit(h.handleSetParts))
+	srv.Mount("DELETE /api/v1/operations/{operationId}/parts", edit(h.handleClearParts))
 	srv.Mount("PUT /api/v1/operations/{operationId}/member", edit(h.handleSetMember))
 	srv.Mount("PUT /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleStateWithheld))
 	srv.Mount("DELETE /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleClearWithheld))
@@ -179,6 +181,10 @@ func toAPI(o Operation) apitypes.Operation {
 	}
 	if o.TransferGroupID != nil {
 		out.TransferGroupId = nullable.NewNullableWithValue(*o.TransferGroupID)
+	}
+	out.Parts = make([]apitypes.OperationPart, 0, len(o.Parts))
+	for _, p := range o.Parts {
+		out.Parts = append(out.Parts, apitypes.OperationPart{CategoryId: p.CategoryID, AmountMinor: p.Amount})
 	}
 	return out
 }
@@ -655,6 +661,42 @@ func (h *Handler) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 		categoryID = &v
 	}
 	updated, err := h.svc.SetCategory(r.Context(), p.SpaceID, id, categoryID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(updated))
+}
+
+func (h *Handler) handleSetParts(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathOperationID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.SetPartsRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	parts := make([]Part, 0, len(req.Parts))
+	for _, part := range req.Parts {
+		parts = append(parts, Part{CategoryID: part.CategoryId, Amount: part.AmountMinor})
+	}
+	updated, err := h.svc.SetParts(r.Context(), p.SpaceID, id, parts)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(updated))
+}
+
+func (h *Handler) handleClearParts(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathOperationID(w, r)
+	if !ok {
+		return
+	}
+	updated, err := h.svc.ClearParts(r.Context(), p.SpaceID, id)
 	if err != nil {
 		writeError(w, err)
 		return

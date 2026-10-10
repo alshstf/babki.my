@@ -377,6 +377,10 @@ func exportOperation(o operation.Operation, usernames map[uuid.UUID]string) apit
 	if o.CategoryID != nil {
 		out.CategoryId = nullable.NewNullableWithValue(*o.CategoryID)
 	}
+	out.Parts = make([]apitypes.OperationPart, 0, len(o.Parts))
+	for _, p := range o.Parts {
+		out.Parts = append(out.Parts, apitypes.OperationPart{CategoryId: p.CategoryID, AmountMinor: p.Amount})
+	}
 	if o.SettledOn != nil {
 		out.SettledOn = nullable.NewNullableWithValue(o.SettledOn.Format(time.DateOnly))
 	}

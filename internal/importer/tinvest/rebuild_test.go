@@ -1600,6 +1600,9 @@ var notComparedFields = map[string]string{
 	"MemberID": "whose the row is in the family, never the broker's: kept like CategoryID",
 	"CategoryID": "the family's filing of the row, never the broker's: a rebuild leaves it alone on a row " +
 		"it keeps, and operation.Store.ApplyDelta carries it over to a corrected record",
+	"Parts": "the family's split of the row across categories (decision Р-36), never the broker's: " +
+		"a rebuild leaves it alone on a row it keeps; a corrected record is a new row, whose amount " +
+		"the old parts need not add up to, so they go with the old one",
 	"TransferLots": "the parcel the write path released from the source account's history — " +
 		"a property of the journal, and the projection never has it (operation.checkImportContract " +
 		"refuses one supplied)",

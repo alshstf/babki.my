@@ -160,11 +160,39 @@ func (s *Service) convert(ctx context.Context, r *Report, ops []operation.Operat
 		if err != nil {
 			return nil, fmt.Errorf("cashflow: operation %s fee: %w", op.ID, err)
 		}
-		entries = append(entries, entry{op: op, amount: amount, fee: fee})
+		parts, err := convertParts(op, amount, rate)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry{op: op, amount: amount, fee: fee, parts: parts})
 	}
 	for c := range missing {
 		r.MissingRates = append(r.MissingRates, c)
 	}
 	slices.Sort(r.MissingRates)
 	return entries, nil
+}
+
+// convertParts is the row's parts in the base currency, signed as the row's
+// amount there; the last takes what rounding left, so they add up to it.
+func convertParts(op operation.Operation, amount int64, rate decimal.Decimal) ([]operation.Part, error) {
+	if len(op.Parts) == 0 {
+		return nil, nil
+	}
+	sign := int64(1)
+	if amount < 0 {
+		sign = -1
+	}
+	out := make([]operation.Part, len(op.Parts))
+	var sum int64
+	for i, p := range op.Parts {
+		v, err := money.Minor(decimal.NewFromInt(p.Amount).Mul(rate))
+		if err != nil {
+			return nil, fmt.Errorf("cashflow: operation %s part: %w", op.ID, err)
+		}
+		out[i] = operation.Part{CategoryID: p.CategoryID, Amount: sign * v}
+		sum += sign * v
+	}
+	out[len(out)-1].Amount += amount - sum
+	return out, nil
 }
