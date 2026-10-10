@@ -267,6 +267,20 @@ export function SettingsPage() {
           </Link>
         </CardContent>
       </Card>
+      <Card className="max-w-md">
+        <CardHeader>
+          <CardTitle>{t("categories.title")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Link
+            to="/settings/categories"
+            className="text-sm underline"
+            data-testid="settings-categories-link"
+          >
+            {t("categories.settingsLink")}
+          </Link>
+        </CardContent>
+      </Card>
       <ConnectionsSection />
       <Card className="max-w-md">
         <CardHeader>

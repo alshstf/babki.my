@@ -4,6 +4,42 @@
  */
 
 export interface paths {
+    "/api/v1/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's categories, spending before earning, each level in its order. A family that never had categories gets the default set the first time it asks; a family that removed them does not get them back. */
+        get: operations["listCategories"];
+        put?: never;
+        /** @description A new category, last among its siblings. Under a parent it must be of the parent's kind, and the parent on the top level: the tree is two deep. 400 for a name taken at that place. */
+        post: operations["createCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/categories/{categoryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Remove a category nothing refers to. 400 when categories sit under it or an operation names it — archive it instead. */
+        delete: operations["deleteCategory"];
+        options?: never;
+        head?: never;
+        /** @description Rename, move, reorder or archive a category; absent fields stay. `parent_id: null` moves it to the top level. Archiving a category archives the ones under it; an archived category keeps its operations and leaves the lists a new entry picks from. */
+        patch: operations["updateCategory"];
+        trace?: never;
+    };
     "/api/v1/setup/status": {
         parameters: {
             query?: never;
@@ -1532,6 +1568,42 @@ export interface components {
             source_ref: string;
             note: string;
         };
+        /**
+         * @description expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)
+         * @enum {string}
+         */
+        CategoryKind: "expense" | "income";
+        Category: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["CategoryKind"];
+            name: string;
+            /**
+             * Format: uuid
+             * @description The category it sits under; null on the top level
+             */
+            parent_id: string | null;
+            /** @description Kept for the operations naming it, out of the lists a new entry picks from */
+            archived: boolean;
+            /** @description Its place among its siblings, smallest first */
+            position: number;
+        };
+        CreateCategoryRequest: {
+            kind: components["schemas"]["CategoryKind"];
+            name: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+        };
+        UpdateCategoryRequest: {
+            name?: string;
+            /**
+             * Format: uuid
+             * @description null moves it to the top level; absent leaves it
+             */
+            parent_id?: string | null;
+            archived?: boolean;
+            position?: number;
+        };
         BackgroundTask: {
             /**
              * Format: int64
@@ -2660,6 +2732,108 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every category of the family's, archived ones too */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"][];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    createCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description The category */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    deleteCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                categoryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                categoryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description The category as changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
     getSetupStatus: {
         parameters: {
             query?: never;
