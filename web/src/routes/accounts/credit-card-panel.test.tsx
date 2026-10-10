@@ -45,6 +45,8 @@ const noFees = {
 
 const noInstallment = { months: 0, monthly_fee_percent: "0", fee_minor: 0 };
 
+const noGraces = { grace_moves: false, grace_periods: 0, grace_categories: [], grace_to_month_end: false };
+
 // The catalog as the server gives it: Газпромбанк's card by the contract's
 // day.
 const catalogFixture = [{
@@ -81,7 +83,7 @@ const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: C
     missed_minimum_period: false,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
     window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
-    transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment, catalog: null },
+    transfer_categories: [], ...noGraces, fees: noFees, cashback: noCashback, installment: noInstallment, catalog: null },
   status: status(over), by_journal: byJournal, benefit, catalog_update: null,
 });
 
@@ -130,7 +132,7 @@ describe("CreditCardPanel", () => {
       missed_minimum_period: false,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
-      transfer_categories: [], fees: noFees, cashback: noCashback, installment: noInstallment, catalog: null,
+      transfer_categories: [], ...noGraces, fees: noFees, cashback: noCashback, installment: noInstallment, catalog: null,
     });
   });
 
@@ -212,6 +214,33 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect((await put.json()).fees).toMatchObject({ penalty_daily_percent: "0", penalty_yearly_percent: "20", penalty_from_day: 6, yearly_minor: 590_00 });
+  });
+
+  // Ozon's grace (#460): purchases paid a statement later, «до 140 дней» on
+  // Ozon three; and Альфа's «на всё» — cash and transfers in the grace.
+  it("states purchases paid statements later and moves in the grace", async () => {
+    const c = card();
+    c.terms = { ...c.terms, grace_periods: 1, grace_moves: true };
+    answer({
+      "/credit-card": c,
+      "/categories": [{ id: "c-ozon", kind: "expense", name: "Ozon до 140 дней", parent_id: null, archived: false, position: 1 }],
+    });
+    Element.prototype.scrollIntoView ??= () => {};
+    show(<CreditCardPanel account={account} canEdit />);
+    const norm = (s: string | null) => (s ?? "").replace(/\s/g, " ");
+    await waitFor(() => expect(norm(screen.getByTestId("card-panel").textContent)).toContain("покупки месяца — к платежу по выписке через 1, снятие и переводы — тоже в льготе"));
+    fireEvent.click(screen.getByRole("button", { name: "Изменить условия" }));
+    const box = await screen.findByTestId("card-grace-periods");
+    await waitFor(() => expect(within(box).getByTestId("category-select")).toBeTruthy());
+    fireEvent.keyDown(within(box).getByRole("combobox"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Ozon до 140 дней" }));
+    expect((await within(box).findByLabelText("«Ozon до 140 дней» — с выпиской через") as HTMLInputElement).value).toBe("3");
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({
+      grace_periods: 1, grace_moves: true, grace_to_month_end: false, grace_categories: [{ category_id: "c-ozon", periods: 3 }],
+    });
   });
 
   it("names the categories the bank takes for transfers", async () => {

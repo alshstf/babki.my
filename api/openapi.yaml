@@ -3104,7 +3104,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback, installment, catalog]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, grace_moves, grace_periods, grace_categories, grace_to_month_end, fees, cashback, installment, catalog]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3124,7 +3124,7 @@ components:
         grace_run_from: { type: string, enum: [purchase, next_day, month_start], description: "For grace_kind running: the grace starts on the first purchase's day, the day after, or the 1st of its month; purchase otherwise" }
         window_months: { type: integer, minimum: 0, maximum: 12, description: "For grace_kind windows: the periods of purchases in a window; 0 otherwise" }
         grace_months: { type: integer, minimum: 0, maximum: 36, description: "For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise" }
-        opened_on: { type: string, nullable: true, description: "For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise" }
+        opened_on: { type: string, nullable: true, description: "The day the card's contract was made (YYYY-MM-DD): for grace_kind windows, whose period the windows count from, and for fees.intro_days, the first days'; null otherwise" }
         grace_all_lost: { type: boolean, description: "A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is" }
         missed_minimum_period: { type: boolean, description: "A minimum missed takes the grace off the purchases of the period it was due in — those its next statement shows — and no others (Т-Банк)" }
         pay_by_period_end: { type: boolean, description: "The minimum is due by the last day of the period after the statement, not payment_days after it" }
@@ -3135,6 +3135,13 @@ components:
           type: array
           items: { type: string, format: uuid }
           description: "The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family"
+        grace_moves: { type: boolean, description: "The cash taken out and the money moved off the card have the grace too, as purchases do (Альфа «без % на всё»)" }
+        grace_periods: { type: integer, minimum: 0, maximum: 12, description: "For grace_kind statement: a period's purchases are paid by the payment day of the statement so many periods after the one closing it (Ozon: 1, «до 80 дней»); 0 otherwise" }
+        grace_categories:
+          type: array
+          items: { $ref: "#/components/schemas/CreditCardGraceCategory" }
+          description: "For grace_kind statement: spending categories whose purchases have their own grace_periods, subcategories with them (Ozon «до 140 дней»: 3). 400 for an id that is not a spending category of the family"
+        grace_to_month_end: { type: boolean, description: "For grace_kind long and running: the grace's last day moves to the last day of its month (Альфа, contracts from 10.08.2026)" }
         fees: { $ref: "#/components/schemas/CreditCardFees" }
         cashback: { $ref: "#/components/schemas/CreditCardCashback" }
         catalog:
@@ -3150,6 +3157,12 @@ components:
         min_floor_minor: { type: integer, format: int64, minimum: 0, description: "The smallest minimum payment" }
         annual_rate: { type: string, description: "Percent a year charged once the grace is lost (decimal)" }
         own_rate: { type: string, nullable: true, description: "Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named" }
+    CreditCardGraceCategory:
+      type: object
+      required: [category_id, periods]
+      properties:
+        category_id: { type: string, format: uuid, description: "One of the family's spending categories; 400 otherwise" }
+        periods: { type: integer, minimum: 0, maximum: 12 }
     CreditCardCashback:
       type: object
       required: [base_percent, categories, monthly_cap_minor, points, credit_days]

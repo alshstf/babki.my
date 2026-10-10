@@ -163,8 +163,8 @@ func TestWindowsCountFromTheContractsMonth(t *testing.T) {
 		{"2026-06-15", "2026-05-01", "2026-10-31"},
 	} {
 		from, _ := gpb.group(d(c.on))
-		if day(from) != c.from || day(gpb.deadline(d(c.on))) != c.deadline {
-			t.Errorf("%s: window from %s, deadline %s; want %s and %s", c.on, day(from), day(gpb.deadline(d(c.on))), c.from, c.deadline)
+		if day(from) != c.from || day(gpb.deadline(d(c.on), 0)) != c.deadline {
+			t.Errorf("%s: window from %s, deadline %s; want %s and %s", c.on, day(from), day(gpb.deadline(d(c.on), 0)), c.from, c.deadline)
 		}
 	}
 	bad := gpb

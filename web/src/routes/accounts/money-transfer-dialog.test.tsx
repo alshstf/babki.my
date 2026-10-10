@@ -151,6 +151,27 @@ describe("MoneyTransferDialog off a credit card", () => {
     expect(screen.getByTestId("card-transfer-warning").textContent).toContain("льготы нет");
   });
 
+  // Альфа's «без % на всё» (#460): the money moved keeps the grace.
+  it("tells the grace when the card gives it to transfers", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const path = new URL(url, "http://localhost").pathname;
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (path.endsWith("/api/v1/accounts")) return json([card, cash, source]);
+      if (path.endsWith("/card-1/credit-card")) return json({ terms: { fees, grace_moves: true }, status });
+      return new Response("null", { status: 404 });
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MoneyTransferDialog open onOpenChange={vi.fn()} account={card} />
+      </QueryClientProvider>,
+    );
+    await pick("Т-Банк");
+    await waitFor(() => expect(screen.getByTestId("card-transfer-warning").textContent).toContain("в льготе, как покупки"));
+    expect(screen.getByTestId("card-transfer-warning").textContent).not.toContain("льготы нет");
+  });
+
   // Т-Банк's free transfers of the month and ВТБ's first days (#462).
   it("counts the free transfers and the first days", async () => {
     const tbank = { ...fees, transfer_free_minor: 80_000_00 };

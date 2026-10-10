@@ -258,6 +258,9 @@ const FIELD_LABEL: Record<string, string> = {
   "fees.transfer_free_minor": "transferFree",
   "fees.intro_days": "introDays",
   "fees.intro_free_minor": "introFree",
+  grace_periods: "gracePeriods",
+  grace_moves: "graceMoves",
+  grace_to_month_end: "graceToMonthEnd",
 };
 
 // CatalogUpdate offers the catalog's newer revision of the card's tariff
@@ -579,6 +582,14 @@ function feesLine(t: (key: string, values?: Record<string, unknown>) => string, 
 
 // graceLine says how the card's grace runs, for the line of its terms.
 function graceLine(t: (key: string, values?: Record<string, unknown>) => string, terms: CreditCardTerms): string {
+  const parts = [graceKindLine(t, terms)];
+  if (terms.grace_kind === "statement" && terms.grace_periods > 0) parts.push(t("card.gracePeriodsLine", { n: terms.grace_periods }));
+  if (terms.grace_to_month_end) parts.push(t("card.graceToMonthEndLine"));
+  if (terms.grace_moves) parts.push(t("card.graceMovesLine"));
+  return parts.join(", ");
+}
+
+function graceKindLine(t: (key: string, values?: Record<string, unknown>) => string, terms: CreditCardTerms): string {
   switch (terms.grace_kind) {
     case "long":
       return t("card.graceLong", { days: terms.grace_days });
@@ -658,6 +669,10 @@ interface Form {
   minRound: string;
   chargesInFull: boolean;
   transferCategories: string[];
+  graceMoves: boolean;
+  gracePeriods: string;
+  graceCategories: { id: string; periods: string }[];
+  graceToMonthEnd: boolean;
   monthlyFee: string;
   yearlyFee: string;
   cashFree: string;
@@ -708,6 +723,10 @@ function termsOf(f: Form): CreditCardTerms {
     min_round_up_minor: money(f.minRound),
     charges_in_full: f.chargesInFull,
     transfer_categories: f.transferCategories,
+    grace_moves: f.graceMoves,
+    grace_periods: f.kind === "statement" ? int(f.gracePeriods) : 0,
+    grace_categories: f.kind === "statement" ? f.graceCategories.map((c) => ({ category_id: c.id, periods: int(c.periods) })) : [],
+    grace_to_month_end: (f.kind === "long" || f.kind === "running") && f.graceToMonthEnd,
     fees: {
       monthly_minor: money(f.monthlyFee),
       yearly_minor: money(f.yearlyFee),
@@ -767,6 +786,10 @@ function toForm(terms?: CreditCardTerms): Form {
     minRound: terms ? minorToInput(terms.min_round_up_minor) : "0",
     chargesInFull: terms?.charges_in_full ?? false,
     transferCategories: terms?.transfer_categories ?? [],
+    graceMoves: terms?.grace_moves ?? false,
+    gracePeriods: terms ? String(terms.grace_periods) : "0",
+    graceCategories: (terms?.grace_categories ?? []).map((c) => ({ id: c.category_id, periods: String(c.periods) })),
+    graceToMonthEnd: terms?.grace_to_month_end ?? false,
     monthlyFee: terms ? minorToInput(terms.fees.monthly_minor) : "0",
     yearlyFee: terms ? minorToInput(terms.fees.yearly_minor) : "0",
     cashFree: terms ? minorToInput(terms.fees.cash_free_minor) : "0",
@@ -832,6 +855,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
     decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000)) &&
+    (f.kind !== "statement" || (int(f.gracePeriods || "0", 0, 12) && f.graceCategories.every((c) => int(c.periods, 0, 12)))) &&
     feesValid && cashbackValid && int(f.installMonths || "0", 0, 60) && decimalOk(f.installFeePercent || "0", 100) &&
     money(f.installFee) !== null;
 
@@ -868,7 +892,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
-  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints";
+  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints" | "graceMoves" | "graceToMonthEnd";
   const toggle = (id: Switch, label: string, hint: string) => (
     <div className="flex items-start gap-2">
       <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
@@ -997,6 +1021,46 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
               {field("openedOn", t("card.openedOn"), t("card.openedOnHint"), "date")}
             </>
           )}
+          {f.kind === "statement" && (
+            <div className="grid gap-2" data-testid="card-grace-periods">
+              {field("gracePeriods", t("card.gracePeriods"), t("card.gracePeriodsHint"))}
+              {f.graceCategories.map((c, i) => (
+                <div key={c.id} className="flex items-end gap-2">
+                  <div className="grid flex-1 gap-1">
+                    <Label htmlFor={`card-grace-${c.id}`}>{t("card.graceCategoryIn", { name: categoryLabel(categories.data ?? [], c.id) ?? "?" })}</Label>
+                    <Input
+                      id={`card-grace-${c.id}`}
+                      inputMode="numeric"
+                      value={c.periods}
+                      onChange={(e) => set({ graceCategories: f.graceCategories.map((x, j) => (j === i ? { ...x, periods: e.target.value } : x)) })}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    aria-label={t("card.transferRemove", { name: categoryLabel(categories.data ?? [], c.id) ?? "" })}
+                    onClick={() => set({ graceCategories: f.graceCategories.filter((_, j) => j !== i) })}
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
+              <div className="grid gap-1">
+                <Label htmlFor="card-grace-add">{t("card.graceCategoryAdd")}</Label>
+                <CategorySelect
+                  id="card-grace-add"
+                  categories={categories.data ?? []}
+                  kind="expense"
+                  value={null}
+                  onChange={(id) => id && !f.graceCategories.some((c) => c.id === id) && set({ graceCategories: [...f.graceCategories, { id, periods: "3" }] })}
+                />
+                <p className="text-xs text-muted-foreground">{t("card.graceCategoryHint")}</p>
+              </div>
+            </div>
+          )}
+          {(f.kind === "long" || f.kind === "running") && toggle("graceToMonthEnd", t("card.graceToMonthEnd"), t("card.graceToMonthEndHint"))}
+          {toggle("graceMoves", t("card.graceMoves"), t("card.graceMovesHint"))}
           {toggle("graceAllLost", t("card.graceAllLost"), t("card.graceAllLostHint"))}
           {toggle("missedMinimumPeriod", t("card.missedMinimumPeriod"), t("card.missedMinimumPeriodHint"))}
           {field("minPercent", t("card.minPercent"))}

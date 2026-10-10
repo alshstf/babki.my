@@ -200,6 +200,42 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 		t.Errorf("cashback = %+v, status on %v", cb, got.Status.CashbackOn)
 	}
 
+	// Ozon's grace (#460): purchases paid a statement later, a spending
+	// category three; an income one refused. Альфа's: moves in the grace,
+	// to the month's end.
+	withGraces := func(category string) string {
+		return fmt.Sprintf(`{"limit_minor":15000000,"statement_day":10,"payment_days":16,"grace_kind":"statement","grace_days":0,
+			"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":null,"grace_periods":1,
+			"grace_categories":[{"category_id":%q,"periods":3}]}`, category)
+	}
+	if r := apitest.Do(t, c, "PUT", path, withGraces(earning)); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("an income category's grace = %d, want 400", r.StatusCode)
+	}
+	resp = apitest.Do(t, c, "PUT", path, withGraces(spending))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("grace categories = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if g := got.Terms; g.GracePeriods != 1 || len(g.GraceCategories) != 1 || g.GraceCategories[0].Periods != 3 ||
+		g.GraceCategories[0].CategoryId.String() != spending {
+		t.Errorf("grace = %d, %+v", g.GracePeriods, g.GraceCategories)
+	}
+	alfaNew := `{"limit_minor":15000000,"statement_day":1,"payment_days":0,"grace_kind":"running","grace_days":60,
+		"grace_run_from":"month_start","pay_day":31,"min_percent":"3","min_floor_minor":30000,"annual_rate":"58.99","own_rate":null,
+		"grace_moves":true,"grace_to_month_end":true}`
+	resp = apitest.Do(t, c, "PUT", path, alfaNew)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("grace moves = %d", resp.StatusCode)
+	}
+	apitest.Decode(t, resp, &got)
+	if g := got.Terms; !g.GraceMoves || !g.GraceToMonthEnd || g.GracePeriods != 0 || len(g.GraceCategories) != 0 {
+		t.Errorf("grace = %+v", g)
+	}
+	// The cashback card again, for what follows.
+	if r := apitest.Do(t, c, "PUT", path, withCashback(spending)); r.StatusCode != http.StatusOK {
+		t.Fatalf("cashback rules again = %d", r.StatusCode)
+	}
+
 	// A purchase in installments: three parts; not one of the card's rows
 	// is a 404, and taken out it is a purchase again.
 	var phone struct {

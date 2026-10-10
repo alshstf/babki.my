@@ -2336,7 +2336,7 @@ export interface components {
             window_months: number;
             /** @description For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise */
             grace_months: number;
-            /** @description For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise */
+            /** @description The day the card's contract was made (YYYY-MM-DD): for grace_kind windows, whose period the windows count from, and for fees.intro_days, the first days'; null otherwise */
             opened_on: string | null;
             /** @description A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is */
             grace_all_lost: boolean;
@@ -2355,6 +2355,14 @@ export interface components {
             charges_in_full: boolean;
             /** @description The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family */
             transfer_categories: string[];
+            /** @description The cash taken out and the money moved off the card have the grace too, as purchases do (Альфа «без % на всё») */
+            grace_moves: boolean;
+            /** @description For grace_kind statement: a period's purchases are paid by the payment day of the statement so many periods after the one closing it (Ozon: 1, «до 80 дней»); 0 otherwise */
+            grace_periods: number;
+            /** @description For grace_kind statement: spending categories whose purchases have their own grace_periods, subcategories with them (Ozon «до 140 дней»: 3). 400 for an id that is not a spending category of the family */
+            grace_categories: components["schemas"]["CreditCardGraceCategory"][];
+            /** @description For grace_kind long and running: the grace's last day moves to the last day of its month (Альфа, contracts from 10.08.2026) */
+            grace_to_month_end: boolean;
             fees: components["schemas"]["CreditCardFees"];
             cashback: components["schemas"]["CreditCardCashback"];
             /** @description The catalog's version the terms were taken from (GET /credit-cards/catalog); null when stated by hand */
@@ -2372,6 +2380,14 @@ export interface components {
             annual_rate: string;
             /** @description Percent a year the family's own money would earn instead, to weigh the card against (decimal); null until named */
             own_rate: string | null;
+        };
+        CreditCardGraceCategory: {
+            /**
+             * Format: uuid
+             * @description One of the family's spending categories; 400 otherwise
+             */
+            category_id: string;
+            periods: number;
         };
         /** @description The card's cashback rules, to tell the cashback before it comes (decision Р-31): a purchase earns its category's percent or base_percent, whichever is higher (subcategories with their category); the period's sum not past monthly_cap_minor when it is above 0. Transfers, cash and the bank's charges earn nothing. All zero and empty when the card names none. */
         CreditCardCashback: {

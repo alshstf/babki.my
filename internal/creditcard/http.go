@@ -273,6 +273,10 @@ func termsFromAPI(id uuid.UUID, req apitypes.CreditCardTerms) (Terms, error) {
 		MissedMinimumPeriod: req.MissedMinimumPeriod,
 		RunFrom:             RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
 		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
+		GraceMoves: req.GraceMoves, GracePeriods: req.GracePeriods, GraceToMonthEnd: req.GraceToMonthEnd,
+	}
+	for _, c := range req.GraceCategories {
+		t.GraceCategories = append(t.GraceCategories, CategoryPeriods{CategoryID: c.CategoryId, Periods: c.Periods})
 	}
 	var err error
 	if req.OpenedOn.IsSpecified() && !req.OpenedOn.IsNull() {
@@ -468,6 +472,8 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
 		MissedMinimumPeriod: t.MissedMinimumPeriod,
 		TransferCategories:  t.TransferCategories,
+		GraceMoves:          t.GraceMoves, GracePeriods: t.GracePeriods, GraceToMonthEnd: t.GraceToMonthEnd,
+		GraceCategories: make([]apitypes.CreditCardGraceCategory, 0, len(t.GraceCategories)),
 		Fees: apitypes.CreditCardFees{
 			MonthlyMinor: t.Fees.Monthly, YearlyMinor: t.Fees.Yearly, CashFreeMinor: t.Fees.CashFree,
 			CashPercent: t.Fees.CashPercent.String(), CashFixedMinor: t.Fees.CashFixed,
@@ -487,6 +493,9 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 	}
 	if out.TransferCategories == nil {
 		out.TransferCategories = []uuid.UUID{}
+	}
+	for _, c := range t.GraceCategories {
+		out.GraceCategories = append(out.GraceCategories, apitypes.CreditCardGraceCategory{CategoryId: c.CategoryID, Periods: c.Periods})
 	}
 	return out
 }
