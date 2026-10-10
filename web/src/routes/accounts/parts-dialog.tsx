@@ -69,13 +69,20 @@ export function PartsDialog({ operation, onClose }: { operation: Operation; onCl
           </div>
           {rows.map((r, i) => (
             <div key={i} className="grid gap-1" data-testid="parts-row">
-              <Label htmlFor={`parts-amount-${i}`}>{t("parts.part", { n: i + 2 })}</Label>
+              <Label htmlFor={`parts-category-${i}`}>{t("parts.part", { n: i + 2 })}</Label>
               <div className="flex items-center gap-2">
                 <div className="flex-1">
-                  <CategorySelect categories={categories.data ?? []} kind={kind} value={r.categoryId} onChange={(v) => set(i, { categoryId: v })} />
+                  <CategorySelect
+                    id={`parts-category-${i}`}
+                    categories={categories.data ?? []}
+                    kind={kind}
+                    value={r.categoryId}
+                    onChange={(v) => set(i, { categoryId: v })}
+                  />
                 </div>
                 <Input
                   id={`parts-amount-${i}`}
+                  aria-label={t("parts.amount", { n: i + 2 })}
                   className="w-28 text-right"
                   inputMode="decimal"
                   value={r.amount}

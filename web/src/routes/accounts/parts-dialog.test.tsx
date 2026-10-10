@@ -58,7 +58,7 @@ describe("PartsDialog", () => {
     const part = screen.getAllByTestId("parts-row")[0];
     fireEvent.keyDown(within(part).getByRole("combobox"), { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "Дом" }));
-    fireEvent.change(screen.getByLabelText("Часть 2"), { target: { value: "649,98" } });
+    fireEvent.change(screen.getByLabelText("Сумма части 2"), { target: { value: "649,98" } });
     expect(norm(screen.getByTestId("parts-rest").textContent)).toBe("1 690,92 ₽");
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -71,14 +71,14 @@ describe("PartsDialog", () => {
 
   it("refuses parts larger than the row", async () => {
     open(row());
-    fireEvent.change(screen.getByLabelText("Часть 2"), { target: { value: "3000" } });
+    fireEvent.change(screen.getByLabelText("Сумма части 2"), { target: { value: "3000" } });
     expect(await screen.findByText("Части больше всей траты — уменьшите их.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("makes a split row whole again", async () => {
     const onClose = open(row([{ category_id: "c-food", amount_minor: 169092 }, { category_id: "c-home", amount_minor: 64998 }]));
-    expect((screen.getByLabelText("Часть 2") as HTMLInputElement).value).toBe("649.98");
+    expect((screen.getByLabelText("Сумма части 2") as HTMLInputElement).value).toBe("649.98");
     fireEvent.click(screen.getByRole("button", { name: "Объединить" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(sent()[0].method).toBe("DELETE");

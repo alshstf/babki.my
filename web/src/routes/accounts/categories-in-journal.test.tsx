@@ -219,7 +219,7 @@ describe("the journal's categories", () => {
     fireEvent.click(chip);
     fireEvent.click(await screen.findByTestId("category-split"));
     const dialog = await screen.findByTestId("parts-dialog");
-    expect((within(dialog).getByLabelText("Часть 2") as HTMLInputElement).value).toBe("700");
+    expect((within(dialog).getByLabelText("Сумма части 2") as HTMLInputElement).value).toBe("700");
   });
 
   it("finds a category by a word of it or of its parent", async () => {
