@@ -153,13 +153,6 @@ func TestTermsAreChecked(t *testing.T) {
 	}
 }
 
-func abs(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 // A month of 30 000 on the card while own money earns 15% is about 370
 // roubles; the cashback is added and the bank's fee taken away. A charge filed
 // under «Проценты по кредитам» is a cost whatever its type.

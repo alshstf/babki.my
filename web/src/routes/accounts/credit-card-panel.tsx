@@ -10,7 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { AccountWithBalance } from "@/api/accounts";
 import {
   useCreditCard,
+  useDeleteBankFigures,
   useDeleteInstallment,
+  useSetBankFigures,
   useSetCreditCard,
   useSetInstallment,
   type CreditCard,
@@ -18,7 +20,7 @@ import {
 } from "@/api/credit-cards";
 import { useOperations } from "@/api/operations";
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
+import { formatDate, localToday } from "@/lib/dates";
 import { SOON_DAYS, daysUntil } from "@/lib/card-due";
 import { cn } from "@/lib/utils";
 import { PushToggle } from "@/components/push-toggle";
@@ -53,6 +55,12 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
   const c = account.currency;
   const st = data.status;
   const next = st.grace[0];
+  // What the bank itself says stands over the reckoning until its day
+  // (decision Р-32).
+  const bankMinimum = st.bank?.minimum ?? null;
+  const bankGrace = st.bank?.grace ?? null;
+  const minimumAmount = bankMinimum ? bankMinimum.left_minor : st.minimum_minor;
+  const minimumOn = bankMinimum ? bankMinimum.on : st.minimum_on;
   return (
     <div className="grid gap-3 rounded-lg border p-4" data-testid="card-panel">
       <div className="grid gap-3 sm:grid-cols-3">
@@ -70,16 +78,18 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
           <div className="text-xs text-muted-foreground">{t("card.ofLimit", { limit: formatMinor(data.terms.limit_minor, c) })}</div>
         </div>
         <div>
-          <div className="text-sm text-muted-foreground">{st.minimum_estimate ? t("card.minimumEstimate") : t("card.minimum")}</div>
+          <div className="text-sm text-muted-foreground">
+            {bankMinimum ? t("card.minimumBank") : st.minimum_estimate ? t("card.minimumEstimate") : t("card.minimum")}
+          </div>
           <div
-            className={cn("text-xl font-semibold tabular-nums", st.minimum_missed && "text-red-700 dark:text-red-400")}
+            className={cn("text-xl font-semibold tabular-nums", !bankMinimum && st.minimum_missed && "text-red-700 dark:text-red-400")}
             data-testid="card-minimum"
           >
-            {st.minimum_minor > 0 ? formatMinor(st.minimum_minor, c) : t("card.minimumPaid")}
+            {minimumAmount > 0 ? formatMinor(minimumAmount, c) : t("card.minimumPaid")}
           </div>
-          {st.minimum_minor > 0 && (
-            <div className={cn("text-xs", st.minimum_missed ? "text-red-700 dark:text-red-400" : "text-muted-foreground")}>
-              {st.minimum_missed ? t("card.minimumMissed", { date: formatDate(st.minimum_on) }) : t("card.by", { date: formatDate(st.minimum_on) })}
+          {minimumAmount > 0 && (
+            <div className={cn("text-xs", !bankMinimum && st.minimum_missed ? "text-red-700 dark:text-red-400" : "text-muted-foreground")}>
+              {!bankMinimum && st.minimum_missed ? t("card.minimumMissed", { date: formatDate(minimumOn) }) : t("card.by", { date: formatDate(minimumOn) })}
             </div>
           )}
           {st.minimum_overdue_minor > 0 && !st.minimum_missed && (
@@ -97,7 +107,11 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
 
       {data.by_journal ? (
         <div className="grid gap-1 text-sm" data-testid="card-grace">
-          {next ? (
+          {bankGrace ? (
+            <div className={cn(daysUntil(bankGrace.on) <= SOON_DAYS && "font-medium text-amber-700 dark:text-amber-400")}>
+              {t("card.graceBank", { amount: formatMinor(bankGrace.left_minor, c), date: formatDate(bankGrace.on) })}
+            </div>
+          ) : next ? (
             <div className={cn(daysUntil(next.on) <= SOON_DAYS && "font-medium text-amber-700 dark:text-amber-400")}>
               {t("card.graceNext", { amount: formatMinor(next.amount_minor, c), date: formatDate(next.on) })}
             </div>
@@ -160,6 +174,8 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
         </p>
       )}
 
+      <BankBlock account={account} card={data} canEdit={canEdit} />
+
       {data.by_journal && (st.installments.length > 0 || canEdit) && (
         <InstallmentsBlock account={account} card={data} canEdit={canEdit} />
       )}
@@ -192,6 +208,127 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
       )}
       {editing && <TermsDialog account={account} card={data} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+// BankBlock sets what the bank itself says is due against the card's own
+// reckoning (decision Р-32): a gap is a rule of the bank's the terms do not
+// tell.
+function BankBlock({ account, card, canEdit }: { account: AccountWithBalance; card: CreditCard; canEdit: boolean }) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const b = card.status.bank;
+  const c = account.currency;
+  const line = (label: string, d: NonNullable<NonNullable<typeof b>["grace"]>) => (
+    <div className={d.agrees ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"}>
+      {t("card.bankLine", { what: label, amount: formatMinor(d.amount_minor, c), date: formatDate(d.on) })}{" "}
+      {d.agrees
+        ? t("card.bankAgrees")
+        : d.ours
+          ? t("card.bankDiffers", { amount: formatMinor(d.ours.amount_minor, c), date: formatDate(d.ours.on) })
+          : t("card.bankNoOurs")}
+    </div>
+  );
+  if (!b && !canEdit) return null;
+  return (
+    <div className="grid gap-1 text-sm" data-testid="card-bank">
+      {b && (
+        <>
+          <div className="font-medium">{t("card.bankTitle", { date: formatDate(b.stated_on) })}</div>
+          {b.grace && line(t("card.bankGrace"), b.grace)}
+          {b.minimum && line(t("card.bankMinimum"), b.minimum)}
+          {[b.grace, b.minimum].some((d) => d && !d.agrees) && <div className="text-xs text-muted-foreground">{t("card.bankGapHint")}</div>}
+        </>
+      )}
+      {canEdit && (
+        <Button type="button" size="sm" variant="outline" className="justify-self-start" onClick={() => setEditing(true)}>
+          {t("card.bankEdit")}
+        </Button>
+      )}
+      {editing && <BankDialog account={account} card={card} onClose={() => setEditing(false)} />}
+    </div>
+  );
+}
+
+function BankDialog({ account, card, onClose }: { account: AccountWithBalance; card: CreditCard; onClose: () => void }) {
+  const { t } = useTranslation();
+  const save = useSetBankFigures(account.id);
+  const forget = useDeleteBankFigures(account.id);
+  const st = card.status;
+  const [statedOn, setStatedOn] = useState(localToday);
+  const [grace, setGrace] = useState(st.bank?.grace ? minorToInput(st.bank.grace.amount_minor) : "");
+  const [graceOn, setGraceOn] = useState(st.bank?.grace?.on ?? st.grace[0]?.on ?? "");
+  const [minimum, setMinimum] = useState(st.bank?.minimum ? minorToInput(st.bank.minimum.amount_minor) : "");
+  const [minimumOn, setMinimumOn] = useState(st.bank?.minimum?.on ?? st.minimum_on ?? "");
+  const graceMinor = grace.trim() === "" ? null : parseToMinor(grace);
+  const minimumMinor = minimum.trim() === "" ? null : parseToMinor(minimum);
+  const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const valid =
+    isDay(statedOn) && (graceMinor !== null || minimumMinor !== null) &&
+    (grace.trim() === "" || (graceMinor !== null && graceMinor >= 0 && isDay(graceOn))) &&
+    (minimum.trim() === "" || (minimumMinor !== null && minimumMinor >= 0 && isDay(minimumOn)));
+  const submit = () => {
+    if (!valid) return;
+    save.mutate(
+      {
+        stated_on: statedOn,
+        grace: graceMinor !== null ? { on: graceOn, amount_minor: graceMinor } : null,
+        minimum: minimumMinor !== null ? { on: minimumOn, amount_minor: minimumMinor } : null,
+      },
+      { onSuccess: onClose },
+    );
+  };
+  const pair = (id: string, label: string, amount: string, setAmount: (v: string) => void, on: string, setOn: (v: string) => void, hint?: string) => (
+    <div className="grid gap-1">
+      <div className="grid grid-cols-2 gap-2">
+        <div className="grid gap-1">
+          <Label htmlFor={`bank-${id}`}>{label}</Label>
+          <Input id={`bank-${id}`} inputMode="decimal" value={amount} placeholder={hint} onChange={(e) => setAmount(e.target.value)} />
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor={`bank-${id}-on`}>{t("card.bankBy")}</Label>
+          <Input id={`bank-${id}-on`} type="date" value={on} onChange={(e) => setOn(e.target.value)} />
+        </div>
+      </div>
+    </div>
+  );
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md" data-testid="card-bank-dialog">
+        <DialogHeader>
+          <DialogTitle>{t("card.bankEdit")}</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <p className="text-xs text-muted-foreground">{t("card.bankHint")}</p>
+          {pair("grace", t("card.bankGraceInput", { currency: account.currency }), grace, setGrace, graceOn, setGraceOn,
+            st.grace[0] ? minorToInput(st.grace[0].amount_minor) : undefined)}
+          {pair("minimum", t("card.bankMinimumInput", { currency: account.currency }), minimum, setMinimum, minimumOn, setMinimumOn,
+            st.minimum_minor > 0 ? minorToInput(st.minimum_minor) : undefined)}
+          <div className="grid gap-1">
+            <Label htmlFor="bank-stated">{t("card.bankStatedOn")}</Label>
+            <Input id="bank-stated" type="date" value={statedOn} onChange={(e) => setStatedOn(e.target.value)} />
+          </div>
+          {save.isError && (
+            <Alert variant="destructive">
+              <AlertDescription>{t("card.failed")}</AlertDescription>
+            </Alert>
+          )}
+        </div>
+        <DialogFooter>
+          {st.bank && (
+            <Button variant="ghost" disabled={forget.isPending} onClick={() => forget.mutate(undefined, { onSuccess: onClose })}>
+              {t("card.bankForget")}
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!valid || save.isPending} onClick={submit}>
+            {t("common.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

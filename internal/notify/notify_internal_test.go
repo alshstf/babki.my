@@ -102,6 +102,16 @@ func TestTheCardsCallForTheirReminders(t *testing.T) {
 		t.Errorf("on the day = %+v", got)
 	}
 
+	// What the bank said stands over the reckoning: its day, what is left.
+	bank := cardWith(nil, creditcard.Status{
+		Grace: []creditcard.Due{{On: d("2027-01-27"), Amount: 30_000_00}},
+		Bank:  &creditcard.BankView{Grace: &creditcard.BankDue{On: d("2026-12-31"), Amount: 30_000_00, Left: 26_000_00}},
+	})
+	got = CardReminders([]creditcard.Card{bank}, d("2026-12-29"))
+	if len(got) != 1 || !strings.HasSuffix(got[0].Key, ":grace:2026-12-31:soon") || !strings.Contains(got[0].Body, amount(26_000_00, "RUB")) {
+		t.Errorf("bank's grace = %+v", got)
+	}
+
 	// The grace taken off the whole debt: the window that missed, and one
 	// message for the rest — not one per window.
 	off := cardWith(nil, creditcard.Status{

@@ -1975,6 +1975,41 @@ type CreditCard struct {
 	Terms     CreditCardTerms  `json:"terms"`
 }
 
+// CreditCardBankDue defines model for CreditCardBankDue.
+type CreditCardBankDue struct {
+	// Agrees Same day, and the sums within a rouble or a percent
+	Agrees bool `json:"agrees"`
+
+	// AmountMinor As the bank said
+	AmountMinor int64 `json:"amount_minor"`
+
+	// LeftMinor Less the card's payments since stated_on
+	LeftMinor int64  `json:"left_minor"`
+	On        string `json:"on"`
+
+	// Ours What the card's own reckoning says for the same; null when it says nothing
+	Ours nullable.Nullable[CreditCardDue] `json:"ours"`
+}
+
+// CreditCardBankFigures defines model for CreditCardBankFigures.
+type CreditCardBankFigures struct {
+	// Grace The payment the bank says keeps the grace, and its day
+	Grace nullable.Nullable[CreditCardDue] `json:"grace"`
+
+	// Minimum The minimum the bank says is due, and its day
+	Minimum nullable.Nullable[CreditCardDue] `json:"minimum"`
+
+	// StatedOn The day they were read, YYYY-MM-DD; not later than today
+	StatedOn string `json:"stated_on"`
+}
+
+// CreditCardBankView defines model for CreditCardBankView.
+type CreditCardBankView struct {
+	Grace    nullable.Nullable[CreditCardBankDue] `json:"grace"`
+	Minimum  nullable.Nullable[CreditCardBankDue] `json:"minimum"`
+	StatedOn string                               `json:"stated_on"`
+}
+
 // CreditCardBenefit defines model for CreditCardBenefit.
 type CreditCardBenefit struct {
 	// CashbackMinor Money in under a cashback category, and interest paid to the card
@@ -2113,6 +2148,9 @@ type CreditCardLost struct {
 type CreditCardStatus struct {
 	// AvailableMinor What is left of the limit
 	AvailableMinor int64 `json:"available_minor"`
+
+	// Bank What the bank itself says is due, while it is ahead (PUT .../credit-card/bank); null when nothing it said is
+	Bank nullable.Nullable[CreditCardBankView] `json:"bank"`
 
 	// CashThisPeriodMinor Cash taken out since the last statement (money moved to a cash account), against fees.cash_free_minor
 	CashThisPeriodMinor int64 `json:"cash_this_period_minor"`
@@ -4387,6 +4425,9 @@ type SetAccountBalanceJSONRequestBody = SetBalanceRequest
 
 // SetCreditCardJSONRequestBody defines body for SetCreditCard for application/json ContentType.
 type SetCreditCardJSONRequestBody = CreditCardTerms
+
+// SetCardBankFiguresJSONRequestBody defines body for SetCardBankFigures for application/json ContentType.
+type SetCardBankFiguresJSONRequestBody = CreditCardBankFigures
 
 // SetCardInstallmentJSONRequestBody defines body for SetCardInstallment for application/json ContentType.
 type SetCardInstallmentJSONRequestBody = CreditCardInstallmentPlan

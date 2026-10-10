@@ -92,3 +92,40 @@ export function useDeleteInstallment(accountId: string) {
     },
   });
 }
+
+export type CreditCardBankFigures = components["schemas"]["CreditCardBankFigures"];
+
+// States what the bank itself says is due on the card (decision Р-32).
+export function useSetBankFigures(accountId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: CreditCardBankFigures): Promise<CreditCard> => {
+      const { data, error, response } = await api.PUT("/api/v1/accounts/{accountId}/credit-card/bank", {
+        params: { path: { accountId } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["credit-card", accountId] });
+      void queryClient.invalidateQueries({ queryKey: ["credit-cards"] });
+    },
+  });
+}
+
+export function useDeleteBankFigures(accountId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      const { error, response } = await api.DELETE("/api/v1/accounts/{accountId}/credit-card/bank", {
+        params: { path: { accountId } },
+      });
+      if (!response.ok) throw apiError(response, error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["credit-card", accountId] });
+      void queryClient.invalidateQueries({ queryKey: ["credit-cards"] });
+    },
+  });
+}
