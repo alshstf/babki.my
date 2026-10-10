@@ -255,7 +255,7 @@ describe("filing rules", () => {
 
     await waitFor(() => expect(sent.some((s) => s.path.endsWith("/file-by-rules"))).toBe(true));
     const rule = sent.find((s) => s.method === "POST" && s.path.endsWith("/category-rules"));
-    expect(rule?.body).toEqual({ category_id: "c-food", field: "counterparty", pattern: "Пятёрочка" });
+    expect(rule?.body).toEqual({ category_id: "c-food", field: "any", pattern: "Пятёрочка" });
     expect(sent.find((s) => s.path.endsWith("/file-by-rules"))?.body).toEqual({ account_id: "acc-1" });
   });
 

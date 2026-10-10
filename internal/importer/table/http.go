@@ -262,12 +262,17 @@ func previewToAPI(p Preview) apitypes.ImportPreview {
 				Currency:     op.Currency,
 				FeeMinor:     op.FeeMinor,
 				Note:         op.Note,
+				Counterparty: op.Counterparty,
+				CategoryId:   nullable.NewNullNullable[uuid.UUID](),
 				InstrumentId: nullable.NewNullNullable[uuid.UUID](),
 				Quantity:     nullable.NewNullNullable[string](),
 				Price:        nullable.NewNullNullable[string](),
 			}
 			if op.InstrumentID != nil {
 				o.InstrumentId = nullable.NewNullableWithValue(*op.InstrumentID)
+			}
+			if op.CategoryID != nil {
+				o.CategoryId = nullable.NewNullableWithValue(*op.CategoryID)
 			}
 			if op.Quantity != nil {
 				o.Quantity = nullable.NewNullableWithValue(op.Quantity.String())

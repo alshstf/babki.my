@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
@@ -18,7 +19,7 @@ import (
 
 // exportHeader is the header a journal is written out under: the words the
 // import recognizes (see Guess), so a file written here reads back as it is.
-var exportHeader = []string{"Дата", "Тип", "Бумага", "Количество", "Цена", "Сумма", "Валюта", "Комиссия", "Заметка"}
+var exportHeader = []string{"Дата", "Тип", "Бумага", "Количество", "Цена", "Сумма", "Валюта", "Комиссия", "Заметка", "Контрагент", "Категория"}
 
 // exportWords names each type in the file. The ones a table may hold are the
 // words the import knows; the rest are named for the person reading the file
@@ -59,6 +60,10 @@ func (s *Service) Export(ctx context.Context, spaceID, accountID uuid.UUID, pape
 	if err != nil {
 		return nil, err
 	}
+	cats, err := s.cats.List(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	var buf bytes.Buffer
 	buf.WriteString("\uFEFF")
 	w := csv.NewWriter(&buf)
@@ -84,6 +89,7 @@ func (s *Service) Export(ctx context.Context, spaceID, accountID uuid.UUID, pape
 			o.OccurredOn.Format("02.01.2006"), word, paper,
 			decimalCell(o.Quantity), decimalCell(o.Price),
 			minorCell(o.AmountMinor), o.Currency, feeCell(o.FeeMinor), o.Note,
+			o.Counterparty, categoryCell(cats, o.CategoryID),
 		}
 		if err := w.Write(record); err != nil {
 			return nil, err
@@ -91,6 +97,28 @@ func (s *Service) Export(ctx context.Context, spaceID, accountID uuid.UUID, pape
 	}
 	w.Flush()
 	return buf.Bytes(), w.Error()
+}
+
+// categoryCell names a row's category the way the import reads it back: a
+// child with its parent, «Транспорт / Такси».
+func categoryCell(cats []category.Category, id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	for _, c := range cats {
+		if c.ID != *id {
+			continue
+		}
+		if c.ParentID != nil {
+			for _, p := range cats {
+				if p.ID == *c.ParentID {
+					return p.Name + CategorySeparator + c.Name
+				}
+			}
+		}
+		return c.Name
+	}
+	return ""
 }
 
 func decimalCell(d *decimal.Decimal) string {

@@ -44,6 +44,8 @@ import {
   type ImportRow,
 } from "@/api/imports";
 import { formatMinor } from "@/lib/money";
+import { useCategories } from "@/api/categories";
+import { categoryLabel } from "@/components/category-picker";
 import { formatDate } from "@/lib/dates";
 import { readTableFile } from "@/lib/read-table-file";
 import { cn } from "@/lib/utils";
@@ -59,6 +61,8 @@ const FIELDS: ImportField[] = [
   "currency",
   "fee",
   "note",
+  "counterparty",
+  "category",
 ];
 
 // The operations a table may hold (the server refuses any other).
@@ -385,6 +389,12 @@ function MappingEditor({
           </div>
         ))}
       </div>
+      {/* A bank's statement has no type column; the sign then decides. */}
+      {mapping.columns.type === undefined && (
+        <p className="text-sm text-muted-foreground" data-testid="import-by-sign">
+          {t("tableImport.bySign")}
+        </p>
+      )}
       {values.length > 0 && (
         <div className="grid gap-2">
           <div className="text-sm font-medium">{t("tableImport.typeValues")}</div>
@@ -422,6 +432,7 @@ function MappingEditor({
 function PreviewTable({ rows, written }: { rows: ImportRow[]; written: boolean }) {
   const { t } = useTranslation();
   const instruments = useInstrumentIndex();
+  const categories = useCategories();
   return (
     <Table>
       <TableHeader>
@@ -452,7 +463,14 @@ function PreviewTable({ rows, written }: { rows: ImportRow[]; written: boolean }
               <TableCell>{op ? formatDate(op.occurred_on) : "—"}</TableCell>
               <TableCell>{op ? t(`operationTypes.${op.type}`) : row.cells.join(" · ")}</TableCell>
               <TableCell>
-                {paper ? paper.name : "—"}
+                {paper ? paper.name : op?.counterparty || op?.note || "—"}
+                {/* What the row will be filed under: named by the table or found
+                   by the family's rules. */}
+                {op?.category_id && (
+                  <div className="text-xs text-muted-foreground" data-testid="import-row-category">
+                    {categoryLabel(categories.data ?? [], op.category_id)}
+                  </div>
+                )}
                 {op?.quantity && op.price && (
                   <div className="text-xs text-muted-foreground">
                     {op.quantity} × {op.price}
