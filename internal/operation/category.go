@@ -137,6 +137,7 @@ func (s *Service) SetMember(ctx context.Context, spaceID, id uuid.UUID, memberID
 	if err != nil {
 		return Operation{}, err
 	}
+	stored.Parts = old.Parts
 	return stored, tx.Commit(ctx)
 }
 
@@ -169,6 +170,7 @@ func (s *Service) SetCategory(ctx context.Context, spaceID, id uuid.UUID, catego
 	if err != nil {
 		return Operation{}, err
 	}
+	stored.Parts = old.Parts
 	return stored, tx.Commit(ctx)
 }
 

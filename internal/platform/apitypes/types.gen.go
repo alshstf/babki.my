@@ -2717,6 +2717,9 @@ type ExportOperation struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 
+	// Parts The row split across categories (Operation.parts); empty when it is its one category's
+	Parts []OperationPart `json:"parts"`
+
 	// Price Decimal as string
 	Price nullable.Nullable[string] `json:"price"`
 
@@ -3313,6 +3316,9 @@ type Operation struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 
+	// Parts The row split across categories (PUT .../parts, decision Р-36): the money report and the budget count each part under its category; empty when the row is its one category's
+	Parts []OperationPart `json:"parts"`
+
 	// Price Decimal as string: money per unit in the operation's own `currency`, never converted. An annotation — nothing values a trade from it — so a client names `currency` on it. A hand entry holds `price` × `quantity` to the money cap; an import takes the broker's price as given.
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
@@ -3370,6 +3376,13 @@ type OperationInBase struct {
 
 // OperationInBaseGap Which term stopped Operation.in_base. `undated_lot`: a piece of a transferred parcel has no purchase date — permanent, decided first. `no_rate_operation_date`: no rate for occurred_on or earlier. `no_rate_lot_date`: no rate for a purchase day of a dated breakdown or earlier. The last two cannot both arise: an amount is either money moved on its own day or an assembled basis (assembled_from_lots).
 type OperationInBaseGap string
+
+// OperationPart defines model for OperationPart.
+type OperationPart struct {
+	// AmountMinor The part's money, above zero; the parts add up to the row's amount without its sign
+	AmountMinor int64              `json:"amount_minor"`
+	CategoryId  openapi_types.UUID `json:"category_id"`
+}
 
 // OperationType What the entry is. `redemption`: a bond reaching maturity (or a fund's units redeemed, decision Р-13) — computed as a sale, named apart. `exchange_out`/`exchange_in`: the two legs of a securities conversion on one account and day (a receipt into its share, a fund reissued): the parcel travels whole with its purchase days, nothing is realized, and amount_minor is the cost basis that moved, not money. `spinoff_out`/`spinoff_in`: a spin-off — the original keeps every unit (so `spinoff_out` has no quantity) and the new paper arrives with the event's `basis_share` of the cost (0 by default) and the original purchase days. The last four are written only by the corporate-actions registry (`source: registry`) and are never created or deleted through this API.
 type OperationType string
@@ -3891,6 +3904,11 @@ type SetCategoryRequest struct {
 type SetMemberRequest struct {
 	// MemberId The member whose the row is; null gives it back to the account's owner
 	MemberId nullable.Nullable[openapi_types.UUID] `json:"member_id"`
+}
+
+// SetPartsRequest defines model for SetPartsRequest.
+type SetPartsRequest struct {
+	Parts []OperationPart `json:"parts"`
 }
 
 // SetupRequest Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400.
@@ -4832,6 +4850,9 @@ type SetOperationCategoryJSONRequestBody = SetCategoryRequest
 
 // SetOperationMemberJSONRequestBody defines body for SetOperationMember for application/json ContentType.
 type SetOperationMemberJSONRequestBody = SetMemberRequest
+
+// SetOperationPartsJSONRequestBody defines body for SetOperationParts for application/json ContentType.
+type SetOperationPartsJSONRequestBody = SetPartsRequest
 
 // StatePurchasesJSONRequestBody defines body for StatePurchases for application/json ContentType.
 type StatePurchasesJSONRequestBody = StatePurchasesRequest

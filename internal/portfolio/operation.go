@@ -156,8 +156,18 @@ type Operation struct {
 	Counterparty string
 	// MemberID is whose the row is when not the account's owner's: the member
 	// who spent or earned it. The engine never reads it.
-	MemberID   *uuid.UUID
+	MemberID *uuid.UUID
+	// Parts split a spending or an earning across categories (decision Р-36):
+	// their amounts, positive, add up to the row's; empty when the row is its
+	// one category's. The engine never reads them.
+	Parts      []CategoryPart
 	Source     string
 	ExternalID *string
 	CreatedAt  time.Time
+}
+
+// CategoryPart is a part of a row filed under a category of its own.
+type CategoryPart struct {
+	CategoryID uuid.UUID
+	Amount     int64
 }

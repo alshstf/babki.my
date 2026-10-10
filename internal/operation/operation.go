@@ -8,6 +8,7 @@ import "babki.my/babki/internal/portfolio"
 
 type (
 	Operation = portfolio.Operation
+	Part      = portfolio.CategoryPart
 	Type      = portfolio.Type
 	// ReleasedLot is one piece of a transfer's FIFO breakdown, carried in
 	// Operation.TransferLots and stored in table operation_transfer_lots.

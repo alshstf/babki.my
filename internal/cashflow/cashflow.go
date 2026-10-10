@@ -95,6 +95,9 @@ type entry struct {
 	op     operation.Operation
 	amount int64 // amount_minor converted, sign kept
 	fee    int64 // fee_minor converted, positive
+	// parts are the row's parts (decision Р-36) converted, signed as amount
+	// and adding up to it.
+	parts []operation.Part
 }
 
 // months lists the first day of each month from from's to to's.
@@ -158,13 +161,18 @@ func assemble(r *Report, entries []entry, accounts map[uuid.UUID]account.Account
 				r.Expense.add(month, e.fee)
 			}
 		}
-		if c, ok := categoryOf(e.op, byCategory); ok {
-			if c.Kind == category.KindIncome {
-				into(filed, c.ID).add(month, e.amount)
-				r.Income.add(month, e.amount)
-			} else {
-				into(filed, c.ID).add(month, -e.amount)
-				r.Expense.add(month, -e.amount)
+		// A split row counts under its parts' categories, each one known to
+		// the report; otherwise under its own.
+		if pieces, ok := filedParts(e, byCategory); ok {
+			for _, p := range pieces {
+				c := byCategory[p.CategoryID]
+				if c.Kind == category.KindIncome {
+					into(filed, c.ID).add(month, p.Amount)
+					r.Income.add(month, p.Amount)
+				} else {
+					into(filed, c.ID).add(month, -p.Amount)
+					r.Expense.add(month, -p.Amount)
+				}
 			}
 			continue
 		}
@@ -209,6 +217,27 @@ func assemble(r *Report, entries []entry, accounts map[uuid.UUID]account.Account
 			r.Expense.Lines = append(r.Expense.Lines, Line{Group: g, Flow: *f, Direct: *f})
 		}
 	}
+}
+
+// filedParts is how a row counts by category: its parts when it is split
+// and the report knows all of their categories, else its own category alone;
+// false when it names none the report knows.
+func filedParts(e entry, byCategory map[uuid.UUID]category.Category) ([]operation.Part, bool) {
+	if len(e.parts) > 0 {
+		known := true
+		for _, p := range e.parts {
+			_, ok := byCategory[p.CategoryID]
+			known = known && ok
+		}
+		if known {
+			return e.parts, true
+		}
+	}
+	c, ok := categoryOf(e.op, byCategory)
+	if !ok {
+		return nil, false
+	}
+	return []operation.Part{{CategoryID: c.ID, Amount: e.amount}}, true
 }
 
 // categoryOf is the row's category when it names one the report knows.

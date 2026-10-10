@@ -67,6 +67,14 @@ func (s *Service) Update(ctx context.Context, spaceID, id uuid.UUID, op Operatio
 		if err != nil {
 			return err
 		}
+		// Parts add up to the row's amount; a new amount leaves them behind.
+		if stored.AmountMinor != old.AmountMinor && len(old.Parts) > 0 {
+			if err := st.deleteParts(ctx, spaceID, id); err != nil {
+				return err
+			}
+		} else {
+			stored.Parts = old.Parts
+		}
 		// What was checked must be what was written (see Create): replayed
 		// again with the row as the columns hold it, before the commit.
 		if _, err := portfolio.Compute(journalReplacing(journal, stored)); err != nil {

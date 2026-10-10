@@ -275,3 +275,50 @@ func TestARowNamingAMemberIsTheirs(t *testing.T) {
 		}
 	}
 }
+
+// A split row counts under its parts' categories (decision Р-36), in the base
+// currency adding up to the row there.
+func TestASplitRowCountsUnderItsParts(t *testing.T) {
+	f := newFamily(t)
+	card := f.account("Карта", account.TypeChecking, "RUB", false)
+	usd := f.account("Доллары", account.TypeChecking, "USD", false)
+	if err := f.md.UpsertFxRates(f.ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: day(t, "2026-09-05"), Rate: decimal.RequireFromString("33.333"), Source: "test"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	food, home, cafe := f.cats["expense/Продукты"], f.cats["expense/Дом"], f.cats["expense/Кафе и рестораны"]
+	split := func(acc uuid.UUID, amount int64, currency string, parts []operation.Part) {
+		t.Helper()
+		op, err := f.ops.Create(f.ctx, f.space, operation.Operation{
+			AccountID: acc, Type: operation.TypeWithdrawal,
+			OccurredOn: day(t, "2026-09-05"), AmountMinor: amount, Currency: currency, CategoryID: &food,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.ops.SetParts(f.ctx, f.space, op.ID, parts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	split(card, -2_340_90, "RUB", []operation.Part{{CategoryID: food, Amount: 1_690_92}, {CategoryID: home, Amount: 649_98}})
+	split(usd, -10_01, "USD", []operation.Part{{CategoryID: food, Amount: 3_33}, {CategoryID: cafe, Amount: 6_68}})
+
+	r, err := f.report.Report(f.ctx, f.space, day(t, "2026-09-01"), day(t, "2026-09-30"), cashflow.Whose{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 10.01 $ at 33.333 is 333.66; its parts 111.00 and 222.66.
+	if r.Expense.Total != 2_340_90+333_66 {
+		t.Errorf("spending = %d, want the two rows", r.Expense.Total)
+	}
+	got := map[uuid.UUID]int64{}
+	for _, id := range []uuid.UUID{food, home, cafe} {
+		if l := line(r.Expense.Lines, id); l != nil {
+			got[id] = l.Total
+		}
+	}
+	if got[food] != 1_690_92+111_00 || got[home] != 649_98 || got[cafe] != 222_66 {
+		t.Errorf("by category = food %d, home %d, cafe %d", got[food], got[home], got[cafe])
+	}
+}

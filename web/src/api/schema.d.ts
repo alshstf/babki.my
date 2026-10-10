@@ -1309,6 +1309,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/{operationId}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Splits a row that can take a category across categories (decision Р-36): 2 to 50 parts, each above zero and of a category the row's own could be (an archived one only where the row was split under it before), adding up to the row's amount. The money report and the budget count each part under its category; the row's own category stays the one it is filed under elsewhere. A later change of the row's amount drops the parts. Anything else is a 400. Nothing the figures are computed from changes. */
+        put: operations["setOperationParts"];
+        post?: never;
+        /** @description Makes a split row its one category's again. */
+        delete: operations["clearOperationParts"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operationId}/withheld-abroad": {
         parameters: {
             query?: never;
@@ -2127,6 +2145,8 @@ export interface components {
              */
             category_id: string | null;
             counterparty: string;
+            /** @description The row split across categories (Operation.parts); empty when it is its one category's */
+            parts: components["schemas"]["OperationPart"][];
             /** @description Whose the row is (Operation.member_id), by the member's username; null for the account owner's */
             member_username: string | null;
             /** @description The purchases a move carried — quantity, cost and day bought — when it carried any */
@@ -3458,6 +3478,18 @@ export interface components {
          * @enum {string}
          */
         OperationType: "buy" | "sell" | "redemption" | "deposit" | "withdrawal" | "dividend" | "coupon" | "amortization" | "fee" | "tax" | "transfer_in" | "transfer_out" | "exchange_out" | "exchange_in" | "spinoff_out" | "spinoff_in" | "split" | "interest" | "conversion";
+        OperationPart: {
+            /** Format: uuid */
+            category_id: string;
+            /**
+             * Format: int64
+             * @description The part's money, above zero; the parts add up to the row's amount without its sign
+             */
+            amount_minor: number;
+        };
+        SetPartsRequest: {
+            parts: components["schemas"]["OperationPart"][];
+        };
         Operation: {
             /** Format: uuid */
             id: string;
@@ -3477,6 +3509,8 @@ export interface components {
              * @description Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account
              */
             member_id?: string | null;
+            /** @description The row split across categories (PUT .../parts, decision Р-36): the money report and the budget count each part under its category; empty when the row is its one category's */
+            parts: components["schemas"]["OperationPart"][];
             /** Format: uuid */
             instrument_id?: string | null;
             type: components["schemas"]["OperationType"];
@@ -6933,6 +6967,61 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setOperationParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPartsRequest"];
+            };
+        };
+        responses: {
+            /** @description The row as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    clearOperationParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The row as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
+            };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

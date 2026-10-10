@@ -1974,6 +1974,49 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/{operationId}/parts:
+    put:
+      tags: [journal]
+      operationId: setOperationParts
+      description: >-
+        Splits a row that can take a category across categories (decision Р-36): 2 to 50 parts,
+        each above zero and of a category the row's own could be (an archived one only where the
+        row was split under it before), adding up to the row's amount. The money report and the
+        budget count each part under its category; the row's own category stays the one it is
+        filed under elsewhere. A later change of the row's amount drops the parts. Anything else
+        is a 400. Nothing the figures are computed from changes.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetPartsRequest" }
+      responses:
+        "200":
+          description: The row as it now stands
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [journal]
+      operationId: clearOperationParts
+      description: Makes a split row its one category's again.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The row as it now stands
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}/withheld-abroad:
     put:
       tags: [journal]
@@ -3006,7 +3049,7 @@ components:
             - $ref: "#/components/schemas/CreditCardTerms"
     ExportOperation:
       type: object
-      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty, member_username]
+      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty, member_username, parts]
       properties:
         id: { type: string, format: uuid }
         type: { type: string }
@@ -3028,6 +3071,10 @@ components:
         created_at: { type: string, format: date-time }
         category_id: { type: string, format: uuid, nullable: true, description: "One of the document's categories" }
         counterparty: { type: string }
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/OperationPart" }
+          description: "The row split across categories (Operation.parts); empty when it is its one category's"
         member_username: { type: string, nullable: true, description: "Whose the row is (Operation.member_id), by the member's username; null for the account owner's" }
         lots:
           type: array
@@ -4133,9 +4180,20 @@ components:
       type: string
       description: "What the entry is. `redemption`: a bond reaching maturity (or a fund's units redeemed, decision Р-13) — computed as a sale, named apart. `exchange_out`/`exchange_in`: the two legs of a securities conversion on one account and day (a receipt into its share, a fund reissued): the parcel travels whole with its purchase days, nothing is realized, and amount_minor is the cost basis that moved, not money. `spinoff_out`/`spinoff_in`: a spin-off — the original keeps every unit (so `spinoff_out` has no quantity) and the new paper arrives with the event's `basis_share` of the cost (0 by default) and the original purchase days. The last four are written only by the corporate-actions registry (`source: registry`) and are never created or deleted through this API."
       enum: [buy, sell, redemption, deposit, withdrawal, dividend, coupon, amortization, fee, tax, transfer_in, transfer_out, exchange_out, exchange_in, spinoff_out, spinoff_in, split, interest, conversion]
+    OperationPart:
+      type: object
+      required: [category_id, amount_minor]
+      properties:
+        category_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64, minimum: 1, description: "The part's money, above zero; the parts add up to the row's amount without its sign" }
+    SetPartsRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts: { type: array, items: { $ref: "#/components/schemas/OperationPart" } }
     Operation:
       type: object
-      required: [id, account_id, type, occurred_on, amount_minor, currency, fee_minor, note, source, created_at, has_undated_lots, assembled_from_lots, categorizable, counterparty]
+      required: [id, account_id, type, occurred_on, amount_minor, currency, fee_minor, note, source, created_at, has_undated_lots, assembled_from_lots, categorizable, counterparty, parts]
       properties:
         id: { type: string, format: uuid }
         account_id: { type: string, format: uuid }
@@ -4143,6 +4201,10 @@ components:
         category_id: { type: string, format: uuid, nullable: true, description: "The family's category the row is filed under (GET /api/v1/categories); null when none" }
         counterparty: { type: string, description: "Who the money came from or went to, as typed or as the source named them; empty when unknown" }
         member_id: { type: string, format: uuid, nullable: true, description: "Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account" }
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/OperationPart" }
+          description: "The row split across categories (PUT .../parts, decision Р-36): the money report and the budget count each part under its category; empty when the row is its one category's"
         instrument_id: { type: string, format: uuid, nullable: true }
         type: { $ref: "#/components/schemas/OperationType" }
         occurred_on: { type: string, description: "Date YYYY-MM-DD" }

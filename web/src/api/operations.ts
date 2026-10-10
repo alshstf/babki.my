@@ -121,6 +121,7 @@ export function useInvalidateJournal() {
     void queryClient.invalidateQueries({ queryKey: ["instrument-holdings"] });
     void queryClient.invalidateQueries({ queryKey: ["instrument-operations"] });
     void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+    void queryClient.invalidateQueries({ queryKey: ["budget"] });
     // What is due on a card, the regular payments and the money ahead are
     // worked out from the journals as well.
     void queryClient.invalidateQueries({ queryKey: ["credit-card"] });
@@ -158,6 +159,29 @@ export function useSetOperationCategory() {
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] });
       void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+      void queryClient.invalidateQueries({ queryKey: ["budget"] });
+    },
+  });
+}
+
+export type OperationPart = components["schemas"]["OperationPart"];
+
+// Splits a row across categories, or makes it one category's again (null;
+// decision Р-36). The journal, the money report and the budget read it.
+export function useSetOperationParts() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ operationId, parts }: { operationId: string; parts: OperationPart[] | null }): Promise<Operation> => {
+      const { data, error, response } = parts
+        ? await api.PUT("/api/v1/operations/{operationId}/parts", { params: { path: { operationId } }, body: { parts } })
+        : await api.DELETE("/api/v1/operations/{operationId}/parts", { params: { path: { operationId } } });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] });
+      void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+      void queryClient.invalidateQueries({ queryKey: ["budget"] });
     },
   });
 }
@@ -177,6 +201,7 @@ export function useSetOperationMember() {
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] });
       void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+      void queryClient.invalidateQueries({ queryKey: ["budget"] });
     },
   });
 }
@@ -196,6 +221,7 @@ export function useFileByRules() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["operations"] });
       void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+      void queryClient.invalidateQueries({ queryKey: ["budget"] });
     },
   });
 }
