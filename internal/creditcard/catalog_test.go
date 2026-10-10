@@ -22,7 +22,7 @@ func TestTheCatalogHolds(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, p := range all {
-		if p.ID == "" || seen[p.ID] || p.Bank == "" || p.Card == "" || len(p.Versions) == 0 {
+		if p.ID == "" || seen[p.ID] || p.Bank == "" || p.Card == "" || len(p.Versions) == 0 || len(p.Watch) == 0 {
 			t.Errorf("product %+v", p)
 		}
 		seen[p.ID] = true

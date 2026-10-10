@@ -26,9 +26,12 @@ var catalogFiles embed.FS
 
 // Product is a bank's card in the catalog.
 type Product struct {
-	ID       string    `yaml:"id"`
-	Bank     string    `yaml:"bank"`
-	Card     string    `yaml:"card"`
+	ID   string `yaml:"id"`
+	Bank string `yaml:"bank"`
+	Card string `yaml:"card"`
+	// Watch are the bank's pages where a new revision of the tariff turns up,
+	// for the monthly check against the bank's documents.
+	Watch    []string  `yaml:"watch"`
 	Versions []Version `yaml:"versions"`
 }
 
