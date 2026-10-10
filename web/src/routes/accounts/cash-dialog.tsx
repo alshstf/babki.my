@@ -34,7 +34,7 @@ import {
   type Operation,
   type OperationType,
 } from "@/api/operations";
-import { createReceipt, matchReceipt, type ReceiptMatch, type ReceiptNew } from "@/api/receipts";
+import { attachReceipt, createReceipt, matchReceipt, type ReceiptMatch, type ReceiptNew } from "@/api/receipts";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { matchRule, useCategories, useCategoryRules } from "@/api/categories";
 import { useMembers } from "@/api/members";
@@ -106,6 +106,9 @@ export function CashDialog({
   const [scanned, setScanned] = useState<Receipt | null>(null);
   const [already, setAlready] = useState<ReceiptMatch | "waiting" | null>(null);
   const [candidates, setCandidates] = useState<ReceiptMatch[]>([]);
+  // A receipt loaded before (a statement, a letter) and waiting for its row:
+  // the row saved or picked here completes it.
+  const [waitingId, setWaitingId] = useState<string | null>(null);
   const [attachFailed, setAttachFailed] = useState(false);
   const allAccounts = useAccounts();
   const photo = useRef<HTMLInputElement>(null);
@@ -125,6 +128,7 @@ export function CashDialog({
     setScanned(null);
     setAlready(null);
     setCandidates([]);
+    setWaitingId(null);
     setAttachFailed(false);
     createOperation.reset();
   });
@@ -157,6 +161,7 @@ export function CashDialog({
     setScanned(null);
     setAlready(null);
     setCandidates([]);
+    setWaitingId(null);
     let text: string | null = null;
     try {
       text = await decodeQrFromImage(file);
@@ -183,8 +188,15 @@ export function CashDialog({
     // Only advice: a lookup that fails leaves the form as filled.
     matchReceipt(receiptQuery(r))
       .then((found) => {
-        if (found.receipt) setAlready(found.written_to ?? "waiting");
-        else setCandidates(found.candidates);
+        if (found.receipt && found.written_to) {
+          setAlready(found.written_to);
+          return;
+        }
+        if (found.receipt) {
+          setAlready("waiting");
+          setWaitingId(found.receipt.id);
+        }
+        setCandidates(found.candidates);
       })
       .catch(() => setCandidates([]));
   };
@@ -192,6 +204,10 @@ export function CashDialog({
   // The receipt completes the row: the one saved here, or the bank's row it
   // was taken for. One whose row was changed past its total waits for one.
   const record = async (r: Receipt, operationId: string) => {
+    if (waitingId) {
+      await attachReceipt(waitingId, operationId).catch(() => undefined);
+      return;
+    }
     const body: ReceiptNew = { ...receiptQuery(r), fp: r.fp, operation_id: operationId, source: "qr" };
     try {
       await createReceipt(body);
@@ -203,7 +219,7 @@ export function CashDialog({
   const attach = (to: ReceiptMatch) => {
     if (!scanned) return;
     setAttachFailed(false);
-    createReceipt({ ...receiptQuery(scanned), fp: scanned.fp, operation_id: to.id, source: "qr" })
+    (waitingId ? attachReceipt(waitingId, to.id) : createReceipt({ ...receiptQuery(scanned), fp: scanned.fp, operation_id: to.id, source: "qr" }))
       .then(() => onOpenChange(false))
       .catch(() => setAttachFailed(true));
   };
@@ -317,7 +333,7 @@ export function CashDialog({
                 </p>
               )}
               {already && (
-                <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="receipt-already">
+                <p className={already === "waiting" ? "text-xs text-muted-foreground" : "text-xs text-amber-700 dark:text-amber-400"} data-testid="receipt-already">
                   {already === "waiting"
                     ? t("cash.receipt.alreadyWaiting")
                     : t("cash.receipt.already", {

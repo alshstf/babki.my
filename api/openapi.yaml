@@ -614,7 +614,8 @@ paths:
       operationId: matchReceipt
       description: >-
         Where a cash receipt goes: `receipt` when it is written already (its numbers fn and fd name it
-        for good), and otherwise `candidates` — the family's spending (a purchase, a payout's refund)
+        for good) — with `written_to`, the row it completes, or when it waits for one, `candidates` —
+        and otherwise `candidates` — the family's spending (a purchase, a payout's refund)
         or earning (a refund, a payout) rows of exactly its total in roubles within a day of its time,
         on any account but a broker's, that no receipt completes yet; nearest first, at most five. The
         bank's row of a card purchase is such a candidate: the receipt completes it rather than
@@ -719,6 +720,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MailboxCheck" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/receipts/{receiptId}/operation:
+    put:
+      tags: [receipts]
+      operationId: attachReceipt
+      description: >-
+        Makes a receipt waiting for a row complete the row named — the one written for it, or the
+        bank's found later — of exactly its total in roubles, the right way; the row is divided by
+        the item rules. 400 for a receipt completing a row already or a row it cannot complete.
+      parameters:
+        - { name: receiptId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttachReceiptRequest" }
+      responses:
+        "200":
+          description: The receipt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Receipt" }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
@@ -3766,6 +3792,11 @@ components:
       properties:
         mailbox: { $ref: "#/components/schemas/Mailbox" }
         result: { $ref: "#/components/schemas/ReceiptImportResult" }
+    AttachReceiptRequest:
+      type: object
+      required: [operation_id]
+      properties:
+        operation_id: { type: string, format: uuid }
     ReceiptSplitResult:
       type: object
       required: [split]

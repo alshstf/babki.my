@@ -86,8 +86,11 @@ func (s *Service) Lookup(ctx context.Context, spaceID uuid.UUID, r Receipt) (Loo
 				return Lookup{}, err
 			}
 			out.WrittenTo = &op
+			return out, nil
 		}
-		return out, nil
+		// Written and waiting for a row: the rows it may complete.
+		out.Candidates, err = s.candidates(ctx, spaceID, written)
+		return out, err
 	case !errors.Is(err, pgx.ErrNoRows):
 		return Lookup{}, err
 	}
@@ -129,6 +132,46 @@ func (s *Service) candidates(ctx context.Context, spaceID uuid.UUID, r Receipt) 
 	return out, nil
 }
 
+// Attach makes a receipt waiting for a row complete opID — the row written
+// for it, or the bank's found later — and divides it by the item rules.
+func (s *Service) Attach(ctx context.Context, spaceID, receiptID, opID uuid.UUID) (Receipt, error) {
+	r, err := scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM receipts WHERE space_id = $1 AND id = $2`, spaceID, receiptID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Receipt{}, ErrNotFound
+	}
+	if err != nil {
+		return Receipt{}, err
+	}
+	if r.OperationID != nil {
+		return Receipt{}, fmt.Errorf("%w: the receipt completes a row already", family.ErrValidation)
+	}
+	if err := s.fits(ctx, spaceID, r, opID); err != nil {
+		return Receipt{}, err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE receipts SET operation_id = $3 WHERE space_id = $1 AND id = $2`, spaceID, receiptID, opID); err != nil {
+		return Receipt{}, fmt.Errorf("receipt: attach: %w", err)
+	}
+	r.OperationID = &opID
+	if _, err := s.split(ctx, spaceID, opID, r.Items); err != nil {
+		return Receipt{}, err
+	}
+	return r, nil
+}
+
+// fits refuses a row a receipt cannot complete: another family's, another
+// total or currency, the wrong way, a move between accounts.
+func (s *Service) fits(ctx context.Context, spaceID uuid.UUID, r Receipt, opID uuid.UUID) error {
+	op, err := s.journal.ByID(ctx, spaceID, opID)
+	if err != nil {
+		return err
+	}
+	if op.Currency != "RUB" || op.AmountMinor != r.signed() || op.TransferGroupID != nil ||
+		op.Type != operation.TypeWithdrawal && op.Type != operation.TypeDeposit {
+		return fmt.Errorf("%w: a receipt completes a spending or an earning of its total in roubles", family.ErrValidation)
+	}
+	return nil
+}
+
 // Create records a receipt, completing its row when it names one: the
 // family's, of exactly its total in roubles, the right way.
 func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, r Receipt) (Receipt, error) {
@@ -136,13 +179,8 @@ func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, r Receipt) (Rec
 		return Receipt{}, err
 	}
 	if r.OperationID != nil {
-		op, err := s.journal.ByID(ctx, spaceID, *r.OperationID)
-		if err != nil {
+		if err := s.fits(ctx, spaceID, r, *r.OperationID); err != nil {
 			return Receipt{}, err
-		}
-		if op.Currency != "RUB" || op.AmountMinor != r.signed() || op.TransferGroupID != nil ||
-			op.Type != operation.TypeWithdrawal && op.Type != operation.TypeDeposit {
-			return Receipt{}, fmt.Errorf("%w: a receipt completes a spending or an earning of its total in roubles", family.ErrValidation)
 		}
 	}
 	r.ID = uuid.New()

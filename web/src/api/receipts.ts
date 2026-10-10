@@ -137,3 +137,13 @@ export function useCheckMailbox() {
     },
   });
 }
+
+// Makes a receipt waiting for a row complete operationId (PUT
+// /api/v1/receipts/{id}/operation).
+export async function attachReceipt(receiptId: string, operationId: string): Promise<void> {
+  const { error, response } = await api.PUT("/api/v1/receipts/{receiptId}/operation", {
+    params: { path: { receiptId } },
+    body: { operation_id: operationId },
+  });
+  if (!response.ok) throw apiError(response, error);
+}

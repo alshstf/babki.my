@@ -23,9 +23,11 @@ fetchMock.mockImplementation((input: Request) => {
   if (url.pathname.endsWith("/receipts/match")) {
     const fd = url.searchParams.get("fd");
     if (fd === "777") return json({ receipt: { id: "r-1" }, written_to: { ...bankRow, occurred_on: "2026-10-09" }, candidates: [] });
+    if (fd === "999") return json({ receipt: { id: "r-wait" }, written_to: null, candidates: [] });
     return json({ receipt: null, written_to: null, candidates: fd === "888" ? [bankRow] : [] });
   }
   if (url.pathname.endsWith("/receipts") && input.method === "POST") return json({ id: "r-2" }, 201);
+  if (url.pathname.endsWith("/operation") && input.method === "PUT") return json({ id: "r-wait" });
   if (url.pathname.endsWith("/operations") && input.method === "POST") return json({ id: "op-new", account_id: "card" }, 201);
   if (url.pathname.endsWith("/accounts")) return json([card]);
   return json([]);
@@ -122,6 +124,20 @@ describe("CashDialog: a receipt's QR code", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     await waitFor(() => expect(posted("/receipts")).toHaveLength(1));
     expect(await posted("/receipts")[0].json()).toMatchObject({ fd: "12345", operation_id: "op-new" });
+  });
+
+  it("gives a receipt waiting for its row the row saved", async () => {
+    decoded.text = "t=20261009T1915&s=1234.50&fn=7380440700000000&i=999&fp=1234567890&n=1";
+    open("expense");
+    snap();
+    expect((await screen.findByTestId("receipt-already")).textContent).toMatch(/ждёт траты: сохраните её/);
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT" && new URL((r as Request).url).pathname.endsWith("/receipts/r-wait/operation"))).toBe(true),
+    );
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toEqual({ operation_id: "op-new" });
+    expect(posted("/receipts")).toHaveLength(0);
   });
 
   it("says nothing more of a receipt not written before", async () => {

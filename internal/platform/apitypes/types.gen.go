@@ -1622,6 +1622,11 @@ type ArrivalsResponse struct {
 	Arrivals []Arrival `json:"arrivals"`
 }
 
+// AttachReceiptRequest defines model for AttachReceiptRequest.
+type AttachReceiptRequest struct {
+	OperationId openapi_types.UUID `json:"operation_id"`
+}
+
 // BackgroundTask defines model for BackgroundTask.
 type BackgroundTask struct {
 	// AccountIds The accounts whose figures are not final until it ends; empty for a task of the whole instance
@@ -4980,6 +4985,9 @@ type ImportReceiptsJSONRequestBody = ImportReceiptsJSONBody
 
 // SetReceiptMailboxJSONRequestBody defines body for SetReceiptMailbox for application/json ContentType.
 type SetReceiptMailboxJSONRequestBody = MailboxSettings
+
+// AttachReceiptJSONRequestBody defines body for AttachReceipt for application/json ContentType.
+type AttachReceiptJSONRequestBody = AttachReceiptRequest
 
 // ShowRecurringJSONRequestBody defines body for ShowRecurring for application/json ContentType.
 type ShowRecurringJSONRequestBody = RecurringKey

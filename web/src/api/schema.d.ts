@@ -411,7 +411,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Where a cash receipt goes: `receipt` when it is written already (its numbers fn and fd name it for good), and otherwise `candidates` — the family's spending (a purchase, a payout's refund) or earning (a refund, a payout) rows of exactly its total in roubles within a day of its time, on any account but a broker's, that no receipt completes yet; nearest first, at most five. The bank's row of a card purchase is such a candidate: the receipt completes it rather than standing for a second purchase. */
+        /** @description Where a cash receipt goes: `receipt` when it is written already (its numbers fn and fd name it for good) — with `written_to`, the row it completes, or when it waits for one, `candidates` — and otherwise `candidates` — the family's spending (a purchase, a payout's refund) or earning (a refund, a payout) rows of exactly its total in roubles within a day of its time, on any account but a broker's, that no receipt completes yet; nearest first, at most five. The bank's row of a card purchase is such a candidate: the receipt completes it rather than standing for a second purchase. */
         get: operations["matchReceipt"];
         put?: never;
         post?: never;
@@ -468,6 +468,23 @@ export interface paths {
         put?: never;
         /** @description Reads the letters that came since the last reading (the program also does it every hour) and takes the receipts they hold, as POST /receipts/import does: the receipt's QR line in the letter, or its fiscal numbers, total and time in the text. A failure to reach or read the box is `mailbox.problem`, not an error of the call. */
         post: operations["checkReceiptMailbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/receipts/{receiptId}/operation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Makes a receipt waiting for a row complete the row named — the one written for it, or the bank's found later — of exactly its total in roubles, the right way; the row is divided by the item rules. 400 for a receipt completing a row already or a row it cannot complete. */
+        put: operations["attachReceipt"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3008,6 +3025,10 @@ export interface components {
             mailbox: components["schemas"]["Mailbox"];
             result: components["schemas"]["ReceiptImportResult"];
         };
+        AttachReceiptRequest: {
+            /** Format: uuid */
+            operation_id: string;
+        };
         ReceiptSplitResult: {
             split: boolean;
         };
@@ -5491,6 +5512,36 @@ export interface operations {
                     "application/json": components["schemas"]["MailboxCheck"];
                 };
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    attachReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                receiptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachReceiptRequest"];
+            };
+        };
+        responses: {
+            /** @description The receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Receipt"];
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
