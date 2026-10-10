@@ -77,7 +77,7 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		AccountID: id, Limit: req.LimitMinor, StatementDay: req.StatementDay, PaymentDays: req.PaymentDays,
 		GraceKind: GraceKind(req.GraceKind), GraceDays: req.GraceDays, MinFloor: req.MinFloorMinor,
 		WindowMonths: req.WindowMonths, GraceMonths: req.GraceMonths, GraceAllLost: req.GraceAllLost,
-		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull,
+		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
 	}
 	var err error
 	if req.OpenedOn.IsSpecified() && !req.OpenedOn.IsNull() {
@@ -158,14 +158,19 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 	if t.OpenedOn != nil {
 		opened = nullable.NewNullableWithValue(date(*t.OpenedOn))
 	}
-	return apitypes.CreditCardTerms{
+	out := apitypes.CreditCardTerms{
 		LimitMinor: t.Limit, StatementDay: t.StatementDay, PaymentDays: t.PaymentDays,
 		GraceKind: apitypes.CreditCardTermsGraceKind(t.GraceKind), GraceDays: t.GraceDays,
 		MinPercent: t.MinPercent.String(), MinFloorMinor: t.MinFloor,
 		AnnualRate: t.AnnualRate.String(), OwnRate: own,
 		WindowMonths: t.WindowMonths, GraceMonths: t.GraceMonths, OpenedOn: opened,
 		GraceAllLost: t.GraceAllLost, PayByPeriodEnd: t.PayByPeriodEnd, ChargesInFull: t.ChargesInFull,
+		TransferCategories: t.TransferCategories,
 	}
+	if out.TransferCategories == nil {
+		out.TransferCategories = []uuid.UUID{}
+	}
+	return out
 }
 
 func cardAPI(c Card) apitypes.CreditCard {

@@ -14,6 +14,8 @@ import { formatDate } from "@/lib/dates";
 import { SOON_DAYS, daysUntil } from "@/lib/card-due";
 import { cn } from "@/lib/utils";
 import { PushToggle } from "@/components/push-toggle";
+import { useCategories } from "@/api/categories";
+import { CategorySelect, categoryLabel } from "@/components/category-picker";
 
 const pct = (s: string) => Number(s).toLocaleString("ru-RU");
 
@@ -230,6 +232,7 @@ interface Form {
   graceAllLost: boolean;
   payByPeriodEnd: boolean;
   chargesInFull: boolean;
+  transferCategories: string[];
 }
 
 function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; card?: CreditCard; onClose: () => void }) {
@@ -252,7 +255,9 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     graceAllLost: terms?.grace_all_lost ?? false,
     payByPeriodEnd: terms?.pay_by_period_end ?? false,
     chargesInFull: terms?.charges_in_full ?? false,
+    transferCategories: terms?.transfer_categories ?? [],
   });
+  const categories = useCategories();
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const num = (s: string) => Number(s.replace(",", "."));
   const int = (s: string, lo: number, hi: number) => /^\d+$/.test(s) && Number(s) >= lo && Number(s) <= hi;
@@ -282,6 +287,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
         grace_all_lost: f.graceAllLost,
         pay_by_period_end: f.payByPeriodEnd,
         charges_in_full: f.chargesInFull,
+        transfer_categories: f.transferCategories,
         min_percent: String(num(f.minPercent)),
         min_floor_minor: floor,
         annual_rate: String(num(f.rate)),
@@ -369,6 +375,33 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           {field("minPercent", t("card.minPercent"))}
           {field("minFloor", t("card.minFloor", { currency: account.currency }))}
           {toggle("chargesInFull", t("card.chargesInFull"), t("card.chargesInFullHint"))}
+          <div className="grid gap-1" data-testid="card-transfer-categories">
+            <Label htmlFor="card-transfer-add">{t("card.transferCategories")}</Label>
+            {f.transferCategories.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {f.transferCategories.map((id) => (
+                  <Button
+                    key={id}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    aria-label={t("card.transferRemove", { name: categoryLabel(categories.data ?? [], id) ?? "" })}
+                    onClick={() => set({ transferCategories: f.transferCategories.filter((x) => x !== id) })}
+                  >
+                    {categoryLabel(categories.data ?? [], id) ?? "?"} ×
+                  </Button>
+                ))}
+              </div>
+            )}
+            <CategorySelect
+              id="card-transfer-add"
+              categories={categories.data ?? []}
+              kind="expense"
+              value={null}
+              onChange={(id) => id && !f.transferCategories.includes(id) && set({ transferCategories: [...f.transferCategories, id] })}
+            />
+            <p className="text-xs text-muted-foreground">{t("card.transferCategoriesHint")}</p>
+          </div>
           {field("rate", t("card.rate"))}
           {field("ownRate", t("card.ownRate"), t("card.ownRateHint"))}
           {save.isError && (

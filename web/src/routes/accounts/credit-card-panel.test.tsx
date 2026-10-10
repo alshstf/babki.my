@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -48,7 +48,8 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
   terms: { limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "statement", grace_days: 0,
     min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: benefit?.own_rate_known ? "15" : null,
-    window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false },
+    window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: false,
+    transfer_categories: [] },
   status: status(over), by_journal: byJournal, benefit,
 });
 
@@ -96,6 +97,7 @@ describe("CreditCardPanel", () => {
       limit_minor: 150_000_00, statement_day: 1, payment_days: 20, grace_kind: "long", grace_days: 120,
       min_percent: "3", min_floor_minor: 300_00, annual_rate: "39.9", own_rate: null,
       window_months: 0, grace_months: 0, opened_on: null, grace_all_lost: false, pay_by_period_end: false, charges_in_full: true,
+      transfer_categories: [],
     });
   });
 
@@ -116,6 +118,29 @@ describe("CreditCardPanel", () => {
       grace_all_lost: true, pay_by_period_end: true, charges_in_full: true, min_percent: "3", min_floor_minor: 500_00,
       annual_rate: "59.99",
     });
+  });
+
+  it("names the categories the bank takes for transfers", async () => {
+    answer({
+      "/credit-card": card(),
+      "/categories": [
+        { id: "c-food", kind: "expense", name: "Продукты", parent_id: null, archived: false, position: 1 },
+        { id: "c-wallets", kind: "expense", name: "Кошельки и ставки", parent_id: null, archived: false, position: 2 },
+      ],
+    });
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Изменить условия" }));
+    const box = await screen.findByTestId("card-transfer-categories");
+    // Radix's select opens on Enter in jsdom, and scrolls to its option.
+    Element.prototype.scrollIntoView ??= () => {};
+    await waitFor(() => expect(within(box).getByTestId("category-select")).toBeTruthy());
+    fireEvent.keyDown(within(box).getByRole("combobox"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Кошельки и ставки" }));
+    expect(await within(box).findByRole("button", { name: "Убрать «Кошельки и ставки»" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({ transfer_categories: ["c-wallets"] });
   });
 
   it("says when the grace is off the whole debt, and what brings it back", async () => {

@@ -2091,6 +2091,9 @@ type CreditCardTerms struct {
 	// StatementDay The day of the month the bank closes a statement period; a short month's last day stands for a later one
 	StatementDay int `json:"statement_day"`
 
+	// TransferCategories The family's spending categories the bank takes for transfers, not purchases (a wallet's or a broker's top-up, a bet): their spending on this card, subcategories with them, has no grace — interest from its day. 400 for an id that is not a spending category of the family
+	TransferCategories []openapi_types.UUID `json:"transfer_categories"`
+
 	// WindowMonths For grace_kind windows: the periods of purchases in a window; 0 otherwise
 	WindowMonths int `json:"window_months"`
 }
