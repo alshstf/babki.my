@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { ScanLine } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -23,7 +24,9 @@ import {
   minorToInput,
   parseToMinor,
 } from "@/lib/money";
-import { localToday } from "@/lib/dates";
+import { formatDate, localToday } from "@/lib/dates";
+import { parseReceiptQr, receiptIsIncoming } from "@/lib/receipt-qr";
+import { decodeQrFromImage } from "@/lib/qr-decode";
 import {
   useSaveOperation,
   isConflict,
@@ -92,6 +95,10 @@ export function CashDialog({
   const [chosen, setChosen] = useState(false);
   const [memberId, setMemberId] = useState<string | null>(null);
   const [pickedId, setPickedId] = useState(account.id);
+  // Reading a receipt's QR code: what happened last, for the line under the
+  // button.
+  const [receipt, setReceipt] = useState<"reading" | "filled" | "noCode" | "notReceipt" | null>(null);
+  const photo = useRef<HTMLInputElement>(null);
   const target = accounts?.find((a) => a.id === pickedId) ?? account;
 
   useOnOpen(open, () => {
@@ -104,6 +111,7 @@ export function CashDialog({
     setChosen(editing?.category_id != null);
     setMemberId(editing?.member_id ?? null);
     setPickedId(account.id);
+    setReceipt(null);
     createOperation.reset();
   });
 
@@ -125,6 +133,36 @@ export function CashDialog({
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
   const valid = amountValid && occurredOn !== "";
+
+  // A photo of a receipt fills the total, the day and which way the money
+  // went; the shop is not in the code, the person names it. The fiscal
+  // numbers go to the note: they name the receipt for good.
+  const readReceipt = async (file: File | undefined) => {
+    if (!file) return;
+    setReceipt("reading");
+    let text: string | null = null;
+    try {
+      text = await decodeQrFromImage(file);
+    } catch {
+      text = null;
+    }
+    if (!text) {
+      setReceipt("noCode");
+      return;
+    }
+    const r = parseReceiptQr(text);
+    if (!r) {
+      setReceipt("notReceipt");
+      return;
+    }
+    changeType(receiptIsIncoming(r.kind) ? "deposit" : "withdrawal");
+    setAmount(minorToInput(r.amountMinor));
+    setOccurredOn(r.date);
+    if (note.trim() === "") {
+      setNote(t("cash.receipt.note", { date: formatDate(r.date), time: r.time, fn: r.fn, fd: r.fd }));
+    }
+    setReceipt("filled");
+  };
 
   const submit = () => {
     if (!amountValid || parsed === null) return;
@@ -200,6 +238,41 @@ export function CashDialog({
               </SelectContent>
             </Select>
           </div>
+          {preset && !editing && (
+            <div className="grid gap-1">
+              <input
+                ref={photo}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                data-testid="receipt-photo"
+                onChange={(e) => {
+                  void readReceipt(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="justify-self-start"
+                disabled={receipt === "reading"}
+                onClick={() => photo.current?.click()}
+              >
+                <ScanLine className="size-4" />
+                {t("cash.receipt.button")}
+              </Button>
+              {receipt && (
+                <p
+                  className={receipt === "noCode" || receipt === "notReceipt" ? "text-xs text-amber-700 dark:text-amber-400" : "text-xs text-muted-foreground"}
+                  data-testid="receipt-status"
+                >
+                  {t(`cash.receipt.${receipt}`)}
+                </p>
+              )}
+            </div>
+          )}
           <AmountField
             id="cash-amount"
             label={t("cash.amount", { currency: target.currency })}
