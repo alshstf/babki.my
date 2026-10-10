@@ -30,6 +30,7 @@ paths:
       parameters:
         - { name: months, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 24, default: 12 } }
         - { name: account_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Only this account's; absent, every active account of the family" }
+        - { name: instrument_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Only this paper's" }
       responses:
         "200":
           description: The forecast

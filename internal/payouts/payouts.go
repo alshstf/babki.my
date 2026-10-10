@@ -106,9 +106,15 @@ type holding struct {
 	quantity decimal.Decimal
 }
 
-// Forecast is the payouts of the next months — of one account, or of every
-// active account of the space when accountID is nil.
-func (s *Service) Forecast(ctx context.Context, spaceID uuid.UUID, months int, accountID *uuid.UUID) (Forecast, error) {
+// Scope narrows a forecast to one account, one paper, or both; the zero
+// value is every paper of every active account.
+type Scope struct {
+	AccountID    *uuid.UUID
+	InstrumentID *uuid.UUID
+}
+
+// Forecast is the payouts of the next months within scope.
+func (s *Service) Forecast(ctx context.Context, spaceID uuid.UUID, months int, scope Scope) (Forecast, error) {
 	if months < 1 || months > MaxMonths {
 		return Forecast{}, fmt.Errorf("%w: a forecast looks 1 to %d months ahead", family.ErrValidation, MaxMonths)
 	}
@@ -126,9 +132,12 @@ func (s *Service) Forecast(ctx context.Context, spaceID uuid.UUID, months int, a
 	}
 	f.BaseCurrency = sp.BaseCurrency
 
-	held, err := s.holdings(ctx, spaceID, accountID)
+	held, err := s.holdings(ctx, spaceID, scope.AccountID)
 	if err != nil {
 		return Forecast{}, err
+	}
+	if scope.InstrumentID != nil {
+		held = map[uuid.UUID][]holding{*scope.InstrumentID: held[*scope.InstrumentID]}
 	}
 	ids := make([]uuid.UUID, 0, len(held))
 	for id := range held {

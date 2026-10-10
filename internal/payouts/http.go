@@ -43,16 +43,21 @@ func (h *Handler) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 		months = n
 	}
-	var accountID *uuid.UUID
-	if raw := q.Get("account_id"); raw != "" {
-		id, err := uuid.Parse(raw)
-		if err != nil {
-			httpjson.Error(w, http.StatusBadRequest, "account_id must be a uuid")
-			return
+	var scope Scope
+	for _, f := range []struct {
+		name string
+		into **uuid.UUID
+	}{{"account_id", &scope.AccountID}, {"instrument_id", &scope.InstrumentID}} {
+		if raw := q.Get(f.name); raw != "" {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				httpjson.Error(w, http.StatusBadRequest, f.name+" must be a uuid")
+				return
+			}
+			*f.into = &id
 		}
-		accountID = &id
 	}
-	f, err := h.svc.Forecast(r.Context(), p.SpaceID, months, accountID)
+	f, err := h.svc.Forecast(r.Context(), p.SpaceID, months, scope)
 	if err != nil {
 		family.WriteError(w, err)
 		return

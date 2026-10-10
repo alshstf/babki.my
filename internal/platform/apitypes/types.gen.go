@@ -3318,6 +3318,9 @@ type GetPayoutsParams struct {
 
 	// AccountId Only this account's; absent, every active account of the family
 	AccountId *openapi_types.UUID `form:"account_id,omitempty" json:"account_id,omitempty"`
+
+	// InstrumentId Only this paper's
+	InstrumentId *openapi_types.UUID `form:"instrument_id,omitempty" json:"instrument_id,omitempty"`
 }
 
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
