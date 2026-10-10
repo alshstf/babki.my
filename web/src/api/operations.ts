@@ -156,6 +156,25 @@ export function useSetOperationCategory() {
   });
 }
 
+// Says whose a row is, or gives it back to the account's owner (null).
+export function useSetOperationMember() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ operationId, memberId }: { operationId: string; memberId: string | null }): Promise<Operation> => {
+      const { data, error, response } = await api.PUT("/api/v1/operations/{operationId}/member", {
+        params: { path: { operationId } },
+        body: { member_id: memberId },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ["operations", data.account_id] });
+      void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+    },
+  });
+}
+
 // Files the unfiled rows of one account, or of the whole family, by the
 // family's rules; answers how many it filed.
 export function useFileByRules() {

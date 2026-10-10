@@ -76,6 +76,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
 	srv.Mount("POST /api/v1/operations/file-by-rules", edit(h.handleFileByRules))
 	srv.Mount("PUT /api/v1/operations/{operationId}/category", edit(h.handleSetCategory))
+	srv.Mount("PUT /api/v1/operations/{operationId}/member", edit(h.handleSetMember))
 	srv.Mount("PUT /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleStateWithheld))
 	srv.Mount("DELETE /api/v1/operations/{operationId}/withheld-abroad", edit(h.handleClearWithheld))
 	srv.Mount("POST /api/v1/operations/arrivals", edit(h.handleCreateArrival))
@@ -147,6 +148,9 @@ func toAPI(o Operation) apitypes.Operation {
 	}
 	if o.CategoryID != nil {
 		out.CategoryId = nullable.NewNullableWithValue(*o.CategoryID)
+	}
+	if o.MemberID != nil {
+		out.MemberId = nullable.NewNullableWithValue(*o.MemberID)
 	}
 	// The mode and its kind are set together and are both absent when
 	// nobody said where the operation happened.
@@ -602,6 +606,33 @@ func (h *Handler) handleFileByRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, apitypes.FileByRulesResponse{Filed: filed})
+}
+
+func (h *Handler) handleSetMember(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathOperationID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.SetMemberRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	if !req.MemberId.IsSpecified() {
+		httpjson.Error(w, http.StatusBadRequest, "member_id is required; null gives the row back to the account's owner")
+		return
+	}
+	var memberID *uuid.UUID
+	if !req.MemberId.IsNull() {
+		v := req.MemberId.MustGet()
+		memberID = &v
+	}
+	updated, err := h.svc.SetMember(r.Context(), p.SpaceID, id, memberID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(updated))
 }
 
 func (h *Handler) handleSetCategory(w http.ResponseWriter, r *http.Request) {

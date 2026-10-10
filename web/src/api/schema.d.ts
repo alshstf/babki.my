@@ -841,6 +841,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/{operationId}/member": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Says whose a row is — the member who spent or earned it, on a shared card both partners pay with — or that it is the account owner's (null). Any row that can take a category (Operation.categorizable), a broker's included; a member of another family, or a row of another kind, is a 400. An import keeps it as it keeps a category. Nothing the figures are computed from changes; the money report reads it (GET /api/v1/cashflow, `member`). */
+        put: operations["setOperationMember"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operationId}/category": {
         parameters: {
             query?: never;
@@ -1601,6 +1618,7 @@ export interface components {
             owner_username: string | null;
             valued_by_balance: boolean;
             trades_abroad: boolean;
+            kept_by_operations: boolean;
             /** Format: date-time */
             created_at: string;
             /** @description Balance marks, oldest first */
@@ -1649,6 +1667,8 @@ export interface components {
              */
             category_id: string | null;
             counterparty: string;
+            /** @description Whose the row is (Operation.member_id), by the member's username; null for the account owner's */
+            member_username: string | null;
             /** @description The purchases a move carried — quantity, cost and day bought — when it carried any */
             lots: components["schemas"]["ExportLot"][];
         };
@@ -2102,6 +2122,11 @@ export interface components {
             category_id?: string | null;
             /** @description Who the money came from or went to, as typed or as the source named them; empty when unknown */
             counterparty: string;
+            /**
+             * Format: uuid
+             * @description Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account
+             */
+            member_id?: string | null;
             /** Format: uuid */
             instrument_id?: string | null;
             type: components["schemas"]["OperationType"];
@@ -2271,6 +2296,11 @@ export interface components {
             category_id?: string | null;
             /** @description Who the money came from or went to. On an update, omitting it clears it. */
             counterparty?: string;
+            /**
+             * Format: uuid
+             * @description Whose the row is (Operation.member_id): a member of the family, on a row that can take a category. On an update, omitting it clears it.
+             */
+            member_id?: string | null;
             /** @description Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow. */
             split_ratio?: string | null;
             /**
@@ -2320,6 +2350,13 @@ export interface components {
         };
         ReorderCategoryRulesRequest: {
             ids: string[];
+        };
+        SetMemberRequest: {
+            /**
+             * Format: uuid
+             * @description The member whose the row is; null gives it back to the account's owner
+             */
+            member_id: string | null;
         };
         SetCategoryRequest: {
             /**
@@ -3002,7 +3039,7 @@ export interface operations {
                 from: string;
                 /** @description Last day, YYYY-MM-DD; at most 120 months after `from`'s month */
                 to: string;
-                /** @description A member's id: only the accounts personal to them. `shared`: only the shared accounts. Absent: the whole family. */
+                /** @description A member's id: only what is theirs — rows they are named on (Operation.member_id), and rows naming nobody on the accounts personal to them. `shared`: rows naming nobody on the shared accounts. Absent: the whole family. */
                 member?: string;
             };
             header?: never;
@@ -4628,6 +4665,36 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    setOperationMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description The row as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     setOperationCategory: {

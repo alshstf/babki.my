@@ -251,7 +251,8 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 	out := apitypes.ExportAccount{
 		Id: a.ID, Name: a.Name, Type: string(a.Type), Currency: a.Currency, Institution: a.Institution,
 		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance, TradesAbroad: a.TradesAbroad,
-		CreatedAt: a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
+		KeptByOperations: a.KeptByOperations,
+		CreatedAt:        a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
 		WithheldStated: []apitypes.ExportWithheldStated{},
 	}
 	for _, w := range stated {
@@ -266,7 +267,7 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		out.Balances = append(out.Balances, apitypes.ExportBalance{AsOf: m.AsOf.Format(time.DateOnly), AmountMinor: m.AmountMinor})
 	}
 	for _, o := range ops {
-		out.Operations = append(out.Operations, exportOperation(o))
+		out.Operations = append(out.Operations, exportOperation(o, usernames))
 	}
 	return out
 }
@@ -278,7 +279,7 @@ func boolRank(b bool) int {
 	return 0
 }
 
-func exportOperation(o operation.Operation) apitypes.ExportOperation {
+func exportOperation(o operation.Operation, usernames map[uuid.UUID]string) apitypes.ExportOperation {
 	out := apitypes.ExportOperation{
 		Id: o.ID, Type: string(o.Type), OccurredOn: o.OccurredOn.Format(time.DateOnly),
 		SettledOn: nullable.NewNullNullable[string](), InstrumentId: nullable.NewNullNullable[uuid.UUID](),
@@ -289,6 +290,12 @@ func exportOperation(o operation.Operation) apitypes.ExportOperation {
 		Source: o.Source, ExternalId: nullable.NewNullNullable[string](),
 		CreatedAt: o.CreatedAt, Lots: []apitypes.ExportLot{},
 		CategoryId: nullable.NewNullNullable[uuid.UUID](), Counterparty: o.Counterparty,
+		MemberUsername: nullable.NewNullNullable[string](),
+	}
+	if o.MemberID != nil {
+		if name, ok := usernames[*o.MemberID]; ok {
+			out.MemberUsername = nullable.NewNullableWithValue(name)
+		}
 	}
 	if o.CategoryID != nil {
 		out.CategoryId = nullable.NewNullableWithValue(*o.CategoryID)

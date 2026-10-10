@@ -680,6 +680,9 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 		if err := st.checkCategory(ctx, spaceID, op, nil); err != nil {
 			return err
 		}
+		if err := st.checkMember(ctx, spaceID, op); err != nil {
+			return err
+		}
 		removeIDs, accounts, err := replacedRows(ctx, st, spaceID, replace)
 		if err != nil {
 			return err

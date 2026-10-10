@@ -280,3 +280,44 @@ func mkAccountOfType(t *testing.T, url string, c *http.Client, name, typ string)
 	apitest.Decode(t, resp, &a)
 	return a.ID
 }
+
+// Whose a row is can be set on any money row, a member of the family only,
+// and given back to the account's owner.
+func TestWhoseARowIsIsSetOnItsOwn(t *testing.T) {
+	url, c := newAPI(t)
+	card := mkAccountOfType(t, url, c, "Общая карта", "checking")
+	var me struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/auth/me", ""), &me)
+	row := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal","occurred_on":"2026-09-01","amount_minor":-50000,"currency":"RUB"}`, card))
+	put := func(body string) *http.Response {
+		return apitest.Do(t, c, "PUT", url+"/api/v1/operations/"+row+"/member", body)
+	}
+	resp := put(fmt.Sprintf(`{"member_id":%q}`, me.User.ID))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("naming the owner = %s", status(t, resp))
+	}
+	var got struct {
+		MemberID *string `json:"member_id"`
+	}
+	apitest.Decode(t, resp, &got)
+	if got.MemberID == nil || *got.MemberID != me.User.ID {
+		t.Errorf("the row after = %+v", got)
+	}
+	if r := put(fmt.Sprintf(`{"member_id":%q}`, uuid.NewString())); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("naming a stranger = %s, want 400", status(t, r))
+	}
+	if r := put(`{}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("no member_id = %s, want 400", status(t, r))
+	}
+	var back struct {
+		MemberID *string `json:"member_id"`
+	}
+	apitest.Decode(t, put(`{"member_id":null}`), &back)
+	if back.MemberID != nil {
+		t.Errorf("given back = %+v, want nobody named", back)
+	}
+}

@@ -278,6 +278,7 @@ export function AccountDetailPage() {
           onEdit={readOnly ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
           accountName={(id) => accounts.data?.find((a) => a.id === id)?.name}
           instrumentLinks
+          accountShared={account.owner_user_id == null}
           papers={(positions.data?.positions ?? []).map((p) => ({
             id: p.instrument.id,
             name: p.instrument.name,

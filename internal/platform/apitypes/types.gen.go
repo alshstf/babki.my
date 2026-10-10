@@ -1572,7 +1572,10 @@ type CreateOperationRequest struct {
 	// FeeMinor What this operation cost to make, in `currency`, as a POSITIVE figure whichever way `amount_minor` went — it is money charged, never money returned. That is why the floor here is 0 rather than the -10^15 the amount gets: a negative fee is refused by a rule of its own. Omitted or 0 means no fee. The ceiling is the same 10^15 minor units the amount stops at, for the same reason — it is money in the same currency on the same row. Past either end, 400.
 	FeeMinor     *int64                                `json:"fee_minor,omitempty"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
-	Note         *string                               `json:"note,omitempty"`
+
+	// MemberId Whose the row is (Operation.member_id): a member of the family, on a row that can take a category. On an update, omitting it clears it.
+	MemberId nullable.Nullable[openapi_types.UUID] `json:"member_id,omitempty"`
+	Note     *string                               `json:"note,omitempty"`
 
 	// OccurredOn Date YYYY-MM-DD, from 1900-01-01 (a typo guard, not a valuation limit) to today with one day of slack past the UTC boundary for zones east of it; outside the range, 400.
 	OccurredOn string `json:"occurred_on"`
@@ -1658,12 +1661,13 @@ type ErrorResponse struct {
 // ExportAccount defines model for ExportAccount.
 type ExportAccount struct {
 	// Balances Balance marks, oldest first
-	Balances    []ExportBalance    `json:"balances"`
-	CreatedAt   time.Time          `json:"created_at"`
-	Currency    string             `json:"currency"`
-	Id          openapi_types.UUID `json:"id"`
-	Institution string             `json:"institution"`
-	Name        string             `json:"name"`
+	Balances         []ExportBalance    `json:"balances"`
+	CreatedAt        time.Time          `json:"created_at"`
+	Currency         string             `json:"currency"`
+	Id               openapi_types.UUID `json:"id"`
+	Institution      string             `json:"institution"`
+	KeptByOperations bool               `json:"kept_by_operations"`
+	Name             string             `json:"name"`
 
 	// Operations The journal as stored, in the order it is folded
 	Operations []ExportOperation `json:"operations"`
@@ -1774,7 +1778,10 @@ type ExportOperation struct {
 
 	// Lots The purchases a move carried — quantity, cost and day bought — when it carried any
 	Lots []ExportLot `json:"lots"`
-	Note string      `json:"note"`
+
+	// MemberUsername Whose the row is (Operation.member_id), by the member's username; null for the account owner's
+	MemberUsername nullable.Nullable[string] `json:"member_username"`
+	Note           string                    `json:"note"`
 
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
@@ -2185,7 +2192,10 @@ type Operation struct {
 	// InBaseGap Which term stopped `in_base`. Set exactly when `in_base` is null and `currency` differs from the base currency; null when `in_base` is present or there was nothing to convert. Published wherever `in_base` is: on the journal listing only.
 	InBaseGap    nullable.Nullable[OperationInBaseGap] `json:"in_base_gap,omitempty"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
-	Note         string                                `json:"note"`
+
+	// MemberId Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account
+	MemberId nullable.Nullable[openapi_types.UUID] `json:"member_id,omitempty"`
+	Note     string                                `json:"note"`
 
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
@@ -2504,6 +2514,12 @@ type SetBalanceRequest struct {
 type SetCategoryRequest struct {
 	// CategoryId The category to file the row under; null takes it out of its category
 	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id"`
+}
+
+// SetMemberRequest defines model for SetMemberRequest.
+type SetMemberRequest struct {
+	// MemberId The member whose the row is; null gives it back to the account's owner
+	MemberId nullable.Nullable[openapi_types.UUID] `json:"member_id"`
 }
 
 // SetupRequest Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400.
@@ -3170,7 +3186,7 @@ type GetCashflowParams struct {
 	// To Last day, YYYY-MM-DD; at most 120 months after `from`'s month
 	To string `form:"to" json:"to"`
 
-	// Member A member's id: only the accounts personal to them. `shared`: only the shared accounts. Absent: the whole family.
+	// Member A member's id: only what is theirs — rows they are named on (Operation.member_id), and rows naming nobody on the accounts personal to them. `shared`: rows naming nobody on the shared accounts. Absent: the whole family.
 	Member *string `form:"member,omitempty" json:"member,omitempty"`
 }
 
@@ -3311,6 +3327,9 @@ type UpdateOperationJSONRequestBody = CreateOperationRequest
 
 // SetOperationCategoryJSONRequestBody defines body for SetOperationCategory for application/json ContentType.
 type SetOperationCategoryJSONRequestBody = SetCategoryRequest
+
+// SetOperationMemberJSONRequestBody defines body for SetOperationMember for application/json ContentType.
+type SetOperationMemberJSONRequestBody = SetMemberRequest
 
 // StatePurchasesJSONRequestBody defines body for StatePurchases for application/json ContentType.
 type StatePurchasesJSONRequestBody = StatePurchasesRequest

@@ -50,19 +50,26 @@ func NewService(j journals, acc accounts, cats categories, sp spaces, rates mark
 	return &Service{journal: j, accounts: acc, categories: cats, spaces: sp, rates: rates}
 }
 
-// Whose narrows a report to one member's personal accounts (UserID) or to the
-// shared ones (Shared); the zero value is the whole family.
+// Whose narrows a report to one member's money (UserID) or to the family's
+// shared money (Shared); the zero value is the whole family.
 type Whose struct {
 	UserID *uuid.UUID
 	Shared bool
 }
 
-func (w Whose) covers(a account.Account) bool {
+// covers reports whether a row on account a is the report's: a row naming a
+// member (operation.Operation.MemberID) is that member's, any other the
+// account owner's — the family's on a shared account.
+func (w Whose) covers(op operation.Operation, a account.Account) bool {
+	owner := a.OwnerUserID
+	if op.MemberID != nil {
+		owner = op.MemberID
+	}
 	switch {
 	case w.Shared:
-		return a.OwnerUserID == nil
+		return owner == nil
 	case w.UserID != nil:
-		return a.OwnerUserID != nil && *a.OwnerUserID == *w.UserID
+		return owner != nil && *owner == *w.UserID
 	}
 	return true
 }
@@ -86,26 +93,30 @@ func (s *Service) Report(ctx context.Context, spaceID uuid.UUID, from, to time.T
 	if err != nil {
 		return Report{}, err
 	}
-	covered := map[uuid.UUID]account.Account{}
+	byID := map[uuid.UUID]account.Account{}
 	for _, a := range list {
-		if whose.covers(a.Account) {
-			covered[a.ID] = a.Account
-		}
+		byID[a.ID] = a.Account
 	}
 	cats, err := s.categories.List(ctx, spaceID)
 	if err != nil {
 		return Report{}, err
 	}
-	ops, err := s.journal.ListMoneyFlows(ctx, spaceID, from, to)
+	all, err := s.journal.ListMoneyFlows(ctx, spaceID, from, to)
 	if err != nil {
 		return Report{}, err
+	}
+	var ops []operation.Operation
+	for _, op := range all {
+		if a, ok := byID[op.AccountID]; ok && whose.covers(op, a) {
+			ops = append(ops, op)
+		}
 	}
 
-	entries, err := s.convert(ctx, &r, ops, covered)
+	entries, err := s.convert(ctx, &r, ops, byID)
 	if err != nil {
 		return Report{}, err
 	}
-	assemble(&r, entries, covered, cats)
+	assemble(&r, entries, byID, cats)
 	return r, nil
 }
 

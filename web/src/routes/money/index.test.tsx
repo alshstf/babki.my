@@ -139,7 +139,7 @@ describe("MoneyPage", () => {
     renderPage();
     await screen.findByTestId("money-expense");
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Чьи счета" }), { key: "Enter" });
-    fireEvent.click(await screen.findByRole("option", { name: "Личные: Александр" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Александр" }));
     await waitFor(() => expect(asked.some((u) => u.searchParams.get("member") === "u-1")).toBe(true));
 
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Период" }), { key: "Enter" });
