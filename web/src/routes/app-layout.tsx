@@ -39,7 +39,7 @@ function NavLink({
       to={to}
       aria-label={label}
       title={label}
-      className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent [&.active]:bg-accent"
+      className="flex shrink-0 items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-accent sm:px-3 [&.active]:bg-accent"
     >
       {icon} <span className="hidden sm:inline">{label}</span>
     </Link>
@@ -63,7 +63,9 @@ export function AppLayout() {
           <div className="px-4 py-3 text-lg font-bold tracking-tight md:py-4">
             {t("app.name")}
           </div>
-          <nav className="flex flex-1 gap-1 px-2 md:grid md:content-start">
+          {/* Six icons fill a phone's width: narrower padding there, and on a
+              narrower phone still the menu scrolls rather than the page. */}
+          <nav className="flex min-w-0 flex-1 gap-1 overflow-x-auto px-2 md:grid md:content-start md:overflow-visible">
             <NavLink to="/accounts" icon={<Wallet className="size-4" />} label={t("nav.accounts")} />
             <NavLink to="/money" icon={<PiggyBank className="size-4" />} label={t("nav.money")} />
             <NavLink to="/structure" icon={<ChartPie className="size-4" />} label={t("nav.structure")} />
