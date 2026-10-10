@@ -223,7 +223,7 @@ function Row({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex items-center justify-between gap-2 rounded-md px-2 py-1 hover:bg-accent" data-testid="category-row">
+    <div className="flex items-center justify-between gap-2 rounded-md px-2 py-0.5 hover:bg-accent" data-testid="category-row">
       <span className={category.archived ? "text-muted-foreground" : undefined}>
         {category.name}
         {category.archived && (
@@ -235,11 +235,11 @@ function Row({
       {canEdit && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={t("categories.actions", { name: category.name })}>
+            <Button variant="ghost" size="icon-sm" aria-label={t("categories.actions", { name: category.name })}>
               <MoreHorizontal className="size-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent align="end" className="w-auto">
             <DropdownMenuItem onSelect={onEdit}>{t("categories.edit")}</DropdownMenuItem>
             {onAddChild && !category.archived && (
               <DropdownMenuItem onSelect={onAddChild}>{t("categories.addChild")}</DropdownMenuItem>
