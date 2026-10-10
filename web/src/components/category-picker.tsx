@@ -151,7 +151,9 @@ export function CategoryChip({
           {split && " +"}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-1">
+      {/* No taller than the room the screen has: the list scrolls, the
+          search and the footer stay in view. */}
+      <PopoverContent align="start" className="flex max-h-[var(--radix-popover-content-available-height)] w-64 flex-col p-1">
         <Input
           autoFocus
           value={query}
@@ -160,7 +162,7 @@ export function CategoryChip({
           aria-label={t("categoryPicker.search")}
           className="mb-1 h-8"
         />
-        <ul className="max-h-72 overflow-y-auto text-sm" role="listbox" aria-label={t("categoryPicker.title")}>
+        <ul className="max-h-72 min-h-0 flex-1 overflow-y-auto text-sm" role="listbox" aria-label={t("categoryPicker.title")}>
           {value && !wanted && (
             <li>
               <button
