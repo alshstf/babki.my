@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/oapi-codegen/nullable"
@@ -17,6 +18,7 @@ import (
 	"babki.my/babki/internal/platform/dates"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/money"
+	"babki.my/babki/internal/platform/twr"
 	"babki.my/babki/internal/platform/xirr"
 )
 
@@ -184,6 +186,48 @@ func minorFloat(minor int64) float64 {
 	return f
 }
 
+// FlowDays are the days a time-weighted return is valued on — the period's
+// start, each day money crossed the edge within it, its end — with the money
+// of each day.
+func FlowDays(flows []ReturnFlow, from, to time.Time) ([]time.Time, map[time.Time]int64) {
+	byDay := map[time.Time]int64{}
+	days := []time.Time{from}
+	for _, f := range flows {
+		if !f.Day.After(from) || f.Day.After(to) {
+			continue
+		}
+		if _, seen := byDay[f.Day]; !seen && !f.Day.Equal(to) {
+			days = append(days, f.Day)
+		}
+		byDay[f.Day] += f.Minor
+	}
+	slices.SortFunc(days[1:], func(a, b time.Time) int { return a.Compare(b) })
+	return append(days, to), byDay
+}
+
+// TimeWeighted is the account's time-weighted return over the period (#405):
+// its full worth at the end of each day money crossed its edge, the stretches
+// between chained (twr.Rate). ok is false when a day could not be valued in
+// full, or there was nothing to grow from.
+func (s *Service) TimeWeighted(ctx context.Context, spaceID, accountID uuid.UUID, flows []ReturnFlow, from, to time.Time) (float64, bool, error) {
+	days, byDay := FlowDays(flows, from, to)
+	values, err := s.ValuesOn(ctx, spaceID, accountID, days)
+	if err != nil {
+		return 0, false, err
+	}
+	points := make([]twr.Point, 0, len(days))
+	for i, v := range values {
+		full := fullView(v)
+		if !whole(full) {
+			return 0, false, nil
+		}
+		points = append(points, twr.Point{Day: days[i], Worth: full.Minor, Flow: byDay[days[i]]})
+	}
+	points[0].Flow = 0
+	rate, ok := twr.Rate(points)
+	return rate, ok, nil
+}
+
 func (h *Handler) handleReturn(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	accountID, ok := pathAccountID(w, r)
@@ -206,6 +250,17 @@ func (h *Handler) handleReturn(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
+	if basis.Complete {
+		rate, ok, err := h.svc.TimeWeighted(r.Context(), p.SpaceID, accountID, basis.Flows, from, to)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		if ok {
+			out.TimeWeightedPeriod = nullable.NewNullableWithValue(decimal.NewFromFloat(rate).Round(4).String())
+			out.TimeWeightedRate = nullable.NewNullableWithValue(decimal.NewFromFloat(twr.Annual(rate, from, to)).Round(4).String())
+		}
+	}
 	httpjson.Write(w, http.StatusOK, out)
 }
 
@@ -225,6 +280,7 @@ func periodReturnToAPI(b ReturnBasis, from, to time.Time) (apitypes.PeriodReturn
 		Currency: b.Currency, From: from.Format(time.DateOnly), To: to.Format(time.DateOnly),
 		StartMinor: b.Start.Minor, EndMinor: b.End.Minor, ContributionsMinor: put, ProfitMinor: profit,
 		AnnualRate: nullable.NewNullNullable[string](), Complete: b.Complete,
+		TimeWeightedRate: nullable.NewNullNullable[string](), TimeWeightedPeriod: nullable.NewNullNullable[string](),
 	}
 	if rate, ok := b.AnnualRate(from, to); ok {
 		out.AnnualRate = nullable.NewNullableWithValue(decimal.NewFromFloat(rate).Round(4).String())

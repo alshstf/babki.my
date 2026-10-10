@@ -3,6 +3,7 @@ package portfolio_test
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestAPeriodsReturnIsReckonedFromItsEdges(t *testing.T) {
 	q := func(on, price string) marketdata.Quote {
 		return marketdata.Quote{InstrumentID: uuid.MustParse(sber.ID), On: mustDate(t, on), Price: decimal.RequireFromString(price), Currency: "RUB", Source: "test"}
 	}
-	if err := md.UpsertQuotes(ctx, []marketdata.Quote{q("2025-06-30", "1000"), q("2026-02-02", "1050"), q("2026-06-30", "1100")}); err != nil {
+	if err := md.UpsertQuotes(ctx, []marketdata.Quote{q("2025-06-30", "1000"), q("2026-01-01", "1000"), q("2026-02-02", "1050"), q("2026-06-30", "1100")}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,6 +74,14 @@ func TestAPeriodsReturnIsReckonedFromItsEdges(t *testing.T) {
 	rate, ok := b.AnnualRate(from, to)
 	if !ok || rate < 0.10 || rate > 0.12 {
 		t.Errorf("annual rate = %v, %v; want a little over 10%%", rate, ok)
+	}
+
+	// Time-weighted (#405): 100 000 to 150 000 with 50 000 put in — flat; to
+	// 165 500 with 10 500 of shares in — 155 000 / 150 000; to 174 000 —
+	// 174 000 / 165 500. Chained: 8.64 %, the money's timing aside.
+	twr, ok, err := h.TimeWeighted(ctx, spaceID, uuid.MustParse(acc.ID), b.Flows, from, to)
+	if err != nil || !ok || math.Abs(twr-(155_000.0/150_000*174_000/165_500-1)) > 1e-6 {
+		t.Errorf("time-weighted = %v, %v, %v; want 8.64 %%", twr, ok, err)
 	}
 
 	// A paper with no price at the end makes the period incomplete.

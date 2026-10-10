@@ -38,6 +38,8 @@ fetchMock.mockImplementation(async (input: Request) => {
       contributions_minor: 6_050_000,
       profit_minor: 1_350_000,
       annual_rate: "0.1052",
+      time_weighted_rate: "0.0864",
+      time_weighted_period: "0.0864",
       complete: state.complete,
       accounts: state.accounts,
     }),
@@ -70,6 +72,7 @@ describe("AccountReturn", () => {
       norm(formatMinor(1_350_000, "RUB")),
     );
     expect(norm(screen.getByTestId("account-return-rate").textContent ?? "")).toBe("+10,5 %");
+    expect(norm(screen.getByTestId("account-return-twr").textContent ?? "")).toBe("+8,6 %");
     expect(asked[0].pathname).toBe("/api/v1/accounts/acc-1/return");
     const to = asked[0].searchParams.get("to") ?? "";
     expect(asked[0].searchParams.get("from")).toBe(`${Number(to.slice(0, 4)) - 1}${to.slice(4)}`);

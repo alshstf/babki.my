@@ -2247,9 +2247,15 @@ type FamilyReturn struct {
 	From     string `json:"from"`
 
 	// ProfitMinor end_minor − start_minor − contributions_minor
-	ProfitMinor int64  `json:"profit_minor"`
-	StartMinor  int64  `json:"start_minor"`
-	To          string `json:"to"`
+	ProfitMinor int64 `json:"profit_minor"`
+	StartMinor  int64 `json:"start_minor"`
+
+	// TimeWeightedPeriod The same over the period, not compounded to a year
+	TimeWeightedPeriod nullable.Nullable[string] `json:"time_weighted_period"`
+
+	// TimeWeightedRate Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from
+	TimeWeightedRate nullable.Nullable[string] `json:"time_weighted_rate"`
+	To               string                    `json:"to"`
 }
 
 // FileByRulesRequest defines model for FileByRulesRequest.
@@ -2931,9 +2937,15 @@ type PeriodReturn struct {
 	From     string `json:"from"`
 
 	// ProfitMinor end_minor − start_minor − contributions_minor
-	ProfitMinor int64  `json:"profit_minor"`
-	StartMinor  int64  `json:"start_minor"`
-	To          string `json:"to"`
+	ProfitMinor int64 `json:"profit_minor"`
+	StartMinor  int64 `json:"start_minor"`
+
+	// TimeWeightedPeriod The same over the period, not compounded to a year
+	TimeWeightedPeriod nullable.Nullable[string] `json:"time_weighted_period"`
+
+	// TimeWeightedRate Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from
+	TimeWeightedRate nullable.Nullable[string] `json:"time_weighted_rate"`
+	To               string                    `json:"to"`
 }
 
 // Position defines model for Position.

@@ -145,6 +145,15 @@ function ReturnLine({
               </span>
             </span>
           )}
+          {/* By time (#405): how the holdings did, whenever the money came. */}
+          {r.time_weighted_rate != null && (
+            <span title={t("accountReturn.twrHint")}>
+              {t("accountReturn.twr")}{" "}
+              <span className="font-semibold tabular-nums" data-testid="account-return-twr">
+                {percent(r.time_weighted_rate)}
+              </span>
+            </span>
+          )}
           <span className="text-xs text-muted-foreground">
             {t("accountReturn.contributions", { amount: formatMinor(r.contributions_minor, r.currency) })}
           </span>

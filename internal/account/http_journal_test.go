@@ -404,7 +404,7 @@ func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
 // The family's return is over its journal-valued accounts; moves between them
 // cancel, and a deposit is not included.
 func TestTheFamilysReturnIsReckonedOverItsJournals(t *testing.T) {
-	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, periods: map[string]account.ReturnBasis{}}
+	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, periods: map[string]account.ReturnBasis{}, onDay: map[string]account.JournalValue{}}
 	url, c, _ := newAPIWithJournals(t, journals)
 	day := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
 
@@ -429,16 +429,31 @@ func TestTheFamilysReturnIsReckonedOverItsJournals(t *testing.T) {
 		},
 	}
 
+	// The worth on the days money moved, for the time-weighted rate: 1 % up by
+	// the deposit, flat over the move between the two, then 13.3 / 12.1.
+	for key, minor := range map[string]int64{
+		a + "@2025-12-31": 10_000_000, b + "@2025-12-31": 0,
+		a + "@2026-03-01": 12_100_000, b + "@2026-03-01": 0,
+		a + "@2026-04-01": 7_000_000, b + "@2026-04-01": 5_100_000,
+		a + "@2026-09-30": 6_000_000, b + "@2026-09-30": 7_300_000,
+	} {
+		journals.onDay[key] = account.JournalValue{Currency: "RUB", FullMinor: minor, Operations: 3}
+	}
+
 	var got struct {
 		StartMinor         int64   `json:"start_minor"`
 		EndMinor           int64   `json:"end_minor"`
 		ContributionsMinor int64   `json:"contributions_minor"`
 		ProfitMinor        int64   `json:"profit_minor"`
 		AnnualRate         *string `json:"annual_rate"`
+		TimeWeightedPeriod *string `json:"time_weighted_period"`
 		Complete           bool    `json:"complete"`
 		Accounts           int     `json:"accounts"`
 	}
 	getJSON(t, c, url+"/api/v1/return?from=2025-12-31&to=2026-09-30", &got)
+	if got.TimeWeightedPeriod == nil || *got.TimeWeightedPeriod != "0.1102" {
+		t.Errorf("time-weighted = %v, want 1.01 × 1 × 13.3/12.1 − 1 = 0.1102", got.TimeWeightedPeriod)
+	}
 	// 100 000 + 20 000 put in; 60 000 + 73 000 at the end: 13 000 earned.
 	if got.StartMinor != 10_000_000 || got.EndMinor != 13_300_000 || got.ContributionsMinor != 2_000_000 ||
 		got.ProfitMinor != 1_300_000 || !got.Complete || got.Accounts != 2 || got.AnnualRate == nil {

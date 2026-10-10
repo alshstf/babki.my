@@ -2616,6 +2616,10 @@ export interface components {
             stale: boolean;
         };
         PeriodReturn: {
+            /** @description Time-weighted annual rate (#405): how the holdings did, whatever money came when — the stretches between the days money crossed the edge, chained, compounded to a year. Null when a day could not be valued in full or there was nothing to grow from */
+            time_weighted_rate: string | null;
+            /** @description The same over the period, not compounded to a year */
+            time_weighted_period: string | null;
             /** @description The space's base currency */
             currency: string;
             from: string;
