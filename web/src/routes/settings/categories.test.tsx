@@ -218,3 +218,44 @@ describe("CategoriesPage", () => {
     expect(screen.queryByRole("button", { name: /Действия с категорией/ })).toBeNull();
   });
 });
+
+describe("CategoryRules", () => {
+  const rule = (id: string, pattern: string, categoryId: string, position: number) => ({
+    id, category_id: categoryId, field: "counterparty", pattern, position,
+  });
+
+  it("reads each rule as a sentence and moves one down", async () => {
+    serve([
+      { path: "/api/v1/categories", body: [home, rent, food, salary] },
+      { path: "/api/v1/category-rules", body: [rule("r1", "Пятёрочка", food.id, 0), rule("r2", "ИП Смирнова", rent.id, 1)] },
+      { path: "/api/v1/category-rules/order", method: "PUT", status: 204 },
+    ]);
+    renderPage();
+
+    const rows = await screen.findAllByTestId("category-rule");
+    expect(rows[0]).toHaveTextContent("Контрагент содержит «Пятёрочка» → Продукты");
+    expect(rows[1]).toHaveTextContent("Дом › Аренда");
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Ниже" }));
+    await waitFor(async () => expect(await sent("PUT")).toHaveLength(1));
+    expect((await sent("PUT"))[0].body).toEqual({ ids: ["r2", "r1"] });
+  });
+
+  it("adds a rule", async () => {
+    serve([
+      { path: "/api/v1/categories", body: [home, rent, food, salary] },
+      { path: "/api/v1/category-rules", body: [] },
+      { path: "/api/v1/category-rules", method: "POST", status: 201, body: rule("r3", "Ромашка", salary.id, 0) },
+    ]);
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("category-rules-add"));
+    const dialog = await screen.findByTestId("category-rule-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Текст"), { target: { value: " Ромашка " } });
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "Категория" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Зарплата" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(async () => expect(await sent("POST")).toHaveLength(1));
+    expect((await sent("POST"))[0].body).toEqual({ field: "counterparty", pattern: "Ромашка", category_id: salary.id });
+  });
+});

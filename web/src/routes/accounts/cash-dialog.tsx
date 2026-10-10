@@ -31,7 +31,7 @@ import {
   type OperationType,
 } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
-import { useCategories } from "@/api/categories";
+import { matchRule, useCategories, useCategoryRules } from "@/api/categories";
 import { CategorySelect, categoryKindOf } from "@/components/category-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
@@ -68,6 +68,7 @@ export function CashDialog({
   const { t } = useTranslation();
   const createOperation = useSaveOperation(editing?.id);
   const categories = useCategories();
+  const rules = useCategoryRules();
 
   const [type, setType] = useState<OperationType>("deposit");
   const [amount, setAmount] = useState("");
@@ -75,6 +76,9 @@ export function CashDialog({
   const [note, setNote] = useState("");
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [counterparty, setCounterparty] = useState("");
+  // Whether the category is the person's choice; until then the family's
+  // rules suggest one from the counterparty.
+  const [chosen, setChosen] = useState(false);
 
   useOnOpen(open, () => {
     setType(editing?.type ?? (preset ? PRESET_TYPE[preset] : "deposit"));
@@ -83,8 +87,17 @@ export function CashDialog({
     setNote(editing?.note ?? "");
     setCategoryId(editing?.category_id ?? null);
     setCounterparty(editing?.counterparty ?? "");
+    setChosen(editing?.category_id != null);
     createOperation.reset();
   });
+
+  const typeCounterparty = (next: string) => {
+    setCounterparty(next);
+    if (chosen) return;
+    setCategoryId(
+      matchRule(rules.data ?? [], categories.data ?? [], categoryKindOf(type), { counterparty: next, note }) ?? null,
+    );
+  };
 
   // A category of the other direction does not survive a change of type.
   const changeType = (next: OperationType) => {
@@ -162,7 +175,10 @@ export function CashDialog({
               categories={categories.data ?? []}
               kind={categoryKindOf(type)}
               value={categoryId}
-              onChange={setCategoryId}
+              onChange={(v) => {
+                setChosen(true);
+                setCategoryId(v);
+              }}
             />
           </div>
           <div className="grid gap-2">
@@ -173,7 +189,7 @@ export function CashDialog({
               id="cash-counterparty"
               maxLength={MAX_COUNTERPARTY}
               value={counterparty}
-              onChange={(e) => setCounterparty(e.target.value)}
+              onChange={(e) => typeCounterparty(e.target.value)}
             />
           </div>
           <div className="grid gap-2">

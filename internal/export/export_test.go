@@ -227,6 +227,7 @@ func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 		}
 	}
 	post(t, s.c, s.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-09-05","amount_minor":18000000,"currency":"RUB","category_id":%q,"counterparty":"ООО Ромашка"}`, card, salary), http.StatusCreated)
+	post(t, s.c, s.url+"/api/v1/category-rules", fmt.Sprintf(`{"category_id":%q,"field":"counterparty","pattern":"Ромашка"}`, salary), http.StatusCreated)
 
 	raw, _ := io.ReadAll(get(t, s.c, s.url+"/api/v1/export").Body)
 	var doc struct {
@@ -240,6 +241,10 @@ func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 				Counterparty string  `json:"counterparty"`
 			} `json:"operations"`
 		} `json:"accounts"`
+		Rules []struct {
+			CategoryID string `json:"category_id"`
+			Pattern    string `json:"pattern"`
+		} `json:"category_rules"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
@@ -253,6 +258,9 @@ func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 			t.Errorf("category %s comes before its parent", c.ID)
 		}
 		seen[c.ID] = true
+	}
+	if len(doc.Rules) != 1 || doc.Rules[0].CategoryID != salary || doc.Rules[0].Pattern != "Ромашка" {
+		t.Errorf("rules = %+v", doc.Rules)
 	}
 	ops := doc.Accounts[0].Operations
 	if len(ops) != 1 || ops[0].CategoryID == nil || *ops[0].CategoryID != salary || ops[0].Counterparty != "ООО Ромашка" {

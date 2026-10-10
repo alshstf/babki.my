@@ -12,7 +12,7 @@ import "@/i18n";
 import { CashDialog } from "./cash-dialog";
 import { OperationsTable } from "./operations-table";
 import type { AccountWithBalance } from "@/api/accounts";
-import type { Category } from "@/api/categories";
+import { rulePattern, type Category } from "@/api/categories";
 import type { Operation } from "@/api/operations";
 
 // openapi-fetch captures globalThis.fetch at import time, so the double is
@@ -74,6 +74,8 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
   };
 }
 
+const RULES = [{ id: "r-1", category_id: "c-food", field: "counterparty", pattern: "пятёрочка", position: 0 }];
+
 type Sent = { method: string; path: string; search: string; body: unknown };
 let sent: Sent[] = [];
 let journal: Operation[] = [];
@@ -88,6 +90,9 @@ beforeEach(() => {
     const json = (body: unknown, status = 200) =>
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
     if (url.pathname.endsWith("/categories")) return json(CATEGORIES);
+    if (url.pathname.endsWith("/category-rules") && input.method === "GET") return json(RULES);
+    if (url.pathname.endsWith("/category-rules")) return json({ id: "r-new", position: 1, ...JSON.parse(text) }, 201);
+    if (url.pathname.endsWith("/file-by-rules")) return json({ filed: 2 });
     if (url.pathname.endsWith("/category")) {
       const body = JSON.parse(text) as { category_id: string | null };
       return json({ ...journal[0], category_id: body.category_id });
@@ -212,5 +217,53 @@ describe("the journal's categories", () => {
     await waitFor(() =>
       expect(sent.some((s) => s.path.endsWith("/operations") && s.search.includes("category=none"))).toBe(true),
     );
+  });
+});
+
+describe("rulePattern", () => {
+  it("drops the trailing words with digits, keeping the first", () => {
+    expect(rulePattern("ПЯТЕРОЧКА 4411")).toBe("ПЯТЕРОЧКА");
+    expect(rulePattern("  YANDEX*GO  MOSCOW 12  ")).toBe("YANDEX*GO MOSCOW");
+    expect(rulePattern("ООО «Ромашка»")).toBe("ООО «Ромашка»");
+    expect(rulePattern("7-Eleven")).toBe("7-Eleven");
+  });
+});
+
+describe("filing rules", () => {
+  it("suggests a category from the counterparty until one is chosen", async () => {
+    render(
+      <QueryClientProvider client={client()}>
+        <CashDialog open onOpenChange={() => {}} account={card} preset="expense" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(sent.some((s) => s.path.endsWith("/category-rules"))).toBe(true));
+    await waitFor(() => expect(sent.some((s) => s.path.endsWith("/categories"))).toBe(true));
+    const counterparty = screen.getByLabelText(/Кому/);
+    fireEvent.change(counterparty, { target: { value: "ПЯТЕРОЧКА 4411" } });
+    expect(screen.getByRole("combobox", { name: "Категория" })).toHaveTextContent("Продукты");
+
+    await pick(screen.getByRole("combobox", { name: "Категория" }), "Такси");
+    fireEvent.change(counterparty, { target: { value: "Пятёрочка у дома" } });
+    expect(screen.getByRole("combobox", { name: "Категория" })).toHaveTextContent("Такси");
+  });
+
+  it("remembers a counterparty from the journal and files the rows like it", async () => {
+    renderTable();
+    fireEvent.click(await screen.findByTestId("operation-category"));
+    fireEvent.click(await screen.findByTestId("category-remember"));
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Категории" })).getByRole("option", { name: "Продукты" }));
+
+    await waitFor(() => expect(sent.some((s) => s.path.endsWith("/file-by-rules"))).toBe(true));
+    const rule = sent.find((s) => s.method === "POST" && s.path.endsWith("/category-rules"));
+    expect(rule?.body).toEqual({ category_id: "c-food", field: "counterparty", pattern: "Пятёрочка" });
+    expect(sent.find((s) => s.path.endsWith("/file-by-rules"))?.body).toEqual({ account_id: "acc-1" });
+  });
+
+  it("files the waiting rows from the journal's «без категории»", async () => {
+    renderTable();
+    await screen.findByTestId("operation-category");
+    await pick(screen.getByRole("combobox", { name: "Категория" }), "Без категории");
+    fireEvent.click(await screen.findByRole("button", { name: "Разнести по правилам" }));
+    expect(await screen.findByText("Разнесено строк: 2")).toBeTruthy();
   });
 });

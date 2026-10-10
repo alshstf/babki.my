@@ -156,6 +156,25 @@ export function useSetOperationCategory() {
   });
 }
 
+// Files the unfiled rows of one account, or of the whole family, by the
+// family's rules; answers how many it filed.
+export function useFileByRules() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (accountId?: string): Promise<number> => {
+      const { data, error, response } = await api.POST("/api/v1/operations/file-by-rules", {
+        body: { account_id: accountId ?? null },
+      });
+      if (!data) throw apiError(response, error);
+      return data.filed;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["operations"] });
+      void queryClient.invalidateQueries({ queryKey: ["cashflow"] });
+    },
+  });
+}
+
 // Writes what a dialog holds: a new operation, or the row it was opened on,
 // in place (PUT keeps its id and its place in its day).
 export function useSaveOperation(editingId?: string) {

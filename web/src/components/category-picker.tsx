@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -10,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { treeOf, type Category, type CategoryKind } from "@/api/categories";
+import { rulePattern, treeOf, type Category, type CategoryKind } from "@/api/categories";
 import type { OperationType } from "@/api/operations";
 
 const NONE = "none";
@@ -82,6 +83,8 @@ export function CategoryChip({
   editable,
   pending,
   onChange,
+  counterparty,
+  onRemember,
 }: {
   categories: Category[];
   kind: CategoryKind;
@@ -89,10 +92,16 @@ export function CategoryChip({
   editable: boolean;
   pending?: boolean;
   onChange: (value: string | null) => void;
+  // The row's counterparty, offered as a rule's text: «remember» files the
+  // next rows from it the same way (onRemember gets the category picked).
+  counterparty?: string;
+  onRemember?: (categoryId: string) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [remember, setRemember] = useState(false);
+  const canRemember = Boolean(counterparty?.trim() && onRemember);
   const label = categoryLabel(categories, value);
   // A word typed narrows the list to the categories it is part of, a child
   // also by its parent's name: «транс» finds the taxis.
@@ -110,6 +119,8 @@ export function CategoryChip({
   const pick = (next: string | null) => {
     setOpen(false);
     if (next !== value) onChange(next);
+    if (next && remember && canRemember) onRemember?.(next);
+    setRemember(false);
   };
   return (
     <Popover
@@ -176,6 +187,17 @@ export function CategoryChip({
           ))}
           {shown.length === 0 && <li className="px-2 py-1 text-muted-foreground">{t("categoryPicker.nothing")}</li>}
         </ul>
+        {canRemember && (
+          <label className="mt-1 flex items-start gap-2 border-t px-2 pt-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={remember}
+              onCheckedChange={(v) => setRemember(v === true)}
+              data-testid="category-remember"
+              className="mt-0.5"
+            />
+            {t("categoryPicker.remember", { name: rulePattern(counterparty ?? "") })}
+          </label>
+        )}
       </PopoverContent>
     </Popover>
   );
