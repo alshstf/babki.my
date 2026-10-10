@@ -105,7 +105,7 @@ func qrLines(text string) []Receipt {
 				params[m[1]] = m[2]
 			}
 		}
-		r, ok := qrReceipt(params)
+		r, ok := qrReceipt(params, SourceMail)
 		if !ok || seen[r.FN+"/"+r.FD] {
 			continue
 		}
@@ -117,7 +117,7 @@ func qrLines(text string) []Receipt {
 
 // qrReceipt is the receipt of a QR line's parameters, as the receipt dialog
 // reads them.
-func qrReceipt(p map[string]string) (Receipt, bool) {
+func qrReceipt(p map[string]string, source string) (Receipt, bool) {
 	when, err := time.Parse("20060102T1504", p["t"][:min(len(p["t"]), 13)])
 	if err != nil || !digits.MatchString(p["fn"]) || !digits.MatchString(p["i"]) {
 		return Receipt{}, false
@@ -126,7 +126,7 @@ func qrReceipt(p map[string]string) (Receipt, bool) {
 	if !ok || total <= 0 {
 		return Receipt{}, false
 	}
-	r := Receipt{FN: p["fn"], FD: p["i"], Total: total, IssuedAt: when, Kind: qrKind(p["n"]), Source: SourceMail, Items: []Item{}}
+	r := Receipt{FN: p["fn"], FD: p["i"], Total: total, IssuedAt: when, Kind: qrKind(p["n"]), Source: source, Items: []Item{}}
 	if fp := p["fp"]; digits.MatchString(fp) {
 		r.FP = &fp
 	}

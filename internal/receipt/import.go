@@ -19,6 +19,8 @@ import (
 // with nothing new; and the rows split by their items' rules.
 type ImportResult struct {
 	Found, Attached, Waiting, Enriched, Known, Split int
+	// WaitingIDs are the new receipts left waiting for a row.
+	WaitingIDs []uuid.UUID
 }
 
 // Import records the receipts of a statement (decision Р-34): a new one
@@ -62,11 +64,13 @@ func (s *Service) Import(ctx context.Context, spaceID uuid.UUID, receipts []Rece
 		if len(rows) == 1 {
 			r.OperationID = &rows[0].ID
 		}
-		if _, err := s.Create(ctx, spaceID, r); err != nil {
+		created, err := s.Create(ctx, spaceID, r)
+		if err != nil {
 			return ImportResult{}, err
 		}
 		if r.OperationID == nil {
 			res.Waiting++
+			res.WaitingIDs = append(res.WaitingIDs, created.ID)
 			continue
 		}
 		res.Attached++

@@ -51,9 +51,10 @@ export function useImportReceipts() {
 }
 
 // The receipts waiting for a row (GET /api/v1/receipts?waiting=true).
-export function useWaitingReceipts() {
+export function useWaitingReceipts(enabled = true) {
   return useQuery({
     queryKey: ["receipts", "waiting"],
+    enabled,
     queryFn: async (): Promise<Receipt[]> => {
       const { data, error, response } = await api.GET("/api/v1/receipts", { params: { query: { waiting: true } } });
       if (!data) throw apiError(response, error);

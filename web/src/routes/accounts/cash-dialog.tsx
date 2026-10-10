@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScanLine } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -34,7 +34,7 @@ import {
   type Operation,
   type OperationType,
 } from "@/api/operations";
-import { attachReceipt, createReceipt, matchReceipt, type ReceiptMatch, type ReceiptNew } from "@/api/receipts";
+import { attachReceipt, createReceipt, matchReceipt, type Receipt as LoadedReceipt, type ReceiptMatch, type ReceiptNew } from "@/api/receipts";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { matchRule, useCategories, useCategoryRules } from "@/api/categories";
 import { useMembers } from "@/api/members";
@@ -66,6 +66,7 @@ export function CashDialog({
   preset,
   accounts,
   onSaved,
+  waiting,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -77,6 +78,9 @@ export function CashDialog({
   // opens on account and offers these in a list above the rest.
   accounts?: AccountWithBalance[];
   onSaved?: (op: Operation) => void;
+  // A receipt shared from a phone and waiting for its row: the dialog opens
+  // filled from it, and the row saved completes it.
+  waiting?: LoadedReceipt;
 }) {
   const { t } = useTranslation();
   const createOperation = useSaveOperation(editing?.id);
@@ -133,6 +137,18 @@ export function CashDialog({
     createOperation.reset();
   });
 
+  // The shared receipt arrives after the dialog opened: it is looked up once
+  // the app has started.
+  useEffect(() => {
+    if (!open || !waiting) return;
+    applyReceipt(fromLoaded(waiting));
+    setAlready("waiting");
+    setWaitingId(waiting.id);
+    if (waiting.seller) typeCounterparty(waiting.seller);
+    // On the receipt arriving only: the helpers are new closures on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, waiting?.id]);
+
   const typeCounterparty = (next: string) => {
     setCounterparty(next);
     if (chosen) return;
@@ -177,12 +193,16 @@ export function CashDialog({
       setReceipt("notReceipt");
       return;
     }
+    applyReceipt(r);
+  };
+
+  // A receipt read off its code, or shared: the form filled from it, and the
+  // rows it may complete looked up.
+  const applyReceipt = (r: Receipt) => {
     changeType(receiptIsIncoming(r.kind) ? "deposit" : "withdrawal");
     setAmount(minorToInput(r.amountMinor));
     setOccurredOn(r.date);
-    if (note.trim() === "") {
-      setNote(t("cash.receipt.note", { date: formatDate(r.date), time: r.time, fn: r.fn, fd: r.fd }));
-    }
+    setNote((n) => (n.trim() === "" ? t("cash.receipt.note", { date: formatDate(r.date), time: r.time, fn: r.fn, fd: r.fd }) : n));
     setReceipt("filled");
     setScanned(r);
     // Only advice: a lookup that fails leaves the form as filled.
@@ -435,6 +455,19 @@ export function CashDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+// fromLoaded is a receipt kept on the server as one read off its QR code.
+function fromLoaded(r: LoadedReceipt): Receipt {
+  return {
+    amountMinor: r.total_minor,
+    date: r.issued_at.slice(0, 10),
+    time: r.issued_at.slice(11, 16),
+    kind: r.kind === "payout_refund" ? "payoutRefund" : r.kind,
+    fn: r.fn,
+    fd: r.fd,
+    fp: r.fp ?? "",
+  };
 }
 
 // receiptQuery is a receipt read off its QR code as the API names it.
