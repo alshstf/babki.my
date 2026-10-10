@@ -2773,13 +2773,30 @@ components:
         lost: { type: array, items: { $ref: "#/components/schemas/CreditCardLost" } }
         non_grace_minor: { type: integer, format: int64, description: "Money moved off the card, fees and interest charged still owed: interest from their day" }
         non_grace_interest_minor: { type: integer, format: int64 }
+    CreditCardBenefit:
+      type: object
+      required: [from, to, own_rate_known, own_earned_minor, cashback_minor, costs_minor, pending_interest_minor, total_minor]
+      properties:
+        from: { type: string, description: "A year before today, or the card's first row when later" }
+        to: { type: string }
+        own_rate_known: { type: boolean, description: "The terms name own_rate; without it own_earned_minor is 0" }
+        own_earned_minor: { type: integer, format: int64, description: "What the family's own money earned at own_rate on the debt the card carried each day" }
+        cashback_minor: { type: integer, format: int64, description: "Money in under a cashback category, and interest paid to the card" }
+        costs_minor: { type: integer, format: int64, description: "Fees, taxes, interest charged and rows under «Проценты по кредитам» or «Банковские комиссии», as a positive sum" }
+        pending_interest_minor: { type: integer, format: int64, description: "Roughly the interest the lost grace and the money moved off the card run up (CreditCardStatus lost and non_grace), not in the journal yet" }
+        total_minor: { type: integer, format: int64, description: "own_earned + cashback − costs − pending_interest; below zero the card cost more than own money would have" }
     CreditCard:
       type: object
-      required: [terms, status, by_journal]
+      required: [terms, status, by_journal, benefit]
       properties:
         terms: { $ref: "#/components/schemas/CreditCardTerms" }
         status: { $ref: "#/components/schemas/CreditCardStatus" }
         by_journal: { type: boolean, description: "The status is worked out from the card's journal; false: from its last balance" }
+        benefit:
+          nullable: true
+          description: "The card weighed against own money over the last year; null when counted by its balance"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardBenefit"
     CreditCardSummary:
       type: object
       required: [account_id, name, currency, by_journal, status]

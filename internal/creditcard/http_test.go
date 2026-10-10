@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
@@ -32,7 +33,7 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
 	account.NewHandler(accStore, famStore, conv, nil, auth, sm).Mount(srv)
 	operation.NewHandler(operation.NewService(opStore), opStore, famStore, conv, auth, sm).Mount(srv)
-	creditcard.NewHandler(creditcard.NewService(pool, accStore, opStore), auth, sm).Mount(srv)
+	creditcard.NewHandler(creditcard.NewService(pool, accStore, opStore, category.NewStore(pool)), auth, sm).Mount(srv)
 	url, c := apitest.Serve(t, srv.Handler())
 
 	mk := func(name, typ string) string {
@@ -62,6 +63,9 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 	if got.ByJournal || got.Status.AvailableMinor != 15_000_000 || got.Terms.AnnualRate != "39.9" || got.Terms.OwnRate.IsSpecified() && !got.Terms.OwnRate.IsNull() {
 		t.Errorf("card = %+v", got)
 	}
+	if !got.Benefit.IsNull() {
+		t.Errorf("a card counted by its balance cannot be weighed: %+v", got.Benefit)
+	}
 
 	// Kept by its operations, a purchase yesterday is due by its statement's
 	// payment date.
@@ -77,6 +81,9 @@ func TestACardTellsWhatIsDue(t *testing.T) {
 	if !got.ByJournal || got.Status.DebtMinor != 1_000_000 || got.Status.AvailableMinor != 14_000_000 ||
 		len(got.Status.Grace) != 1 || got.Status.Grace[0].AmountMinor != 1_000_000 {
 		t.Errorf("status = %+v", got.Status)
+	}
+	if b, err := got.Benefit.Get(); err != nil || b.OwnRateKnown || b.TotalMinor != 0 {
+		t.Errorf("benefit = %+v (%v), want weighed with no own rate and nothing earned or charged", b, err)
 	}
 
 	var list []apitypes.CreditCardSummary

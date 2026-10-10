@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
@@ -28,16 +29,45 @@ type journal interface {
 	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
 }
 
-// Service keeps cards' terms and works out where each card stands.
-type Service struct {
-	db       db.Executor
-	accounts accounts
-	journal  journal
-	now      func() time.Time
+type categories interface {
+	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
 }
 
-func NewService(x db.Executor, acc accounts, j journal) *Service {
-	return &Service{db: x, accounts: acc, journal: j, now: time.Now}
+// Service keeps cards' terms and works out where each card stands.
+type Service struct {
+	db         db.Executor
+	accounts   accounts
+	journal    journal
+	categories categories
+	now        func() time.Time
+}
+
+func NewService(x db.Executor, acc accounts, j journal, cats categories) *Service {
+	return &Service{db: x, accounts: acc, journal: j, categories: cats, now: time.Now}
+}
+
+// Default categories that tell cashback and charges apart on a card's
+// journal, whatever the row's type.
+var (
+	cashbackNames = map[string]bool{"Кэшбэк": true}
+	chargeNames   = map[string]bool{"Проценты по кредитам": true, "Банковские комиссии": true}
+)
+
+func (s *Service) kinds(ctx context.Context, spaceID uuid.UUID) (Kinds, error) {
+	list, err := s.categories.List(ctx, spaceID)
+	if err != nil {
+		return Kinds{}, err
+	}
+	k := Kinds{Cashback: map[uuid.UUID]bool{}, Charges: map[uuid.UUID]bool{}}
+	for _, c := range list {
+		switch {
+		case c.Kind == category.KindIncome && cashbackNames[c.Name]:
+			k.Cashback[c.ID] = true
+		case c.Kind == category.KindExpense && chargeNames[c.Name]:
+			k.Charges[c.ID] = true
+		}
+	}
+	return k, nil
 }
 
 const cols = `account_id, limit_minor, statement_day, payment_days, grace_kind, grace_days,
@@ -116,12 +146,14 @@ func (s *Service) DeleteTerms(ctx context.Context, spaceID, accountID uuid.UUID)
 
 // Card is a card with its terms and where it stands today. ByJournal says the
 // status comes from the card's journal; otherwise from its last balance,
-// which tells the debt but not what keeps the grace.
+// which tells the debt but not what keeps the grace nor what the card was
+// worth. Benefit is set by Card, not by All.
 type Card struct {
 	Account   account.WithBalance
 	Terms     Terms
 	Status    Status
 	ByJournal bool
+	Benefit   *Benefit
 }
 
 // Card is the account's card today.
@@ -134,24 +166,47 @@ func (s *Service) Card(ctx context.Context, spaceID, accountID uuid.UUID) (Card,
 	if err != nil {
 		return Card{}, err
 	}
-	return s.card(ctx, spaceID, a, t)
+	c, ops, err := s.card(ctx, spaceID, a, t)
+	if err != nil || !c.ByJournal {
+		return c, err
+	}
+	k, err := s.kinds(ctx, spaceID)
+	if err != nil {
+		return Card{}, err
+	}
+	b := Weigh(t, ops, a.Currency, s.today(), k)
+	// What the bank will charge for the grace lost is a cost too, though not
+	// in the journal yet.
+	b.Pending = c.Status.NonGraceInterest
+	for _, l := range c.Status.Lost {
+		b.Pending += l.Interest
+	}
+	b.Total -= b.Pending
+	c.Benefit = &b
+	return c, nil
 }
 
-func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, t Terms) (Card, error) {
+func (s *Service) today() time.Time {
 	now := s.now().UTC()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// card is the card today, with the journal it was worked out from (none when
+// counted by its balance).
+func (s *Service) card(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, t Terms) (Card, []operation.Operation, error) {
+	today := s.today()
 	if !account.CountedByJournal(a.Account) {
 		var balance int64
 		if a.Balance != nil {
 			balance = a.Balance.AmountMinor
 		}
-		return Card{Account: a, Terms: t, Status: ByBalance(t, balance, today)}, nil
+		return Card{Account: a, Terms: t, Status: ByBalance(t, balance, today)}, nil, nil
 	}
 	ops, err := s.journal.ListForEngine(ctx, spaceID, a.ID)
 	if err != nil {
-		return Card{}, err
+		return Card{}, nil, err
 	}
-	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today), ByJournal: true}, nil
+	return Card{Account: a, Terms: t, Status: Work(t, ops, a.Currency, today), ByJournal: true}, ops, nil
 }
 
 // AllTerms is every card's terms in the space.
@@ -195,7 +250,7 @@ func (s *Service) All(ctx context.Context, spaceID uuid.UUID) ([]Card, error) {
 		if !ok || a.Status != account.StatusActive {
 			continue
 		}
-		c, err := s.card(ctx, spaceID, a, t)
+		c, _, err := s.card(ctx, spaceID, a, t)
 		if err != nil {
 			return nil, err
 		}

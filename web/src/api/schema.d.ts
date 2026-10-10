@@ -2091,11 +2091,45 @@ export interface components {
             /** Format: int64 */
             non_grace_interest_minor: number;
         };
+        CreditCardBenefit: {
+            /** @description A year before today, or the card's first row when later */
+            from: string;
+            to: string;
+            /** @description The terms name own_rate; without it own_earned_minor is 0 */
+            own_rate_known: boolean;
+            /**
+             * Format: int64
+             * @description What the family's own money earned at own_rate on the debt the card carried each day
+             */
+            own_earned_minor: number;
+            /**
+             * Format: int64
+             * @description Money in under a cashback category, and interest paid to the card
+             */
+            cashback_minor: number;
+            /**
+             * Format: int64
+             * @description Fees, taxes, interest charged and rows under «Проценты по кредитам» or «Банковские комиссии», as a positive sum
+             */
+            costs_minor: number;
+            /**
+             * Format: int64
+             * @description Roughly the interest the lost grace and the money moved off the card run up (CreditCardStatus lost and non_grace), not in the journal yet
+             */
+            pending_interest_minor: number;
+            /**
+             * Format: int64
+             * @description own_earned + cashback − costs − pending_interest; below zero the card cost more than own money would have
+             */
+            total_minor: number;
+        };
         CreditCard: {
             terms: components["schemas"]["CreditCardTerms"];
             status: components["schemas"]["CreditCardStatus"];
             /** @description The status is worked out from the card's journal; false: from its last balance */
             by_journal: boolean;
+            /** @description The card weighed against own money over the last year; null when counted by its balance */
+            benefit: components["schemas"]["CreditCardBenefit"] | null;
         };
         CreditCardSummary: {
             /** Format: uuid */

@@ -153,7 +153,17 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 }
 
 func cardAPI(c Card) apitypes.CreditCard {
-	return apitypes.CreditCard{Terms: TermsAPI(c.Terms), Status: statusAPI(c.Status), ByJournal: c.ByJournal}
+	out := apitypes.CreditCard{
+		Terms: TermsAPI(c.Terms), Status: statusAPI(c.Status), ByJournal: c.ByJournal,
+		Benefit: nullable.NewNullNullable[apitypes.CreditCardBenefit](),
+	}
+	if b := c.Benefit; b != nil {
+		out.Benefit = nullable.NewNullableWithValue(apitypes.CreditCardBenefit{
+			From: date(b.From), To: date(b.To), OwnRateKnown: b.OwnRateKnown, OwnEarnedMinor: b.OwnEarned,
+			CashbackMinor: b.Cashback, CostsMinor: b.Costs, PendingInterestMinor: b.Pending, TotalMinor: b.Total,
+		})
+	}
+	return out
 }
 
 func statusAPI(st Status) apitypes.CreditCardStatus {
