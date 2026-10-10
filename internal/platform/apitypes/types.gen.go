@@ -145,6 +145,24 @@ func (e CashGap) Valid() bool {
 	}
 }
 
+// Defines values for CategoryKind.
+const (
+	Expense CategoryKind = "expense"
+	Income  CategoryKind = "income"
+)
+
+// Valid indicates whether the value is a known member of the CategoryKind enum.
+func (e CategoryKind) Valid() bool {
+	switch e {
+	case Expense:
+		return true
+	case Income:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CostBasisMethod.
 const (
 	CostBasisMethodAverage       CostBasisMethod = "average"
@@ -1226,6 +1244,26 @@ type CashPosition struct {
 	OverdrawnSince nullable.Nullable[openapi_types.Date] `json:"overdrawn_since"`
 }
 
+// Category defines model for Category.
+type Category struct {
+	// Archived Kept for the operations naming it, out of the lists a new entry picks from
+	Archived bool               `json:"archived"`
+	Id       openapi_types.UUID `json:"id"`
+
+	// Kind expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)
+	Kind CategoryKind `json:"kind"`
+	Name string       `json:"name"`
+
+	// ParentId The category it sits under; null on the top level
+	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id"`
+
+	// Position Its place among its siblings, smallest first
+	Position int `json:"position"`
+}
+
+// CategoryKind expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)
+type CategoryKind string
+
 // ChangePasswordRequest defines model for ChangePasswordRequest.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
@@ -1293,6 +1331,14 @@ type CreateArrivalRequest struct {
 
 	// Quantity Decimal as string: positive, at most 10 decimal places.
 	Quantity string `json:"quantity"`
+}
+
+// CreateCategoryRequest defines model for CreateCategoryRequest.
+type CreateCategoryRequest struct {
+	// Kind expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)
+	Kind     CategoryKind                          `json:"kind"`
+	Name     string                                `json:"name"`
+	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id,omitempty"`
 }
 
 // CreateInstrumentEventRequest A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite.
@@ -2735,6 +2781,16 @@ type UpdateAccountRequest struct {
 	ValuedByBalance *bool `json:"valued_by_balance,omitempty"`
 }
 
+// UpdateCategoryRequest defines model for UpdateCategoryRequest.
+type UpdateCategoryRequest struct {
+	Archived *bool   `json:"archived,omitempty"`
+	Name     *string `json:"name,omitempty"`
+
+	// ParentId null moves it to the top level; absent leaves it
+	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id,omitempty"`
+	Position *int                                  `json:"position,omitempty"`
+}
+
 // UpdateInstrumentRequest defines model for UpdateInstrumentRequest.
 type UpdateInstrumentRequest struct {
 	// CoingeckoId See Instrument.coingecko_id. Omitted, it stays as it is; only a cryptocurrency takes one.
@@ -2956,6 +3012,12 @@ type LoginJSONRequestBody = LoginRequest
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePasswordRequest
+
+// CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
+type CreateCategoryJSONRequestBody = CreateCategoryRequest
+
+// UpdateCategoryJSONRequestBody defines body for UpdateCategory for application/json ContentType.
+type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
 
 // AddImportPapersJSONRequestBody defines body for AddImportPapers for application/json ContentType.
 type AddImportPapersJSONRequestBody AddImportPapersJSONBody

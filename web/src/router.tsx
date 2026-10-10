@@ -53,6 +53,10 @@ const InstrumentsPage = lazyRouteComponent(
   () => import("@/routes/settings/instruments"),
   "InstrumentsPage",
 );
+const CategoriesPage = lazyRouteComponent(
+  () => import("@/routes/settings/categories"),
+  "CategoriesPage",
+);
 const ConnectWizardPage = lazyRouteComponent(
   () => import("@/routes/settings/connections/connect"),
   "ConnectWizardPage",
@@ -258,6 +262,14 @@ const instrumentsRoute = createRoute({
   component: InstrumentsPage,
 });
 
+// The family's categories of spending and income. The settings page links
+// here; the page itself also serves editors, who may change categories.
+const categoriesRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/settings/categories",
+  component: CategoriesPage,
+});
+
 // "new" outranks the sibling $connectionId whatever the declaration order:
 // TanStack Router ranks a literal segment above a param.
 const connectWizardRoute = createRoute({
@@ -288,6 +300,7 @@ export const routeTree = rootRoute.addChildren([
     familyRoute,
     settingsRoute,
     instrumentsRoute,
+    categoriesRoute,
     connectWizardRoute,
     connectionDetailRoute,
   ]),

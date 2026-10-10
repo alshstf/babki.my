@@ -12,7 +12,84 @@ tags:
   - { name: table-import, description: "Loading a table into an account and exporting its journal as one (internal/importer/table)." }
   - { name: tinvest, description: "The T-Invest connection: sync, unparsed operations, explanations (internal/importer/tinvest)." }
   - { name: service, description: "The whole space's export and the state of background data sources." }
+  - { name: categories, description: "A family's categories of money going out and coming in (internal/category)." }
 paths:
+  /api/v1/categories:
+    get:
+      tags: [categories]
+      operationId: listCategories
+      description: >-
+        The family's categories, spending before earning, each level in its order. A family
+        that never had categories gets the default set the first time it asks; a family that
+        removed them does not get them back.
+      responses:
+        "200":
+          description: Every category of the family's, archived ones too
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Category" }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [categories]
+      operationId: createCategory
+      description: >-
+        A new category, last among its siblings. Under a parent it must be of the parent's kind,
+        and the parent on the top level: the tree is two deep. 400 for a name taken at that place.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCategoryRequest" }
+      responses:
+        "201":
+          description: The category
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/categories/{categoryId}:
+    patch:
+      tags: [categories]
+      operationId: updateCategory
+      description: >-
+        Rename, move, reorder or archive a category; absent fields stay. `parent_id: null` moves it
+        to the top level. Archiving a category archives the ones under it; an archived category
+        keeps its operations and leaves the lists a new entry picks from.
+      parameters:
+        - { name: categoryId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCategoryRequest" }
+      responses:
+        "200":
+          description: The category as changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [categories]
+      operationId: deleteCategory
+      description: >-
+        Remove a category nothing refers to. 400 when categories sit under it or an operation
+        names it — archive it instead.
+      parameters:
+        - { name: categoryId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/setup/status:
     get:
       tags: [family]
@@ -2100,6 +2177,34 @@ components:
         source: { type: string }
         source_ref: { type: string }
         note: { type: string }
+    CategoryKind:
+      type: string
+      enum: [expense, income]
+      description: "expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)"
+    Category:
+      type: object
+      required: [id, kind, name, parent_id, archived, position]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/CategoryKind" }
+        name: { type: string, maxLength: 60 }
+        parent_id: { type: string, format: uuid, nullable: true, description: "The category it sits under; null on the top level" }
+        archived: { type: boolean, description: "Kept for the operations naming it, out of the lists a new entry picks from" }
+        position: { type: integer, description: "Its place among its siblings, smallest first" }
+    CreateCategoryRequest:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: { $ref: "#/components/schemas/CategoryKind" }
+        name: { type: string, minLength: 1, maxLength: 60 }
+        parent_id: { type: string, format: uuid, nullable: true }
+    UpdateCategoryRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        parent_id: { type: string, format: uuid, nullable: true, description: "null moves it to the top level; absent leaves it" }
+        archived: { type: boolean }
+        position: { type: integer }
     BackgroundTask:
       type: object
       required: [id, kind, stage, done, total, account_ids, whole_instance, started_at]

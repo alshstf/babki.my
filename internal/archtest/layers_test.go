@@ -22,6 +22,7 @@ var layers = map[string]int{
 	"internal/instrument":      2,
 	"internal/marketdata":      2,
 	"internal/account":         2,
+	"internal/category":        2,
 	"internal/portfolio":       3,
 	"internal/operation":       3,
 	"internal/corporateaction": 3,

@@ -18,6 +18,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/background"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
@@ -90,6 +91,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	converter := marketdata.NewConverter(mdStore)
 	instStore := instrument.NewStore(r.pool)
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
+	category.NewHandler(category.NewStore(r.pool), famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
 	opSvc := operation.NewService(opStore)
 	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).
