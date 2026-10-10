@@ -2047,7 +2047,8 @@ components:
         net_minor: { type: integer, format: int64 }
     ImportField:
       type: string
-      enum: [date, type, instrument, quantity, price, amount, currency, fee, note]
+      enum: [date, type, instrument, quantity, price, amount, currency, fee, note, counterparty, category]
+      description: "`counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled."
     ImportMapping:
       type: object
       required: [has_header, columns, types]
@@ -2059,7 +2060,7 @@ components:
           additionalProperties: { type: integer, minimum: 0 }
         types:
           type: object
-          description: "Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization."
+          description: "Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization. With no type column — a bank's statement has none — the amount's sign says: minus is a withdrawal, plus a deposit, and a zero amount is not read."
           additionalProperties: { $ref: "#/components/schemas/OperationType" }
     ImportPreviewRequest:
       type: object
@@ -2069,7 +2070,7 @@ components:
         mapping: { $ref: "#/components/schemas/ImportMapping" }
     ImportedOperation:
       type: object
-      required: [type, occurred_on, amount_minor, currency, fee_minor, note]
+      required: [type, occurred_on, amount_minor, currency, fee_minor, note, counterparty, category_id]
       properties:
         type: { $ref: "#/components/schemas/OperationType" }
         occurred_on: { type: string, description: "Date YYYY-MM-DD" }
@@ -2080,6 +2081,8 @@ components:
         currency: { type: string }
         fee_minor: { type: integer, format: int64 }
         note: { type: string }
+        counterparty: { type: string }
+        category_id: { type: string, format: uuid, nullable: true, description: "The family's category the row will be filed under: named by the table, or found by the family's rules (an everyday account only); null when neither" }
     ImportRow:
       type: object
       required: [line, cells, verdict]

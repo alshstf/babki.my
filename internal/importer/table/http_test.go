@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/instrument"
@@ -35,7 +36,8 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	account.NewHandler(accStore, famStore, conv, nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
-	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(pool), exchangeStub{}), instStore, auth, sm).Mount(srv)
+	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
+	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(pool), exchangeStub{}, category.NewStore(pool)), instStore, auth, sm).Mount(srv)
 
 	base, c := apitest.Serve(t, srv.Handler())
 	return base, c
@@ -83,6 +85,9 @@ type preview struct {
 			AmountMinor  int64   `json:"amount_minor"`
 			Currency     string  `json:"currency"`
 			FeeMinor     int64   `json:"fee_minor"`
+			Note         string  `json:"note"`
+			Counterparty string  `json:"counterparty"`
+			CategoryID   *string `json:"category_id"`
 		} `json:"operation"`
 	} `json:"rows"`
 }

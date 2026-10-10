@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
@@ -46,6 +47,13 @@ type journal interface {
 	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
 }
 
+// categorizer is the family's categories and filing rules, for a statement's
+// category column and the rows it leaves unfiled.
+type categorizer interface {
+	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
+	Rules(ctx context.Context, spaceID uuid.UUID) ([]category.Rule, error)
+}
+
 type writer interface {
 	CheckImportDelta(ctx context.Context, spaceID uuid.UUID, d operation.ImportDelta) ([]operation.Operation, []operation.ImportRefusal, error)
 	ApplyImportDeltaWith(ctx context.Context, spaceID uuid.UUID, d operation.ImportDelta, after operation.AfterImport) ([]operation.Operation, []operation.ImportRefusal, error)
@@ -60,6 +68,7 @@ type Service struct {
 	journal  journal
 	ops      writer
 	imports  *Store
+	cats     categorizer
 }
 
 // Catalog is the instrument catalog as the service reads and writes it.
@@ -68,10 +77,10 @@ type Catalog interface {
 	catalogWriter
 }
 
-func NewService(accounts accounts, papers Catalog, journal journal, ops writer, imports *Store, exchange exchange) *Service {
+func NewService(accounts accounts, papers Catalog, journal journal, ops writer, imports *Store, exchange exchange, cats categorizer) *Service {
 	return &Service{
 		accounts: accounts, papers: papers, catalog: papers, exchange: exchange,
-		journal: journal, ops: ops, imports: imports,
+		journal: journal, ops: ops, imports: imports, cats: cats,
 	}
 }
 
@@ -102,7 +111,18 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 	if m.HasHeader && len(t.Rows) > 0 {
 		out.Header = t.Rows[0].Cells
 	}
-	r := &reader{accountID: acc.ID, currency: acc.Currency, mapping: m, papers: s.papers, known: map[string]*instrument.Instrument{}}
+	cats, err := s.cats.List(ctx, spaceID)
+	if err != nil {
+		return Preview{}, err
+	}
+	file, err := s.filer(ctx, spaceID, acc.Account, cats)
+	if err != nil {
+		return Preview{}, err
+	}
+	r := &reader{
+		accountID: acc.ID, currency: acc.Currency, mapping: m, papers: s.papers,
+		known: map[string]*instrument.Instrument{}, categories: cats,
+	}
 	seen := map[string]int{}
 	var fresh []operation.Operation
 	byID := map[string]int{}
@@ -116,6 +136,7 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 		case err != nil:
 			return Preview{}, err
 		default:
+			file(&op)
 			id := fingerprint(op, seen)
 			op.ExternalID = &id
 			row.Operation = &op
@@ -156,6 +177,30 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 		}
 	}
 	return out, nil
+}
+
+// filer files a row the table left unfiled by the family's rules — on an
+// everyday account only, as operation.Service.FileByRules does: on a broker's
+// account an unfiled row is money between the family and its broker.
+func (s *Service) filer(ctx context.Context, spaceID uuid.UUID, acc account.Account, cats []category.Category) (func(*operation.Operation), error) {
+	if acc.Type == account.TypeBrokerage {
+		return func(*operation.Operation) {}, nil
+	}
+	rules, err := s.cats.Rules(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uuid.UUID]category.Category, len(cats))
+	for _, c := range cats {
+		byID[c.ID] = c
+	}
+	return func(op *operation.Operation) {
+		if op.CategoryID != nil || !operation.Categorizable(*op) {
+			return
+		}
+		op.CategoryID = category.Match(rules, byID, operation.CategoryKindOf(op.Type),
+			category.Text{Counterparty: op.Counterparty, Note: op.Note})
+	}, nil
 }
 
 // refusal is the journal's refusal of a row, its words carried as they are.

@@ -1389,8 +1389,11 @@ export interface components {
             /** Format: int64 */
             net_minor: number;
         };
-        /** @enum {string} */
-        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note";
+        /**
+         * @description `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled.
+         * @enum {string}
+         */
+        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note" | "counterparty" | "category";
         ImportMapping: {
             /** @description Whether the table's first line is a header rather than an operation */
             has_header: boolean;
@@ -1398,7 +1401,7 @@ export interface components {
             columns: {
                 [key: string]: number;
             };
-            /** @description Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization. */
+            /** @description Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization. With no type column — a bank's statement has none — the amount's sign says: minus is a withdrawal, plus a deposit, and a zero amount is not read. */
             types: {
                 [key: string]: components["schemas"]["OperationType"];
             };
@@ -1425,6 +1428,12 @@ export interface components {
             /** Format: int64 */
             fee_minor: number;
             note: string;
+            counterparty: string;
+            /**
+             * Format: uuid
+             * @description The family's category the row will be filed under: named by the table, or found by the family's rules (an everyday account only); null when neither
+             */
+            category_id: string | null;
         };
         ImportRow: {
             /** @description The row's line in the file, from 1 */

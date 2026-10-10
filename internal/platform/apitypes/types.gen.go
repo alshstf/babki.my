@@ -303,21 +303,27 @@ func (e FullValuation) Valid() bool {
 
 // Defines values for ImportField.
 const (
-	ImportFieldAmount     ImportField = "amount"
-	ImportFieldCurrency   ImportField = "currency"
-	ImportFieldDate       ImportField = "date"
-	ImportFieldFee        ImportField = "fee"
-	ImportFieldInstrument ImportField = "instrument"
-	ImportFieldNote       ImportField = "note"
-	ImportFieldPrice      ImportField = "price"
-	ImportFieldQuantity   ImportField = "quantity"
-	ImportFieldType       ImportField = "type"
+	ImportFieldAmount       ImportField = "amount"
+	ImportFieldCategory     ImportField = "category"
+	ImportFieldCounterparty ImportField = "counterparty"
+	ImportFieldCurrency     ImportField = "currency"
+	ImportFieldDate         ImportField = "date"
+	ImportFieldFee          ImportField = "fee"
+	ImportFieldInstrument   ImportField = "instrument"
+	ImportFieldNote         ImportField = "note"
+	ImportFieldPrice        ImportField = "price"
+	ImportFieldQuantity     ImportField = "quantity"
+	ImportFieldType         ImportField = "type"
 )
 
 // Valid indicates whether the value is a known member of the ImportField enum.
 func (e ImportField) Valid() bool {
 	switch e {
 	case ImportFieldAmount:
+		return true
+	case ImportFieldCategory:
+		return true
+	case ImportFieldCounterparty:
 		return true
 	case ImportFieldCurrency:
 		return true
@@ -1851,7 +1857,7 @@ type ImportAddedPaper struct {
 	Ticker       string             `json:"ticker"`
 }
 
-// ImportField defines model for ImportField.
+// ImportField `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled.
 type ImportField string
 
 // ImportMapping defines model for ImportMapping.
@@ -1862,7 +1868,7 @@ type ImportMapping struct {
 	// HasHeader Whether the table's first line is a header rather than an operation
 	HasHeader bool `json:"has_header"`
 
-	// Types Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization.
+	// Types Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization. With no type column — a bank's statement has none — the amount's sign says: minus is a withdrawal, plus a deposit, and a zero amount is not read.
 	Types map[string]OperationType `json:"types"`
 }
 
@@ -1935,7 +1941,11 @@ type ImportTableResult struct {
 // ImportedOperation defines model for ImportedOperation.
 type ImportedOperation struct {
 	// AmountMinor Signed as the journal records the type: negative for buy, withdrawal, fee and tax
-	AmountMinor  int64                                 `json:"amount_minor"`
+	AmountMinor int64 `json:"amount_minor"`
+
+	// CategoryId The family's category the row will be filed under: named by the table, or found by the family's rules (an everyday account only); null when neither
+	CategoryId   nullable.Nullable[openapi_types.UUID] `json:"category_id"`
+	Counterparty string                                `json:"counterparty"`
 	Currency     string                                `json:"currency"`
 	FeeMinor     int64                                 `json:"fee_minor"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`

@@ -20,12 +20,17 @@ const (
 	FieldCurrency   Field = "currency"
 	FieldFee        Field = "fee"
 	FieldNote       Field = "note"
+	// FieldCounterparty and FieldCategory are a bank statement's: who the
+	// money went to or came from, and what it was for (a category of the
+	// family's, by its name or «Родитель / Дочерняя»).
+	FieldCounterparty Field = "counterparty"
+	FieldCategory     Field = "category"
 )
 
 // Fields lists every field, in the order a person reads a trade.
 var Fields = []Field{
 	FieldDate, FieldType, FieldInstrument, FieldQuantity, FieldPrice,
-	FieldAmount, FieldCurrency, FieldFee, FieldNote,
+	FieldAmount, FieldCurrency, FieldFee, FieldNote, FieldCounterparty, FieldCategory,
 }
 
 // Types are the operations a table may hold: what a person records by hand,
@@ -48,20 +53,25 @@ type Mapping struct {
 
 // headerWords are the words a header cell is recognized by, in Russian and
 // English exports alike. The first field whose word a cell contains wins, so
-// the more specific words come first.
+// the more specific words come first — and the type last: a bank writes
+// «Дата операции», «Сумма операции», «Валюта операции», «Описание операции»,
+// and «операц» alone says only that nothing else fitted.
 var headerWords = []struct {
 	field Field
 	words []string
 }{
 	{FieldFee, []string{"комисс", "commission", "fee"}},
+	// Before the type: «Категория операции» names the category, not the type.
+	{FieldCategory, []string{"категор", "category"}},
+	{FieldCounterparty, []string{"контрагент", "получател", "плательщик", "counterparty", "payee", "merchant"}},
 	{FieldDate, []string{"дата", "date"}},
-	{FieldType, []string{"тип", "операц", "вид", "направлен", "type", "action", "side"}},
 	{FieldInstrument, []string{"isin", "тикер", "ticker", "symbol", "бумаг", "инструмент", "security"}},
 	{FieldQuantity, []string{"кол", "штук", "quantity", "qty", "shares"}},
 	{FieldPrice, []string{"цена", "price"}},
 	{FieldAmount, []string{"сумма", "объем", "объём", "amount", "total", "value"}},
 	{FieldCurrency, []string{"валют", "currency", "ccy"}},
 	{FieldNote, []string{"коммент", "примеч", "описан", "note", "description", "comment"}},
+	{FieldType, []string{"тип", "операц", "вид", "направлен", "type", "action", "side"}},
 }
 
 // typeWords are the values of a type column recognized without being told.

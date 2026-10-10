@@ -10,11 +10,13 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/money"
@@ -74,6 +76,9 @@ type reader struct {
 	mapping   Mapping
 	papers    catalog
 	known     map[string]*instrument.Instrument // cell → paper, nil when not found
+	// categories are the family's, for a category column; filing by rules
+	// happens after reading (Service.file).
+	categories []category.Category
 }
 
 func (r *reader) cell(line Line, f Field) string {
@@ -88,13 +93,9 @@ func (r *reader) cell(line Line, f Field) string {
 func (r *reader) read(ctx context.Context, line Line) (operation.Operation, error) {
 	op := operation.Operation{AccountID: r.accountID, Source: Source}
 
-	typeCell := r.cell(line, FieldType)
-	typ, ok := r.mapping.Types[typeKey(typeCell)]
-	if !ok {
-		if typeCell == "" {
-			return op, unreadable(ReasonNoType, FieldType, "")
-		}
-		return op, unreadable(ReasonTypeNotMapped, FieldType, typeCell)
+	typ, err := r.rowType(line)
+	if err != nil {
+		return op, err
 	}
 	op.Type = typ
 
@@ -155,7 +156,99 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 		}
 	}
 	op.Note = r.cell(line, FieldNote)
+	op.Counterparty = clip(strings.TrimSpace(r.cell(line, FieldCounterparty)), operation.MaxCounterpartyRunes)
+	if c := strings.TrimSpace(r.cell(line, FieldCategory)); c != "" && operation.Categorizable(op) {
+		op.CategoryID = categoryNamed(r.categories, c, operation.CategoryKindOf(op.Type))
+		// A bank's own category the family has no match for («Супермаркеты»)
+		// stays with the row, in its note, where a rule can read it.
+		if op.CategoryID == nil {
+			if op.Note == "" {
+				op.Note = c
+			} else {
+				op.Note += " · " + c
+			}
+		}
+	}
 	return op, nil
+}
+
+// rowType is the row's operation: its type cell as mapped, or — in a table
+// with no type column, as a bank's statement has none — the sign of its
+// amount: money out is a withdrawal, money in a deposit.
+func (r *reader) rowType(line Line) (operation.Type, error) {
+	if _, mapped := r.mapping.Columns[FieldType]; !mapped {
+		cell := r.cell(line, FieldAmount)
+		v, _, err := parseNumber(cell, FieldAmount)
+		if err != nil {
+			return "", err
+		}
+		if v.IsZero() {
+			return "", unreadable(ReasonNoType, FieldAmount, cell)
+		}
+		if v.IsNegative() {
+			return operation.TypeWithdrawal, nil
+		}
+		return operation.TypeDeposit, nil
+	}
+	typeCell := r.cell(line, FieldType)
+	typ, ok := r.mapping.Types[typeKey(typeCell)]
+	if !ok {
+		if typeCell == "" {
+			return "", unreadable(ReasonNoType, FieldType, "")
+		}
+		return "", unreadable(ReasonTypeNotMapped, FieldType, typeCell)
+	}
+	return typ, nil
+}
+
+// clip cuts s to at most n code points.
+func clip(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
+}
+
+// CategorySeparator stands between a parent's name and a child's in a table's
+// category cell, «Транспорт / Такси».
+const CategorySeparator = " / "
+
+// foldName is a category's name as a cell is compared with it: case aside,
+// «ё» read as «е».
+func foldName(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "ё", "е")
+}
+
+// categoryNamed is the family's active category of kind a cell names — by its
+// own name, or as «Родитель / Дочерняя» the way the export writes it. Nil when
+// none does, or when the name alone fits more than one: the row then waits
+// unfiled (or for a rule) rather than land in a guess.
+func categoryNamed(categories []category.Category, cell string, kind category.Kind) *uuid.UUID {
+	parentName, name := "", foldName(cell)
+	if i := strings.LastIndex(cell, CategorySeparator); i >= 0 {
+		parentName, name = foldName(cell[:i]), foldName(cell[i+len(CategorySeparator):])
+	}
+	byID := make(map[uuid.UUID]category.Category, len(categories))
+	for _, c := range categories {
+		byID[c.ID] = c
+	}
+	var found *uuid.UUID
+	for _, c := range categories {
+		if c.Kind != kind || c.Archived || foldName(c.Name) != name {
+			continue
+		}
+		if parentName != "" {
+			if c.ParentID == nil || foldName(byID[*c.ParentID].Name) != parentName {
+				continue
+			}
+		}
+		if found != nil {
+			return nil
+		}
+		id := c.ID
+		found = &id
+	}
+	return found
 }
 
 // amount is the row's money, signed the way the journal records the type:

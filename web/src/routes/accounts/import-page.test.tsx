@@ -13,7 +13,27 @@ import "@/i18n";
 import { TableImport } from "./import-page";
 
 const sent = vi.hoisted(() => [] as { method: string; path: string; body: unknown }[]);
-const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false }));
+const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false, statement: false }));
+
+// A bank's statement as the server reads it: no type column, the sign decides,
+// and each row says what it will be filed under.
+const statement = () => ({
+  mapping: { has_header: true, columns: { date: 0, amount: 1, note: 2, category: 3 }, types: {} },
+  header: ["Дата операции", "Сумма операции", "Описание", "Категория"],
+  rows: [
+    {
+      line: 2,
+      cells: ["01.09.2026", "-1200,00", "ПЯТЕРОЧКА 4411", "Супермаркеты"],
+      verdict: "new",
+      reason: null,
+      operation: {
+        type: "withdrawal", occurred_on: "2026-09-01", instrument_id: null, quantity: null, price: null,
+        amount_minor: -120_000, currency: "RUB", fee_minor: 0, note: "ПЯТЕРОЧКА 4411",
+        counterparty: "", category_id: "c-food",
+      },
+    },
+  ],
+});
 
 const preview = (hasHeader: boolean) => ({
   mapping: {
@@ -56,6 +76,10 @@ fetchMock.mockImplementation(async (input: Request) => {
   const body = input.method === "GET" || input.method === "DELETE" ? null : await input.clone().json();
   if (input.method !== "GET") sent.push({ method: input.method, path, body });
   if (path === "/api/v1/accounts") return json([]);
+  if (path === "/api/v1/categories") {
+    return json([{ id: "c-food", kind: "expense", name: "Продукты", parent_id: null, archived: false, position: 1 }]);
+  }
+  if (path.endsWith("/imports/preview") && state.statement) return json(statement());
   if (path.endsWith("/imports/preview")) {
     const mapping = (body as { mapping?: { has_header: boolean } }).mapping;
     const answer = preview(mapping ? mapping.has_header : true);
@@ -106,6 +130,7 @@ afterEach(() => {
   sent.length = 0;
   state.imports = [];
   state.missing = false;
+  state.statement = false;
 });
 
 function wrap(ui: ReactElement) {
@@ -158,6 +183,17 @@ describe("importing a table", () => {
     expect(sent.some((s) => s.method === "DELETE")).toBe(false);
     fireEvent.click(within(confirm).getByRole("button", { name: "Откатить" }));
     await waitFor(() => expect(sent.some((s) => s.method === "DELETE" && s.path === "/api/v1/imports/imp-1")).toBe(true));
+  });
+
+  it("reads a bank's statement by the sign and shows what each row is filed under", async () => {
+    state.statement = true;
+    wrap(<TableImport accountId="acc-1" />);
+    const file = new File(["Дата операции;Сумма операции;Описание;Категория\n01.09.2026;-1200,00;ПЯТЕРОЧКА 4411;Супермаркеты\n"], "sber.csv");
+    fireEvent.change(await screen.findByLabelText("Файл"), { target: { files: [file] } });
+
+    expect(await screen.findByTestId("import-by-sign")).toBeTruthy();
+    expect(await screen.findByTestId("import-row-category")).toHaveTextContent("Продукты");
+    expect(screen.getByTestId("import-row-2").textContent).toContain("вывод");
   });
 
   it("files the papers the catalog lacks from the exchange and reads the rows again", async () => {

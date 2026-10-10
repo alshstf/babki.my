@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 )
@@ -30,6 +31,17 @@ func (noPapers) ByTickerTradable(context.Context, string) (instrument.Instrument
 
 func (noPapers) Create(context.Context, instrument.Instrument) (instrument.Instrument, error) {
 	panic("a preview files nothing")
+}
+
+// noCategories is a family with no categories and no rules.
+type noCategories struct{}
+
+func (noCategories) List(context.Context, uuid.UUID) ([]category.Category, error) {
+	return nil, nil
+}
+
+func (noCategories) Rules(context.Context, uuid.UUID) ([]category.Rule, error) {
+	return nil, nil
 }
 
 type storedJournal []operation.Operation
@@ -58,7 +70,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	csv := "Дата;Операция;Сумма\n01.07.2026;Пополнение;500\n01.07.2026;Пополнение;500\n02.07.2026;Пополнение;700\n"
 
 	first := &takesAll{}
-	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first, nil, nil)
+	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first, nil, nil, noCategories{})
 	p, err := svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +83,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	imported.Source = Source
 
 	again := &takesAll{}
-	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again, nil, nil)
+	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again, nil, nil, noCategories{})
 	p, err = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +99,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	// A hand entry with the same content is not a table's row.
 	byHand := imported
 	byHand.Source = "manual"
-	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{}, nil, nil)
+	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{}, nil, nil, noCategories{})
 	if p, _ = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil); p.Rows[0].Verdict != VerdictNew {
 		t.Errorf("a hand entry made the row a duplicate: %s", p.Rows[0].Verdict)
 	}

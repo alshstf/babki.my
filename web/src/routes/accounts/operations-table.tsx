@@ -218,10 +218,11 @@ export function OperationsTable({
   const createRule = useCreateCategoryRule();
   const fileByRules = useFileByRules();
   // A rule remembered from a row files the account's other rows like it at
-  // once.
+  // once. It looks in both fields: a bank's statement puts the shop in its
+  // description as often as in a counterparty column.
   const remember = (pattern: string, categoryId: string) =>
     createRule.mutate(
-      { category_id: categoryId, field: "counterparty", pattern: rulePattern(pattern) },
+      { category_id: categoryId, field: "any", pattern: rulePattern(pattern) },
       { onSuccess: () => fileByRules.mutate(accountId) },
     );
   const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
@@ -450,8 +451,8 @@ export function OperationsTable({
                         editable={canDelete}
                         pending={setCategory.isPending && setCategory.variables?.operationId === operation.id}
                         onChange={(categoryId) => setCategory.mutate({ operationId: operation.id, categoryId })}
-                        counterparty={operation.counterparty}
-                        onRemember={(categoryId) => remember(operation.counterparty, categoryId)}
+                        counterparty={operation.counterparty || operation.note}
+                        onRemember={(categoryId) => remember(operation.counterparty || operation.note, categoryId)}
                       />
                     </div>
                   )}

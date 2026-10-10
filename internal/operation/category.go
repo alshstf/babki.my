@@ -38,6 +38,10 @@ func notCategorizable(o Operation) error {
 		family.ErrValidation, o.Type)
 }
 
+// CategoryKindOf is the kind of category a categorizable row of type t takes:
+// money in earns, money out spends.
+func CategoryKindOf(t Type) category.Kind { return categoryKind(t) }
+
 // categoryKind is the kind of category a categorizable row takes: money in
 // earns, money out spends.
 func categoryKind(t Type) category.Kind {
