@@ -91,3 +91,29 @@ func TestTheMinimumIsDueByADayOfTheMonth(t *testing.T) {
 		t.Error("a day of the month and the period's end at once were accepted")
 	}
 }
+
+// Т-Банк (#461): a minimum missed takes the grace off the purchases of the
+// period it was due in, not the rest.
+func TestAMissedMinimumTakesOnlyItsPeriodsGrace(t *testing.T) {
+	tbank := alfa
+	tbank.MissedMinimumPeriod = true
+	// September's statement (1 October) is due on the 21st and missed; the
+	// purchases of October — on the November statement — lose their grace,
+	// November's keep it.
+	ops := []operation.Operation{
+		spend("2026-09-05", 10_000), spend("2026-10-05", 2_000), spend("2026-10-25", 1_000), spend("2026-11-03", 500),
+	}
+	st := Work(tbank, ops, "RUB", d("2026-11-05"), Kinds{})
+	if got := dues(st); len(got) != 1 || got["2026-12-21"] != 500_00 {
+		t.Errorf("grace = %v, want November's 500 only", got)
+	}
+	var lostOctober int64
+	for _, l := range st.Lost {
+		if day(l.From) == "2026-10-01" {
+			lostOctober = l.Amount
+		}
+	}
+	if lostOctober != 3_000_00 {
+		t.Errorf("lost = %+v, want October's 3 000 among them", st.Lost)
+	}
+}

@@ -2219,6 +2219,9 @@ type CreditCardTerms struct {
 	// MinRoundUpMinor The minimum is rounded up to a multiple of it (100 ₽ = 10000), never past the debt; 0 for none
 	MinRoundUpMinor int64 `json:"min_round_up_minor"`
 
+	// MissedMinimumPeriod A minimum missed takes the grace off the purchases of the period it was due in — those its next statement shows — and no others (Т-Банк)
+	MissedMinimumPeriod bool `json:"missed_minimum_period"`
+
 	// OpenedOn For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise
 	OpenedOn nullable.Nullable[string] `json:"opened_on"`
 

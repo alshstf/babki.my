@@ -395,9 +395,9 @@ function BenefitBlock({ benefit, currency, ownRate }: { benefit: NonNullable<Cre
 }
 
 // Typical terms to start from; the bank's statement has the real ones.
-const LENIENT = { graceAllLost: false, dueMode: "days" as const, chargesInFull: false, minRound: "0" };
+const LENIENT = { graceAllLost: false, missedMinimumPeriod: false, dueMode: "days" as const, chargesInFull: false, minRound: "0" };
 const PRESETS: Record<string, Partial<Form>> = {
-  statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT },
+  statement55: { kind: "statement", paymentDays: "25", minPercent: "8", ...LENIENT, missedMinimumPeriod: true },
   sber120: { kind: "long", graceDays: "120", paymentDays: "20", minPercent: "3", ...LENIENT, chargesInFull: true },
   year: { kind: "long", graceDays: "365", paymentDays: "20", minPercent: "3", ...LENIENT },
   // «Халва» (decision Р-33): every purchase in installments, 99 ₽ with the
@@ -437,6 +437,7 @@ interface Form {
   rate: string;
   ownRate: string;
   graceAllLost: boolean;
+  missedMinimumPeriod: boolean;
   dueMode: "days" | "periodEnd" | "day";
   payDay: string;
   minRound: string;
@@ -478,6 +479,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     rate: terms?.annual_rate ?? "",
     ownRate: terms?.own_rate ?? "",
     graceAllLost: terms?.grace_all_lost ?? false,
+    missedMinimumPeriod: terms?.missed_minimum_period ?? false,
     dueMode: terms?.pay_by_period_end ? "periodEnd" : terms && terms.pay_day > 0 ? "day" : "days",
     payDay: terms && terms.pay_day > 0 ? String(terms.pay_day) : "20",
     minRound: terms ? minorToInput(terms.min_round_up_minor) : "0",
@@ -545,6 +547,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
         grace_months: f.kind === "windows" ? Number(f.graceMonths) : 0,
         opened_on: f.kind === "windows" ? f.openedOn : null,
         grace_all_lost: f.graceAllLost,
+        missed_minimum_period: f.missedMinimumPeriod,
         pay_by_period_end: f.dueMode === "periodEnd",
         pay_day: f.dueMode === "day" ? Number(f.payDay) : 0,
         min_round_up_minor: money(f.minRound) ?? 0,
@@ -593,7 +596,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
-  type Switch = "graceAllLost" | "chargesInFull" | "cashbackPoints";
+  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints";
   const toggle = (id: Switch, label: string, hint: string) => (
     <div className="flex items-start gap-2">
       <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
@@ -687,6 +690,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
             </>
           )}
           {toggle("graceAllLost", t("card.graceAllLost"), t("card.graceAllLostHint"))}
+          {toggle("missedMinimumPeriod", t("card.missedMinimumPeriod"), t("card.missedMinimumPeriodHint"))}
           {field("minPercent", t("card.minPercent"))}
           {field("minFloor", t("card.minFloor", { currency: account.currency }))}
           {field("minRound", t("card.minRound", { currency: account.currency }), t("card.minRoundHint"))}

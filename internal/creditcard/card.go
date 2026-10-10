@@ -94,6 +94,10 @@ type Terms struct {
 	// charged from their day — until the purchases are repaid in full; a
 	// minimum missed does the same until the whole debt is.
 	GraceAllLost bool
+	// MissedMinimumPeriod: a minimum missed takes the grace off the
+	// purchases of the period it was due in — those its next statement
+	// shows (Т-Банк) — and no others.
+	MissedMinimumPeriod bool
 	// PayByPeriodEnd: the minimum is due by the last day of the period after
 	// the statement, not PaymentDays after it.
 	PayByPeriodEnd bool
@@ -541,7 +545,7 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	// first, and the penalty it runs up while overdue; the charges the last
 	// statement showed, for ChargesInFull.
 	var charges, minimumDue, paidToward, overdue, overdueDays int64
-	var minimumBy time.Time
+	var minimumBy, minimumFrom, periodLostUntil time.Time
 	stated := false
 	first := today
 	if len(rows) > 0 {
@@ -554,6 +558,15 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 				overdue += minimumDue - paidToward
 				if t.GraceAllLost {
 					takeOff(minimumBy.AddDate(0, 0, 1), true, true)
+				}
+				// The purchases its next statement shows lose their grace.
+				if t.MissedMinimumPeriod {
+					periodLostUntil = t.statementAfter(minimumFrom, 1)
+					for _, it := range items {
+						if it.grace && !it.lost && it.left > 0 && !it.on.Before(minimumFrom) && it.on.Before(periodLostUntil) {
+							it.lost, it.early = true, true
+						}
+					}
 				}
 			}
 			minimumBy = time.Time{}
@@ -571,7 +584,7 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			}
 			partsUnpaid += parts
 			debt := owedOf(anything) - credit
-			minimumDue, minimumBy, paidToward = t.minimum(debt, owedOf(isCharge))+parts, t.dueOn(day), 0
+			minimumDue, minimumBy, minimumFrom, paidToward = t.minimum(debt, owedOf(isCharge))+parts, t.dueOn(day), day, 0
 			if day.Equal(st.LastStatement) {
 				charges, stated = owedOf(isCharge), true
 				partsAtLast, debtAtLast = parts, debt
@@ -623,6 +636,9 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 						it.from, it.to, it.deadline = run.from, run.to, run.deadline
 					}
 					it.lost, it.early = off, off
+					if day.Before(periodLostUntil) {
+						it.lost, it.early = true, true
+					}
 				}
 				items = append(items, it)
 			}

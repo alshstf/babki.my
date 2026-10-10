@@ -3051,7 +3051,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback, installment]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, fees, cashback, installment]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3073,6 +3073,7 @@ components:
         grace_months: { type: integer, minimum: 0, maximum: 36, description: "For grace_kind windows: the periods from a window's start to the end of the one its purchases are paid by; 0 otherwise" }
         opened_on: { type: string, nullable: true, description: "For grace_kind windows: the day the card's contract was made (YYYY-MM-DD), whose period the windows count from; null otherwise" }
         grace_all_lost: { type: boolean, description: "A deadline missed takes the grace off the whole debt, and off the purchases made after it until the purchases are repaid in full; a minimum missed, until the whole debt is" }
+        missed_minimum_period: { type: boolean, description: "A minimum missed takes the grace off the purchases of the period it was due in — those its next statement shows — and no others (Т-Банк)" }
         pay_by_period_end: { type: boolean, description: "The minimum is due by the last day of the period after the statement, not payment_days after it" }
         pay_day: { type: integer, minimum: 0, maximum: 31, description: "The minimum is due by this day of the month, the first after the statement (ВТБ: 20); 0 for none. Not with pay_by_period_end" }
         min_round_up_minor: { type: integer, format: int64, minimum: 0, description: "The minimum is rounded up to a multiple of it (100 ₽ = 10000), never past the debt; 0 for none" }
