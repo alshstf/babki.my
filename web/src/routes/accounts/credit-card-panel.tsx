@@ -274,6 +274,7 @@ const FIELD_LABEL: Record<string, string> = {
   grace_to_month_end: "graceToMonthEnd",
   grace_extend_days: "extendDays",
   grace_extend_percent: "extendPercent",
+  shift_to_workday: "shiftToWorkday",
 };
 
 // CatalogUpdate offers the catalog's newer revision of the card's tariff
@@ -608,6 +609,7 @@ function graceLine(t: (key: string, values?: Record<string, unknown>) => string,
     parts.push(t("card.extendLine", { days: terms.grace_extend_days, pct: terms.grace_extend_percent.replace(".", ",") }));
   }
   if (terms.grace_moves) parts.push(t("card.graceMovesLine"));
+  if (terms.shift_to_workday) parts.push(t("card.shiftToWorkdayLine"));
   return parts.join(", ");
 }
 
@@ -700,6 +702,7 @@ interface Form {
   extendDays: string;
   extendPercent: string;
   extendFree: boolean;
+  shiftToWorkday: boolean;
   monthlyFee: string;
   yearlyFee: string;
   cashFree: string;
@@ -757,6 +760,7 @@ function termsOf(f: Form): CreditCardTerms {
     grace_extend_days: f.kind === "running" ? int(f.extendDays) : 0,
     grace_extend_percent: f.kind === "running" && int(f.extendDays) > 0 ? String(num(f.extendPercent)) : "0",
     grace_extend_free: f.kind === "running" && int(f.extendDays) > 0 && f.extendFree,
+    shift_to_workday: f.shiftToWorkday,
     fees: {
       monthly_minor: money(f.monthlyFee),
       yearly_minor: money(f.yearlyFee),
@@ -823,6 +827,7 @@ function toForm(terms?: CreditCardTerms): Form {
     extendDays: terms && terms.grace_extend_days > 0 ? String(terms.grace_extend_days) : "",
     extendPercent: terms && terms.grace_extend_days > 0 ? terms.grace_extend_percent : "",
     extendFree: terms?.grace_extend_free ?? false,
+    shiftToWorkday: terms?.shift_to_workday ?? false,
     monthlyFee: terms ? minorToInput(terms.fees.monthly_minor) : "0",
     yearlyFee: terms ? minorToInput(terms.fees.yearly_minor) : "0",
     cashFree: terms ? minorToInput(terms.fees.cash_free_minor) : "0",
@@ -927,7 +932,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
-  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints" | "graceMoves" | "graceToMonthEnd" | "extendFree";
+  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints" | "graceMoves" | "graceToMonthEnd" | "extendFree" | "shiftToWorkday";
   const toggle = (id: Switch, label: string, hint: string) => (
     <div className="flex items-start gap-2">
       <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
@@ -1103,6 +1108,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
           )}
           {f.kind === "running" && f.extendDays.trim() !== "" && f.extendDays !== "0" &&
             toggle("extendFree", t("card.extendFree"), t("card.extendFreeHint"))}
+          {toggle("shiftToWorkday", t("card.shiftToWorkday"), t("card.shiftToWorkdayHint"))}
           {toggle("graceMoves", t("card.graceMoves"), t("card.graceMovesHint"))}
           {toggle("graceAllLost", t("card.graceAllLost"), t("card.graceAllLostHint"))}
           {toggle("missedMinimumPeriod", t("card.missedMinimumPeriod"), t("card.missedMinimumPeriodHint"))}

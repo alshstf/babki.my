@@ -2550,6 +2550,8 @@ export interface components {
             grace_extend_percent: string;
             /** @description The next extension is free — the first one is (Альфа) */
             grace_extend_free: boolean;
+            /** @description A deadline — the grace's last day, the minimum's — on a day off moves to the next working day, by the Russian calendar: the Government's day-off transfers for 2026 and 2027, the Labour Code's holidays and weekends after (Газпромбанк) */
+            shift_to_workday: boolean;
             fees: components["schemas"]["CreditCardFees"];
             cashback: components["schemas"]["CreditCardCashback"];
             /** @description The catalog's version the terms were taken from (GET /credit-cards/catalog); null when stated by hand */

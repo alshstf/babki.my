@@ -2579,6 +2579,9 @@ type CreditCardTerms struct {
 	// PaymentDays Days after the statement to pay the minimum (and, for grace_kind statement, the whole statement); not used with pay_by_period_end
 	PaymentDays int `json:"payment_days"`
 
+	// ShiftToWorkday A deadline — the grace's last day, the minimum's — on a day off moves to the next working day, by the Russian calendar: the Government's day-off transfers for 2026 and 2027, the Labour Code's holidays and weekends after (Газпромбанк)
+	ShiftToWorkday bool `json:"shift_to_workday"`
+
 	// StatementDay The day of the month the bank closes a statement period; a short month's last day stands for a later one
 	StatementDay int `json:"statement_day"`
 
