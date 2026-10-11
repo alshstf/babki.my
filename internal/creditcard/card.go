@@ -136,8 +136,12 @@ type Terms struct {
 	ExtendDays    int
 	ExtendPercent decimal.Decimal
 	ExtendFree    bool
-	Fees          Fees
-	Cashback      Cashback
+	// ShiftToWorkday: a deadline — the grace's last day, the minimum's — on
+	// a day off moves to the next working day (Газпромбанк, п. 1.26, 1.40
+	// of its terms; #452).
+	ShiftToWorkday bool
+	Fees           Fees
+	Cashback       Cashback
 	// Installment: every purchase of the card in installments when Months
 	// is above 0 — a card of installments («Халва», decision Р-33).
 	Installment Plan
@@ -388,17 +392,17 @@ func (t Terms) statementAfter(s time.Time, n int) time.Time {
 func (t Terms) dueOn(s time.Time) time.Time {
 	switch {
 	case t.PayByPeriodEnd:
-		return t.statementAfter(s, 1).AddDate(0, 0, -1)
+		return t.workday(t.statementAfter(s, 1).AddDate(0, 0, -1))
 	case t.PayDay > 0:
 		for m := 0; ; m++ {
 			first := time.Date(s.Year(), s.Month()+time.Month(m), 1, 0, 0, 0, 0, time.UTC)
 			last := first.AddDate(0, 1, -1).Day()
 			if d := first.AddDate(0, 0, min(t.PayDay, last)-1); d.After(s) {
-				return d
+				return t.workday(d)
 			}
 		}
 	}
-	return s.AddDate(0, 0, t.PaymentDays)
+	return t.workday(s.AddDate(0, 0, t.PaymentDays))
 }
 
 // window is the window of periods a day's purchases belong to, counted from
@@ -430,10 +434,10 @@ func (t Terms) deadline(d time.Time, periods int) time.Time {
 	start, end := t.period(d)
 	switch t.GraceKind {
 	case Long:
-		return t.toMonthEnd(start.AddDate(0, 0, t.GraceDays-1))
+		return t.workday(t.toMonthEnd(start.AddDate(0, 0, t.GraceDays-1)))
 	case Windows:
 		start, _ = t.window(d)
-		return t.statementAfter(start, t.GraceMonths).AddDate(0, 0, -1)
+		return t.workday(t.statementAfter(start, t.GraceMonths).AddDate(0, 0, -1))
 	}
 	return t.dueOn(t.statementAfter(end, periods))
 }
@@ -771,9 +775,9 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 						if run == nil {
 							start := t.RunFrom.runStart(day)
 							end := start.AddDate(0, 0, t.GraceDays)
-							run = &item{from: start, to: end, deadline: t.toMonthEnd(end.AddDate(0, 0, -1))}
+							run = &item{from: start, to: end, deadline: t.workday(t.toMonthEnd(end.AddDate(0, 0, -1)))}
 							if t.ExtendDays > 0 {
-								run.extended = t.toMonthEnd(start.AddDate(0, 0, t.ExtendDays-1))
+								run.extended = t.workday(t.toMonthEnd(start.AddDate(0, 0, t.ExtendDays-1)))
 							}
 						}
 						it.from, it.to, it.deadline, it.extended = run.from, run.to, run.deadline, run.extended

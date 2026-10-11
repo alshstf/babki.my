@@ -3411,7 +3411,7 @@ components:
         prepaid: { type: boolean, description: "Debt paid ahead of the schedule (LoanPrepayment), not a scheduled payment" }
     CreditCardTerms:
       type: object
-      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, grace_moves, grace_periods, grace_categories, grace_to_month_end, grace_extend_days, grace_extend_percent, grace_extend_free, fees, cashback, installment, catalog]
+      required: [limit_minor, statement_day, payment_days, grace_kind, grace_days, min_percent, min_floor_minor, annual_rate, own_rate, grace_run_from, pay_day, min_round_up_minor, window_months, grace_months, opened_on, grace_all_lost, missed_minimum_period, pay_by_period_end, charges_in_full, transfer_categories, grace_moves, grace_periods, grace_categories, grace_to_month_end, grace_extend_days, grace_extend_percent, grace_extend_free, shift_to_workday, fees, cashback, installment, catalog]
       properties:
         limit_minor: { type: integer, format: int64, minimum: 0 }
         statement_day: { type: integer, minimum: 1, maximum: 31, description: "The day of the month the bank closes a statement period; a short month's last day stands for a later one" }
@@ -3452,6 +3452,7 @@ components:
         grace_extend_days: { type: integer, minimum: 0, maximum: 1100, description: "For grace_kind running: a grace not repaid by its last day goes on until this day from its start, for a fee (Альфа's «Автопродление», 150); more than grace_days; 0 for none" }
         grace_extend_percent: { type: string, description: "Decimal: the extension's fee, percent of the purchases' debt a month beyond grace_days (Альфа: 1.9); 0 with none" }
         grace_extend_free: { type: boolean, description: "The next extension is free — the first one is (Альфа)" }
+        shift_to_workday: { type: boolean, description: "A deadline — the grace's last day, the minimum's — on a day off moves to the next working day, by the Russian calendar: the Government's day-off transfers for 2026 and 2027, the Labour Code's holidays and weekends after (Газпромбанк)" }
         fees: { $ref: "#/components/schemas/CreditCardFees" }
         cashback: { $ref: "#/components/schemas/CreditCardCashback" }
         catalog:

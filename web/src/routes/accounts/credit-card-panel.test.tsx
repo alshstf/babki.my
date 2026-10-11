@@ -47,7 +47,7 @@ const noInstallment = { months: 0, monthly_fee_percent: "0", fee_minor: 0 };
 
 const noGraces = {
   grace_moves: false, grace_periods: 0, grace_categories: [], grace_to_month_end: false,
-  grace_extend_days: 0, grace_extend_percent: "0", grace_extend_free: false,
+  grace_extend_days: 0, grace_extend_percent: "0", grace_extend_free: false, shift_to_workday: false,
 };
 
 // The catalog as the server gives it: Газпромбанк's card by the contract's
@@ -221,6 +221,19 @@ describe("CreditCardPanel", () => {
     answer({ "/credit-card": card({ grace_extension: { until: "2027-02-07", active: true, free: true, monthly_fee_minor: 0 } }) });
     show(<CreditCardPanel account={account} canEdit={false} />);
     expect(norm((await screen.findByTestId("card-extension")).textContent ?? "")).toBe("Льгота продлена до 07.02.2027, это продление бесплатное.");
+  });
+
+  // Газпромбанк's deadlines on a day off move to the next working day (#452).
+  it("moves the deadlines off days off when asked", async () => {
+    answer({ "/credit-card": card() });
+    Element.prototype.scrollIntoView ??= () => {};
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Изменить условия" }));
+    fireEvent.click(await screen.findByLabelText("Срок на выходной переносится на рабочий день"));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({ shift_to_workday: true });
   });
 
   it("states a running grace's extension", async () => {

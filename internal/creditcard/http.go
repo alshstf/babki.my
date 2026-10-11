@@ -274,7 +274,7 @@ func termsFromAPI(id uuid.UUID, req apitypes.CreditCardTerms) (Terms, error) {
 		RunFrom:             RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
 		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
 		GraceMoves: req.GraceMoves, GracePeriods: req.GracePeriods, GraceToMonthEnd: req.GraceToMonthEnd,
-		ExtendDays: req.GraceExtendDays, ExtendFree: req.GraceExtendFree,
+		ExtendDays: req.GraceExtendDays, ExtendFree: req.GraceExtendFree, ShiftToWorkday: req.ShiftToWorkday,
 	}
 	if req.GraceExtendPercent != "" {
 		p, err := decimal.NewFromString(req.GraceExtendPercent)
@@ -483,6 +483,7 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		TransferCategories:  t.TransferCategories,
 		GraceMoves:          t.GraceMoves, GracePeriods: t.GracePeriods, GraceToMonthEnd: t.GraceToMonthEnd,
 		GraceExtendDays: t.ExtendDays, GraceExtendPercent: t.ExtendPercent.String(), GraceExtendFree: t.ExtendFree,
+		ShiftToWorkday:  t.ShiftToWorkday,
 		GraceCategories: make([]apitypes.CreditCardGraceCategory, 0, len(t.GraceCategories)),
 		Fees: apitypes.CreditCardFees{
 			MonthlyMinor: t.Fees.Monthly, YearlyMinor: t.Fees.Yearly, CashFreeMinor: t.Fees.CashFree,
