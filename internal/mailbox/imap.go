@@ -18,6 +18,10 @@ import (
 // dozen kilobytes; attachments past this are not a receipt's text.
 const maxLetterBytes = 5 << 20
 
+// maxBatchBytes is the most of the letters one reading keeps: the letters
+// past it are read the next hour, from where this reading stopped.
+const maxBatchBytes = 64 << 20
+
 // IMAP reads a box over IMAP with TLS, read-only: letters are not marked read
 // or moved.
 type IMAP struct {
@@ -84,15 +88,19 @@ func (r IMAP) Read(ctx context.Context, s Settings, password string, after, vali
 	done := make(chan error, 1)
 	go func() { done <- c.UidFetch(set, []imap.FetchItem{imap.FetchUid, section.FetchItem()}, messages) }()
 	var letters []Letter
+	var kept int
 	for m := range messages {
 		body := m.GetBody(section)
-		if body == nil {
+		// Past the batch's bytes the letters are drained, not kept: they
+		// come again the next hour, being after the last one kept.
+		if body == nil || kept >= maxBatchBytes {
 			continue
 		}
 		raw, err := io.ReadAll(io.LimitReader(body, maxLetterBytes))
 		if err != nil {
 			continue
 		}
+		kept += len(raw)
 		letters = append(letters, Letter{UID: m.Uid, Raw: raw})
 	}
 	if err := <-done; err != nil {

@@ -2,7 +2,9 @@ package receipt_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -133,5 +135,24 @@ func TestAReceiptIsShared(t *testing.T) {
 	resp = share(t, stranger, url, map[string][]byte{"IMG_0003.png": photo})
 	if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || loc != "/login" {
 		t.Errorf("not signed in = %d → %q, want the sign-in page", resp.StatusCode, loc)
+	}
+}
+
+// A picture claiming more pixels than a phone takes is not decoded: a small
+// file could otherwise take all the server's memory.
+func TestAHugePictureIsNotDecoded(t *testing.T) {
+	// A PNG's signature and header for 100 000 × 100 000 pixels, no data.
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:], 100_000)
+	binary.BigEndian.PutUint32(ihdr[4:], 100_000)
+	ihdr[8], ihdr[9] = 8, 0 // 8-bit grey
+	var b bytes.Buffer
+	b.WriteString("\x89PNG\r\n\x1a\n")
+	_ = binary.Write(&b, binary.BigEndian, uint32(len(ihdr)))
+	chunk := append([]byte("IHDR"), ihdr...)
+	b.Write(chunk)
+	_ = binary.Write(&b, binary.BigEndian, crc32.ChecksumIEEE(chunk))
+	if _, ok := receipt.ReadQR(b.Bytes()); ok {
+		t.Error("a 10-gigapixel picture was read")
 	}
 }
