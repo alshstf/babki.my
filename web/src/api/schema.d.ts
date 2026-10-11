@@ -2544,6 +2544,12 @@ export interface components {
             grace_categories: components["schemas"]["CreditCardGraceCategory"][];
             /** @description For grace_kind long and running: the grace's last day moves to the last day of its month (Альфа, contracts from 10.08.2026) */
             grace_to_month_end: boolean;
+            /** @description For grace_kind running: a grace not repaid by its last day goes on until this day from its start, for a fee (Альфа's «Автопродление», 150); more than grace_days; 0 for none */
+            grace_extend_days: number;
+            /** @description Decimal: the extension's fee, percent of the purchases' debt a month beyond grace_days (Альфа: 1.9); 0 with none */
+            grace_extend_percent: string;
+            /** @description The next extension is free — the first one is (Альфа) */
+            grace_extend_free: boolean;
             fees: components["schemas"]["CreditCardFees"];
             cashback: components["schemas"]["CreditCardCashback"];
             /** @description The catalog's version the terms were taken from (GET /credit-cards/catalog); null when stated by hand */
@@ -2791,6 +2797,19 @@ export interface components {
             /** @description The grace was taken off before deadline, by an earlier deadline or a minimum missed (grace_all_lost) */
             early: boolean;
         };
+        CreditCardGraceExtension: {
+            /** @description The extension's last day: the purchases owed under it are due by then */
+            until: string;
+            /** @description The grace's own last day has passed: the extension runs, its fee charged */
+            active: boolean;
+            /** @description This extension is free */
+            free: boolean;
+            /**
+             * Format: int64
+             * @description About what the bank charges a month for it: grace_extend_percent of the purchases owed under it; 0 when free
+             */
+            monthly_fee_minor: number;
+        };
         CreditCardStatus: {
             /**
              * Format: int64
@@ -2878,6 +2897,8 @@ export interface components {
             cashback_expected_minor: number;
             /** @description The day it comes; null when the card names no cashback rules */
             cashback_on: string | null;
+            /** @description The running grace's extension (grace_extend_days) while purchases are owed under it; null with none */
+            grace_extension: components["schemas"]["CreditCardGraceExtension"] | null;
         };
         CreditCardBenefit: {
             /** @description A year before today, or the card's first row when later */

@@ -2340,6 +2340,21 @@ type CreditCardGraceCategory struct {
 	Periods    int                `json:"periods"`
 }
 
+// CreditCardGraceExtension defines model for CreditCardGraceExtension.
+type CreditCardGraceExtension struct {
+	// Active The grace's own last day has passed: the extension runs, its fee charged
+	Active bool `json:"active"`
+
+	// Free This extension is free
+	Free bool `json:"free"`
+
+	// MonthlyFeeMinor About what the bank charges a month for it: grace_extend_percent of the purchases owed under it; 0 when free
+	MonthlyFeeMinor int64 `json:"monthly_fee_minor"`
+
+	// Until The extension's last day: the purchases owed under it are due by then
+	Until string `json:"until"`
+}
+
 // CreditCardInstallment defines model for CreditCardInstallment.
 type CreditCardInstallment struct {
 	// AmountMinor The sum in installments
@@ -2415,8 +2430,11 @@ type CreditCardStatus struct {
 	DebtMinor int64 `json:"debt_minor"`
 
 	// Grace What to pay by which day so that purchases stay free of interest, soonest first; empty when counted by balance
-	Grace             []CreditCardDue `json:"grace"`
-	GraceOffByMinimum bool            `json:"grace_off_by_minimum"`
+	Grace []CreditCardDue `json:"grace"`
+
+	// GraceExtension The running grace's extension (grace_extend_days) while purchases are owed under it; null with none
+	GraceExtension    nullable.Nullable[CreditCardGraceExtension] `json:"grace_extension"`
+	GraceOffByMinimum bool                                        `json:"grace_off_by_minimum"`
 
 	// GraceOffSince The day a missed deadline (or, grace_off_by_minimum, a missed minimum) took the grace off the whole debt (grace_all_lost); null while the grace holds
 	GraceOffSince nullable.Nullable[string] `json:"grace_off_since"`
@@ -2502,6 +2520,15 @@ type CreditCardTerms struct {
 
 	// GraceDays For grace_kind long: the days a period's purchases stay free from the period's start; for running: the grace's length; 0 otherwise
 	GraceDays int `json:"grace_days"`
+
+	// GraceExtendDays For grace_kind running: a grace not repaid by its last day goes on until this day from its start, for a fee (Альфа's «Автопродление», 150); more than grace_days; 0 for none
+	GraceExtendDays int `json:"grace_extend_days"`
+
+	// GraceExtendFree The next extension is free — the first one is (Альфа)
+	GraceExtendFree bool `json:"grace_extend_free"`
+
+	// GraceExtendPercent Decimal: the extension's fee, percent of the purchases' debt a month beyond grace_days (Альфа: 1.9); 0 with none
+	GraceExtendPercent string `json:"grace_extend_percent"`
 
 	// GraceKind statement: a period's purchases are free until its payment day; long: for grace_days from the period's start; windows: the purchases of window_months periods in a row, counted from the period of opened_on, are free until the end of the grace_months-th period from the window's start (Газпромбанк «180 дней»: 2 and 6); running: one grace of grace_days for every purchase while the card is in debt, from the first purchase (grace_run_from), a new one only once the debt is repaid in full, a deadline missed taking it off the whole debt until then (ВТБ «110 дней»).
 	GraceKind CreditCardTermsGraceKind `json:"grace_kind"`

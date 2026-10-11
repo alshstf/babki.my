@@ -45,7 +45,10 @@ const noFees = {
 
 const noInstallment = { months: 0, monthly_fee_percent: "0", fee_minor: 0 };
 
-const noGraces = { grace_moves: false, grace_periods: 0, grace_categories: [], grace_to_month_end: false };
+const noGraces = {
+  grace_moves: false, grace_periods: 0, grace_categories: [], grace_to_month_end: false,
+  grace_extend_days: 0, grace_extend_percent: "0", grace_extend_free: false,
+};
 
 // The catalog as the server gives it: Газпромбанк's card by the contract's
 // day.
@@ -75,7 +78,7 @@ const status = (over: Partial<CreditCardStatus> = {}): CreditCardStatus => ({
   grace_off_since: null, grace_off_by_minimum: false, to_restore_minor: 0, cash_this_period_minor: 0, penalty_minor: 0,
   transfers_this_period_minor: 0, intro_left_minor: 0, intro_until: null, yearly_fee_on: null,
   cashback_expected_minor: 0, cashback_on: null, minimum_overdue_minor: 0,
-  installments: [], installments_due_minor: 0, bank: null, ...over,
+  installments: [], installments_due_minor: 0, bank: null, grace_extension: null, ...over,
 });
 
 const card = (over: Partial<CreditCardStatus> = {}, byJournal = true, benefit: CreditCard["benefit"] = null): CreditCard => ({
@@ -205,6 +208,34 @@ describe("CreditCardPanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(await put.json()).toMatchObject({ catalog: { revision: "2026-09-10", fingerprint: "fp-premium" } });
+  });
+
+  // Альфа's paid extension (#473): ahead, what it costs; running, by when.
+  it("says what the grace's extension costs", async () => {
+    answer({ "/credit-card": card({ grace_extension: { until: "2027-02-07", active: false, free: false, monthly_fee_minor: 190_00 } }) });
+    show(<CreditCardPanel account={account} canEdit={false} />);
+    expect(norm((await screen.findByTestId("card-extension")).textContent ?? "")).toBe(
+      "Не успеете — льгота продлится до 07.02.2027, плата за продление около 190,00 ₽ в месяц.",
+    );
+    cleanup();
+    answer({ "/credit-card": card({ grace_extension: { until: "2027-02-07", active: true, free: true, monthly_fee_minor: 0 } }) });
+    show(<CreditCardPanel account={account} canEdit={false} />);
+    expect(norm((await screen.findByTestId("card-extension")).textContent ?? "")).toBe("Льгота продлена до 07.02.2027, это продление бесплатное.");
+  });
+
+  it("states a running grace's extension", async () => {
+    const base = card();
+    answer({ "/credit-card": { ...base, terms: { ...base.terms, grace_kind: "running", grace_days: 60, grace_run_from: "next_day" } } });
+    Element.prototype.scrollIntoView ??= () => {};
+    show(<CreditCardPanel account={account} canEdit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Изменить условия" }));
+    fireEvent.change(await screen.findByLabelText("Продление льготы до, дней"), { target: { value: "150" } });
+    fireEvent.change(screen.getByLabelText("Плата за продление, % от долга за покупки в месяц"), { target: { value: "1,9" } });
+    fireEvent.click(screen.getByLabelText("Следующее продление бесплатное"));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
+    expect(await put.json()).toMatchObject({ grace_kind: "running", grace_extend_days: 150, grace_extend_percent: "1.9", grace_extend_free: true });
   });
 
   // Fees as Т-Банк and ВТБ state them (#462): the yearly fee's statement, the

@@ -117,3 +117,59 @@ func TestAMissedMinimumTakesOnlyItsPeriodsGrace(t *testing.T) {
 		t.Errorf("lost = %+v, want October's 3 000 among them", st.Lost)
 	}
 }
+
+// Альфа's «Автопродление периода без %» (#473): the 60 days of a running
+// grace go on to 150 when the purchases are not repaid by the 60th, for
+// 1.9 % of the purchases' debt a month beyond the 60 — the first extension
+// free. Paid by the 60th, nothing is charged; past the 150th, the grace is
+// off as without the extension.
+func TestARunningGraceIsExtendedForAFee(t *testing.T) {
+	alfa := Terms{
+		Limit: 300_000_00, StatementDay: 10, PaymentDays: 20, GraceKind: Running, GraceDays: 60, RunFrom: FromNextDay,
+		MinPercent: decimal.NewFromInt(3), AnnualRate: decimal.RequireFromString("39.99"),
+		ExtendDays: 150, ExtendPercent: decimal.RequireFromString("1.9"),
+	}
+	ops := []operation.Operation{spend("2026-09-10", 10_000)}
+
+	st := Work(alfa, ops, "RUB", d("2026-10-01"), Kinds{})
+	if got := dues(st); len(got) != 1 || got["2026-11-09"] != 10_000_00 {
+		t.Errorf("grace = %v, want 10 000 by 09.11, the 60th day", got)
+	}
+	if e := st.Extension; e == nil || day(e.Until) != "2027-02-07" || e.Active || e.MonthlyFee != 190_00 {
+		t.Errorf("extension = %+v, want until 07.02 for 190 a month, not yet running", e)
+	}
+
+	// Past the 60th day unpaid: due by the 150th, the extension running.
+	st = Work(alfa, ops, "RUB", d("2026-11-20"), Kinds{})
+	if got := dues(st); len(got) != 1 || got["2027-02-07"] != 10_000_00 || len(st.Lost) != 0 || !st.GraceOffSince.IsZero() {
+		t.Errorf("extended: grace %v, lost %+v, off since %s", got, st.Lost, day(st.GraceOffSince))
+	}
+	if e := st.Extension; e == nil || !e.Active {
+		t.Errorf("extension = %+v, want running", e)
+	}
+
+	// The first extension: free.
+	free := alfa
+	free.ExtendFree = true
+	if e := Work(free, ops, "RUB", d("2026-11-20"), Kinds{}).Extension; e == nil || e.MonthlyFee != 0 || !e.Free {
+		t.Errorf("a free extension = %+v", e)
+	}
+
+	// Past the 150th: the grace is off the whole debt.
+	st = Work(alfa, ops, "RUB", d("2027-02-10"), Kinds{})
+	if day(st.GraceOffSince) != "2027-02-08" || len(st.Grace) != 0 || st.Extension != nil || len(st.Lost) != 1 || day(st.Lost[0].Deadline) != "2027-02-07" {
+		t.Errorf("past the extension: off since %s, grace %v, extension %+v, lost %+v", day(st.GraceOffSince), dues(st), st.Extension, st.Lost)
+	}
+
+	// No extension past the grace's own days, nor for another kind of grace.
+	bad := alfa
+	bad.ExtendDays = 60
+	if err := bad.Validate(); err == nil {
+		t.Error("an extension of no days more was accepted")
+	}
+	bad = vtb110
+	bad.GraceKind, bad.ExtendDays = Long, 150
+	if err := bad.Validate(); err == nil {
+		t.Error("an extension of a long grace was accepted")
+	}
+}
