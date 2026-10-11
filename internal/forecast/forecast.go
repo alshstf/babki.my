@@ -2,7 +2,8 @@
 // the coming months (household stage 4, Р-24): the money on cards, current
 // and savings accounts and in cash today, and ahead of it the regular payments
 // the journal shows (internal/recurring) and the loans' scheduled payments
-// (internal/loan), day by day. From it: the lowest point, and how much can be
+// (internal/loan), day by day; when asked, the spending the budget's limits
+// expect (internal/budget). From it: the lowest point, and how much can be
 // spent before the next salary without going below zero. It owns no table.
 package forecast
 
@@ -18,6 +19,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/loan"
@@ -34,6 +36,9 @@ const (
 	KindRegular  Kind = "regular"
 	KindLoan     Kind = "loan"
 	KindCashback Kind = "cashback"
+	// KindBudget is what the limits expect to be spent, week by week: no
+	// account's, no payee's.
+	KindBudget Kind = "budget"
 )
 
 // Event is one payment ahead. Amount is in Currency, signed as the journal
@@ -49,6 +54,9 @@ type Event struct {
 	// Overdue is a regular payment whose day has passed without it: expected
 	// today.
 	Overdue bool
+	// category is a regular payment's, for the budget's expected spending
+	// not to count it twice.
+	category *uuid.UUID
 }
 
 // Day is the money at the end of a day.
@@ -116,6 +124,10 @@ type cards interface {
 	All(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Card, error)
 }
 
+type budgets interface {
+	Expect(ctx context.Context, spaceID uuid.UUID, today, last time.Time) ([]budget.Expected, error)
+}
+
 // Service builds forecasts.
 type Service struct {
 	accounts  accounts
@@ -124,16 +136,18 @@ type Service struct {
 	regulars  regulars
 	loans     loans
 	cards     cards
+	budgets   budgets
 	rates     marketdata.RateSource
 	now       func() time.Time
 }
 
-func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c cards, rates marketdata.RateSource) *Service {
-	return &Service{accounts: acc, positions: pos, spaces: sp, regulars: reg, loans: l, cards: c, rates: rates, now: time.Now}
+func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c cards, b budgets, rates marketdata.RateSource) *Service {
+	return &Service{accounts: acc, positions: pos, spaces: sp, regulars: reg, loans: l, cards: c, budgets: b, rates: rates, now: time.Now}
 }
 
-// Of is the space's forecast for the given number of days from today.
-func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int) (Forecast, error) {
+// Of is the space's forecast for the given number of days from today; with
+// withBudget, the spending the budget's limits expect is in it.
+func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudget bool) (Forecast, error) {
 	if days < MinDays || days > MaxDays {
 		return Forecast{}, fmt.Errorf("%w: days is %d to %d", family.ErrValidation, MinDays, MaxDays)
 	}
@@ -253,6 +267,13 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int) (Forecast
 		events[i].InBase = v
 		out.Events = append(out.Events, events[i])
 	}
+	if withBudget {
+		expected, err := s.budgets.Expect(ctx, spaceID, today, end.AddDate(0, 0, -1))
+		if err != nil {
+			return Forecast{}, err
+		}
+		out.Events = append(out.Events, spread(expected, out.Events, today, end, sp.BaseCurrency)...)
+	}
 	slices.SortStableFunc(out.Events, func(a, b Event) int {
 		if c := a.On.Compare(b.On); c != 0 {
 			return c
@@ -289,13 +310,68 @@ func (s *Service) money(ctx context.Context, spaceID uuid.UUID, a account.WithBa
 	return map[string]int64{a.Currency: a.Balance.AmountMinor}, true, nil
 }
 
+// spread lays the spending the limits expect over the weeks it falls in:
+// this month's from today, a later month's from its first day, an even part
+// every seven days, all the categories' parts of a day in one event. A
+// regular payment of a limited category in the month is in the forecast
+// already and is taken off its limit's; a month the horizon cuts brings its
+// share of the days.
+func spread(expected []budget.Expected, events []Event, today, end time.Time, base string) []Event {
+	byDay := map[time.Time]int64{}
+	for _, x := range expected {
+		covers := map[uuid.UUID]bool{}
+		for _, id := range x.Covers {
+			covers[id] = true
+		}
+		next := x.Month.AddDate(0, 1, 0)
+		amount := x.Amount
+		for _, e := range events {
+			if e.Kind == KindRegular && e.category != nil && covers[*e.category] && e.InBase < 0 &&
+				!e.On.Before(x.Month) && e.On.Before(next) {
+				amount += e.InBase
+			}
+		}
+		from := x.Month
+		if from.Before(today) {
+			from = today
+		}
+		to := next
+		if end.Before(to) {
+			amount = amount * int64(end.Sub(from).Hours()/24) / int64(next.Sub(from).Hours()/24)
+			to = end
+		}
+		if amount <= 0 || !from.Before(to) {
+			continue
+		}
+		var days []time.Time
+		for on := from; on.Before(to); on = on.AddDate(0, 0, 7) {
+			days = append(days, on)
+		}
+		part := amount / int64(len(days))
+		for i, on := range days {
+			if i == len(days)-1 {
+				part = amount - part*int64(len(days)-1)
+			}
+			byDay[on] += part
+		}
+	}
+	out := make([]Event, 0, len(byDay))
+	for on, v := range byDay {
+		out = append(out, Event{On: on, Kind: KindBudget, Amount: -v, Currency: base, InBase: -v})
+	}
+	return out
+}
+
 // occurrences are a regular payment's days from today to end: an overdue one
 // today, as still expected — unless inBalance, the balance it is counted by
 // being of its day or later — then on its pace.
 func occurrences(p recurring.Payment, today, end time.Time, inBalance bool) []Event {
 	var out []Event
 	ev := func(on time.Time, overdue bool) Event {
-		return Event{On: on, Name: p.Name, Kind: KindRegular, AccountID: p.AccountID, Amount: p.Amount, Currency: p.Currency, Overdue: overdue}
+		return Event{
+			On: on, Name: p.Name, Kind: KindRegular, AccountID: p.AccountID, Amount: p.Amount, Currency: p.Currency,
+			Overdue: overdue, category: p.CategoryID,
+		}
 	}
 	on := p.Next
 	if on.Before(today) {

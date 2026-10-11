@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/loan"
@@ -58,6 +59,12 @@ func (f fakeLoans) All(context.Context, uuid.UUID) ([]loan.Terms, error) { retur
 type fakeCards []creditcard.Card
 
 func (f fakeCards) All(context.Context, uuid.UUID) ([]creditcard.Card, error) { return f, nil }
+
+type fakeBudgets []budget.Expected
+
+func (f fakeBudgets) Expect(context.Context, uuid.UUID, time.Time, time.Time) ([]budget.Expected, error) {
+	return f, nil
+}
 
 // fakeRates knows the dollar at 90 roubles and nothing else.
 type fakeRates struct{}
@@ -125,11 +132,12 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 			Terms:   creditcard.Terms{Cashback: creditcard.Cashback{BasePercent: decimal.NewFromInt(1)}},
 			Status:  creditcard.Status{CashbackExpected: 1_234_00, CashbackOn: d("2026-11-01")},
 		}},
+		fakeBudgets{},
 		fakeRates{},
 	)
 	svc.now = func() time.Time { return d("2026-10-10").Add(15 * time.Hour) }
 
-	f, err := svc.Of(context.Background(), uuid.New(), 40)
+	f, err := svc.Of(context.Background(), uuid.New(), 40, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,9 +191,9 @@ func TestTheMoneyAheadIsWorkedOutDayByDay(t *testing.T) {
 }
 
 func TestAHorizonOutOfBoundsIsRefused(t *testing.T) {
-	svc := NewService(fakeAccounts{}, fakePositions{}, fakeSpaces{}, fakeRegulars{}, fakeLoans{}, fakeCards{}, fakeRates{})
+	svc := NewService(fakeAccounts{}, fakePositions{}, fakeSpaces{}, fakeRegulars{}, fakeLoans{}, fakeCards{}, fakeBudgets{}, fakeRates{})
 	for _, days := range []int{0, MinDays - 1, MaxDays + 1} {
-		if _, err := svc.Of(context.Background(), uuid.New(), days); err == nil {
+		if _, err := svc.Of(context.Background(), uuid.New(), days, false); err == nil {
 			t.Errorf("%d days accepted", days)
 		}
 	}
@@ -200,9 +208,9 @@ func TestAPaymentBeforeTheBalanceMarkIsInTheBalance(t *testing.T) {
 	}
 	svc := NewService(fakeAccounts{current}, fakePositions{}, fakeSpaces{},
 		fakeRegulars{{Name: "Аренда", Cadence: recurring.Monthly, Amount: -5_000_00, Currency: "RUB", AccountID: current.ID, Next: d("2026-10-06")}},
-		fakeLoans{}, fakeCards{}, fakeRates{})
+		fakeLoans{}, fakeCards{}, fakeBudgets{}, fakeRates{})
 	svc.now = func() time.Time { return d("2026-10-10") }
-	f, err := svc.Of(context.Background(), uuid.New(), 40)
+	f, err := svc.Of(context.Background(), uuid.New(), 40, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +234,58 @@ func TestWhatCanBeSpentStartsFromTheMoneyNow(t *testing.T) {
 	}
 	if free == nil || *free != 20_000_00 || lowest.Balance != 20_000_00 || !lowest.On.Equal(today) {
 		t.Errorf("free = %v, lowest = %+v; want the 20 000 of now", free, lowest)
+	}
+}
+
+// The budget's limits, when asked: what is left of this month's «Продукты»
+// in even parts every seven days from today; the rent of «Дом», limited and
+// regular, taken off its limit; November's whole limits from its first day,
+// the horizon's cut month by its share of the days.
+func TestTheBudgetIsSpentWeekByWeek(t *testing.T) {
+	current := account.WithBalance{
+		Account: account.Account{ID: uuid.New(), Name: "Текущий", Type: account.TypeChecking, Currency: "RUB", Status: account.StatusActive},
+		Balance: &account.BalancePoint{AsOf: d("2026-10-10"), AmountMinor: 100_000_00},
+	}
+	food, home := uuid.New(), uuid.New()
+	rent := recurring.Payment{Name: "Аренда", Cadence: recurring.Monthly, Amount: -30_000_00, Currency: "RUB", AccountID: current.ID, Next: d("2026-10-20"), CategoryID: &home}
+	svc := NewService(fakeAccounts{current}, fakePositions{}, fakeSpaces{}, fakeRegulars{rent}, fakeLoans{}, fakeCards{},
+		fakeBudgets{
+			{Month: d("2026-10-01"), CategoryID: food, Covers: []uuid.UUID{food}, Amount: 9_000_00},
+			{Month: d("2026-10-01"), CategoryID: home, Covers: []uuid.UUID{home}, Amount: 35_000_00},
+			{Month: d("2026-11-01"), CategoryID: food, Covers: []uuid.UUID{food}, Amount: 15_000_00},
+		}, fakeRates{})
+	svc.now = func() time.Time { return d("2026-10-10") }
+
+	f, err := svc.Of(context.Background(), uuid.New(), 30, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, e := range f.Events {
+		if e.Kind == KindBudget {
+			got[e.On.Format(time.DateOnly)] = e.InBase
+		}
+	}
+	// October: 9 000 for food and 35 000 − 30 000 of rent for home, over
+	// 10, 17, 24 and 31 October. November to 8 November (the horizon): 15 000
+	// × 8/30 = 4 000 over 1 and 8 November.
+	want := map[string]int64{
+		"2026-10-10": -3_500_00, "2026-10-17": -3_500_00, "2026-10-24": -3_500_00, "2026-10-31": -3_500_00,
+		"2026-11-01": -2_000_00, "2026-11-08": -2_000_00,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("budget events = %v, want %v", got, want)
+	}
+	for on, v := range want {
+		if got[on] != v {
+			t.Errorf("%s: %d, want %d", on, got[on], v)
+		}
+	}
+	without, err := svc.Of(context.Background(), uuid.New(), 30, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.Lowest.Balance-f.Lowest.Balance != 18_000_00 {
+		t.Errorf("lowest with the budget %d, without %d: want 18 000 apart", f.Lowest.Balance, without.Lowest.Balance)
 	}
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { ForecastCard } from "./forecast";
@@ -43,10 +43,15 @@ function forecast(over: Partial<Forecast> = {}): Forecast {
   };
 }
 
-function show(f: Forecast) {
-  fetchMock.mockImplementation(() =>
-    Promise.resolve(new Response(JSON.stringify(f), { status: 200, headers: { "Content-Type": "application/json" } })),
-  );
+// limited: the budget of this month has a limited category.
+function show(f: Forecast, limited = false) {
+  fetchMock.mockImplementation((input: Request) => {
+    const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+    if (new URL(input.url).pathname.endsWith("/budget")) {
+      return json({ month: "2026-10", base_currency: "RUB", lines: limited ? [{ category_id: "food" }] : [], planned_minor: 0, spent_minor: 0, left_minor: 0, unlimited_minor: 0, missing_rates: [] });
+    }
+    return json(f);
+  });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -61,6 +66,24 @@ afterEach(() => {
 });
 
 describe("ForecastCard", () => {
+  it("counts the budget when asked, once the family has a limit", async () => {
+    localStorage.clear();
+    show(forecast({ events: [event("2026-10-17", "", -3_500_00, { kind: "budget", account_id: null })] }), true);
+    const box = await screen.findByTestId("forecast-with-budget");
+    const asked = () => fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/forecast"));
+    expect(asked().every((u) => u.searchParams.get("budget") === "false")).toBe(true);
+    fireEvent.click(box);
+    await waitFor(() => expect(asked().some((u) => u.searchParams.get("budget") === "true")).toBe(true));
+    expect(localStorage.getItem("babki.forecast.budget")).toBe("1");
+    await waitFor(() => expect(norm(screen.getByTestId("forecast-events").textContent ?? "")).toMatch(/17\.10\.2026 · траты по бюджету/));
+  });
+
+  it("offers no budget without a limit", async () => {
+    show(forecast());
+    await screen.findByTestId("forecast-events");
+    expect(screen.queryByTestId("forecast-with-budget")).toBeNull();
+  });
+
   it("says what is short before the salary, and lists what comes first", async () => {
     show(forecast());
     const free = await screen.findByTestId("forecast-free");

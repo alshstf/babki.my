@@ -29,7 +29,7 @@ export function useSetBudgetLimit() {
       if (!response.ok) throw apiError(response, error);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["budget"] });
+      for (const key of ["budget", "forecast"]) void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 }

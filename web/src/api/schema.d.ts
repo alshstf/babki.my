@@ -308,7 +308,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The family's money to live on — active cards, current and savings accounts and cash, each counted the way the total counts it (by its journal or by its last balance) — today and day by day ahead, in the base currency at today's rates: the regular payments of GET /recurring on those accounts on their pace (an overdue one today, unless the account is counted by a balance marked on or after its day, which holds it already), and every loan's scheduled payments (a regular payment named as a loan account is its interest and is left to the schedule). Deposits, brokers' accounts and loans' own balances are not in it. Twice a month from one payee (a salary and its advance) counts as two monthly payments. */
+        /** @description The family's money to live on — active cards, current and savings accounts and cash, each counted the way the total counts it (by its journal or by its last balance) — today and day by day ahead, in the base currency at today's rates: the regular payments of GET /recurring on those accounts on their pace (an overdue one today, unless the account is counted by a balance marked on or after its day, which holds it already), and every loan's scheduled payments (a regular payment named as a loan account is its interest and is left to the schedule). Deposits, brokers' accounts and loans' own balances are not in it. Twice a month from one payee (a salary and its advance) counts as two monthly payments. With budget=true, the spending the budget's limits expect is in it too: this month what is left of each limit, a later month the whole limit (a копилка's carried money aside), less the regular payments of the same categories in that month, laid out in even parts every seven days. */
         get: operations["getForecast"];
         put?: never;
         post?: never;
@@ -3084,15 +3084,18 @@ export interface components {
         ForecastEvent: {
             /** @description Date YYYY-MM-DD */
             on: string;
-            /** @description The payee, or the loan account's name */
+            /** @description The payee, or the loan account's name; empty for the budget's */
             name: string;
             /**
-             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)
+             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days
              * @enum {string}
              */
-            kind: "regular" | "loan" | "cashback";
-            /** Format: uuid */
-            account_id: string;
+            kind: "regular" | "loan" | "cashback" | "budget";
+            /**
+             * Format: uuid
+             * @description The account it moves; null for the budget's, which is no account's
+             */
+            account_id: string | null;
             /**
              * Format: int64
              * @description Signed as the journal signs it, in currency
@@ -5208,6 +5211,8 @@ export interface operations {
             query?: {
                 /** @description How far ahead, in days; 90 when absent */
                 days?: number;
+                /** @description Whether the budget's expected spending is in it; false when absent */
+                budget?: boolean;
             };
             header?: never;
             path?: never;

@@ -351,6 +351,7 @@ func (e CreditCardTermsGraceRunFrom) Valid() bool {
 
 // Defines values for ForecastEventKind.
 const (
+	ForecastEventKindBudget   ForecastEventKind = "budget"
 	ForecastEventKindCashback ForecastEventKind = "cashback"
 	ForecastEventKindLoan     ForecastEventKind = "loan"
 	ForecastEventKindRegular  ForecastEventKind = "regular"
@@ -359,6 +360,8 @@ const (
 // Valid indicates whether the value is a known member of the ForecastEventKind enum.
 func (e ForecastEventKind) Valid() bool {
 	switch e {
+	case ForecastEventKindBudget:
+		return true
 	case ForecastEventKindCashback:
 		return true
 	case ForecastEventKindLoan:
@@ -2890,7 +2893,8 @@ type ForecastDay struct {
 
 // ForecastEvent defines model for ForecastEvent.
 type ForecastEvent struct {
-	AccountId openapi_types.UUID `json:"account_id"`
+	// AccountId The account it moves; null for the budget's, which is no account's
+	AccountId nullable.Nullable[openapi_types.UUID] `json:"account_id"`
 
 	// AmountMinor Signed as the journal signs it, in currency
 	AmountMinor int64  `json:"amount_minor"`
@@ -2899,10 +2903,10 @@ type ForecastEvent struct {
 	// InBaseMinor The same in the base currency at today's rate
 	InBaseMinor int64 `json:"in_base_minor"`
 
-	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)
+	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days
 	Kind ForecastEventKind `json:"kind"`
 
-	// Name The payee, or the loan account's name
+	// Name The payee, or the loan account's name; empty for the budget's
 	Name string `json:"name"`
 
 	// On Date YYYY-MM-DD
@@ -2912,7 +2916,7 @@ type ForecastEvent struct {
 	Overdue bool `json:"overdue"`
 }
 
-// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only)
+// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days
 type ForecastEventKind string
 
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
@@ -4745,6 +4749,9 @@ type GetCashflowParams struct {
 type GetForecastParams struct {
 	// Days How far ahead, in days; 90 when absent
 	Days *int `form:"days,omitempty" json:"days,omitempty"`
+
+	// Budget Whether the budget's expected spending is in it; false when absent
+	Budget *bool `form:"budget,omitempty" json:"budget,omitempty"`
 }
 
 // AddImportPapersJSONBody defines parameters for AddImportPapers.

@@ -1,14 +1,36 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForecast, type Forecast } from "@/api/forecast";
+import { useBudget } from "@/api/budget";
 import { formatMinor, formatMinorCompact, signClass } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
+import { formatDate, localToday } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 
 const HORIZONS = [30, 90, 180];
 const SOONEST = 6;
+
+// Whether the forecast counts the budget's limits, in this browser only: a
+// convenience, so a failure to read or write it changes nothing else.
+const WITH_BUDGET = "babki.forecast.budget";
+
+function withBudgetStored(): boolean {
+  try {
+    return localStorage.getItem(WITH_BUDGET) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeWithBudget(on: boolean) {
+  try {
+    localStorage.setItem(WITH_BUDGET, on ? "1" : "0");
+  } catch {
+    // Remembering is a convenience: without storage the box starts unticked.
+  }
+}
 
 // ForecastCard is the family's money to live on ahead (household stage 4): how
 // much can be spent before the next salary, the line of the money day by day
@@ -16,7 +38,13 @@ const SOONEST = 6;
 export function ForecastCard() {
   const { t } = useTranslation();
   const [days, setDays] = useState(90);
-  const forecast = useForecast(days);
+  // The budget's limits (budget plan, step 4): offered once the family has
+  // one this month.
+  const limits = useBudget(localToday().slice(0, 7));
+  const hasLimits = (limits.data?.lines.length ?? 0) > 0;
+  const [budgetTicked, setBudgetTicked] = useState(withBudgetStored);
+  const withBudget = hasLimits && budgetTicked;
+  const forecast = useForecast(days, withBudget);
   const f = forecast.data;
   const horizonLabel: Record<number, string> = {
     30: t("forecast.horizons.d30"),
@@ -49,6 +77,22 @@ export function ForecastCard() {
       {/* One column that may be narrower than a payee's long name: the name is
           cut with an ellipsis rather than widening the card past the screen. */}
       <CardContent className="grid grid-cols-1 gap-3">
+        {hasLimits && (
+          <label className="flex items-start gap-2 text-sm">
+            <Checkbox
+              checked={budgetTicked}
+              onCheckedChange={(v) => {
+                setBudgetTicked(v === true);
+                storeWithBudget(v === true);
+              }}
+              data-testid="forecast-with-budget"
+            />
+            <span className="grid gap-0.5">
+              {t("forecast.withBudget")}
+              {withBudget && <span className="text-xs text-muted-foreground">{t("forecast.withBudgetHint")}</span>}
+            </span>
+          </label>
+        )}
         {f.next_income && free != null ? (
           <div data-testid="forecast-free">
             <div className="text-sm text-muted-foreground">
@@ -74,7 +118,7 @@ export function ForecastCard() {
             {f.events.slice(0, SOONEST).map((e) => (
               <li key={`${e.on}-${e.name}-${e.kind}-${e.amount_minor}`} className="flex justify-between gap-3">
                 <span className={cn("min-w-0 truncate", e.overdue && "text-amber-700 dark:text-amber-400")}>
-                  {e.overdue ? t("forecast.expectedToday") : formatDate(e.on)} · {e.name}
+                  {e.overdue ? t("forecast.expectedToday") : formatDate(e.on)} · {e.kind === "budget" ? t("forecast.budget") : e.name}
                   {e.kind === "loan" && <span className="text-muted-foreground"> · {t("forecast.loan")}</span>}
                   {e.kind === "cashback" && <span className="text-muted-foreground"> · {t("forecast.cashback")}</span>}
                 </span>
@@ -114,7 +158,8 @@ function ForecastChart({ forecast }: { forecast: Forecast }) {
   const index = new Map(points.map((p, i) => [p.on, i]));
   const byDay = new Map<string, string[]>();
   for (const e of forecast.events) {
-    byDay.set(e.on, [...(byDay.get(e.on) ?? []), `${e.name} ${formatMinor(e.in_base_minor, c)}`]);
+    const name = e.kind === "budget" ? t("forecast.budget") : e.name;
+    byDay.set(e.on, [...(byDay.get(e.on) ?? []), `${name} ${formatMinor(e.in_base_minor, c)}`]);
   }
   return (
     <div className="grid gap-1">

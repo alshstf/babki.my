@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/google/uuid"
 	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/family"
@@ -41,7 +42,7 @@ func (h *Handler) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 		days = n
 	}
-	f, err := h.svc.Of(r.Context(), p.SpaceID, days)
+	f, err := h.svc.Of(r.Context(), p.SpaceID, days, r.URL.Query().Get("budget") == "true")
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -50,10 +51,15 @@ func (h *Handler) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return apitypes.ForecastDay{On: d.On.Format(time.DateOnly), BalanceMinor: d.Balance}
 	}
 	event := func(e Event) apitypes.ForecastEvent {
-		return apitypes.ForecastEvent{
-			On: e.On.Format(time.DateOnly), Name: e.Name, Kind: apitypes.ForecastEventKind(e.Kind), AccountId: e.AccountID,
+		out := apitypes.ForecastEvent{
+			On: e.On.Format(time.DateOnly), Name: e.Name, Kind: apitypes.ForecastEventKind(e.Kind),
+			AccountId:   nullable.NewNullNullable[uuid.UUID](),
 			AmountMinor: e.Amount, Currency: e.Currency, InBaseMinor: e.InBase, Overdue: e.Overdue,
 		}
+		if e.Kind != KindBudget {
+			out.AccountId = nullable.NewNullableWithValue(e.AccountID)
+		}
+		return out
 	}
 	out := apitypes.Forecast{
 		BaseCurrency: f.BaseCurrency, Days: f.Days, StartMinor: f.Start, AccountsCounted: f.Accounts,
