@@ -274,6 +274,14 @@ func termsFromAPI(id uuid.UUID, req apitypes.CreditCardTerms) (Terms, error) {
 		RunFrom:             RunFrom(req.GraceRunFrom), PayDay: req.PayDay, MinRoundUp: req.MinRoundUpMinor,
 		PayByPeriodEnd: req.PayByPeriodEnd, ChargesInFull: req.ChargesInFull, TransferCategories: req.TransferCategories,
 		GraceMoves: req.GraceMoves, GracePeriods: req.GracePeriods, GraceToMonthEnd: req.GraceToMonthEnd,
+		ExtendDays: req.GraceExtendDays, ExtendFree: req.GraceExtendFree,
+	}
+	if req.GraceExtendPercent != "" {
+		p, err := decimal.NewFromString(req.GraceExtendPercent)
+		if err != nil {
+			return Terms{}, fmt.Errorf("grace_extend_percent must be a decimal")
+		}
+		t.ExtendPercent = p
 	}
 	for _, c := range req.GraceCategories {
 		t.GraceCategories = append(t.GraceCategories, CategoryPeriods{CategoryID: c.CategoryId, Periods: c.Periods})
@@ -474,6 +482,7 @@ func TermsAPI(t Terms) apitypes.CreditCardTerms {
 		MissedMinimumPeriod: t.MissedMinimumPeriod,
 		TransferCategories:  t.TransferCategories,
 		GraceMoves:          t.GraceMoves, GracePeriods: t.GracePeriods, GraceToMonthEnd: t.GraceToMonthEnd,
+		GraceExtendDays: t.ExtendDays, GraceExtendPercent: t.ExtendPercent.String(), GraceExtendFree: t.ExtendFree,
 		GraceCategories: make([]apitypes.CreditCardGraceCategory, 0, len(t.GraceCategories)),
 		Fees: apitypes.CreditCardFees{
 			MonthlyMinor: t.Fees.Monthly, YearlyMinor: t.Fees.Yearly, CashFreeMinor: t.Fees.CashFree,
@@ -542,6 +551,12 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 		InstallmentsDueMinor: st.InstallmentsDue, Installments: make([]apitypes.CreditCardInstallment, 0, len(st.Installments)),
 		Bank:                  bankAPI(st.Bank),
 		CashbackExpectedMinor: st.CashbackExpected, CashbackOn: nullable.NewNullNullable[string](),
+		GraceExtension: nullable.NewNullNullable[apitypes.CreditCardGraceExtension](),
+	}
+	if e := st.Extension; e != nil {
+		out.GraceExtension = nullable.NewNullableWithValue(apitypes.CreditCardGraceExtension{
+			Until: date(e.Until), Active: e.Active, Free: e.Free, MonthlyFeeMinor: e.MonthlyFee,
+		})
 	}
 	for _, in := range st.Installments {
 		out.Installments = append(out.Installments, apitypes.CreditCardInstallment{

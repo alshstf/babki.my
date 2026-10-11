@@ -128,8 +128,16 @@ type Terms struct {
 	// GraceToMonthEnd: a long or running grace's last day moves to the last
 	// day of its month (Альфа, contracts from 10.08.2026).
 	GraceToMonthEnd bool
-	Fees            Fees
-	Cashback        Cashback
+	// Extension: a running grace not repaid by its last day goes on until
+	// day ExtendDays from its start, for ExtendPercent of the purchases'
+	// debt a month beyond GraceDays (Альфа's «Автопродление периода без %»,
+	// 60 → 150 days at 1.9 %, #473); ExtendFree: the next extension is
+	// free (the first one is). ExtendDays 0: none.
+	ExtendDays    int
+	ExtendPercent decimal.Decimal
+	ExtendFree    bool
+	Fees          Fees
+	Cashback      Cashback
 	// Installment: every purchase of the card in installments when Months
 	// is above 0 — a card of installments («Халва», decision Р-33).
 	Installment Plan
@@ -307,6 +315,10 @@ func (t Terms) Validate() error {
 		return fmt.Errorf("%w: statements later is a grace from the statement's", family.ErrValidation)
 	case t.GraceToMonthEnd && t.GraceKind != Long && t.GraceKind != Running:
 		return fmt.Errorf("%w: a grace to its month's end is a long one or one from the first purchase", family.ErrValidation)
+	case t.ExtendDays != 0 && (t.GraceKind != Running || t.ExtendDays <= t.GraceDays || t.ExtendDays > 1100):
+		return fmt.Errorf("%w: a grace from the first purchase is extended to more days than its own, at most 1100", family.ErrValidation)
+	case !share(t.ExtendPercent):
+		return fmt.Errorf("%w: the extension's fee is 0 to 100 percent a month", family.ErrValidation)
 	case t.GraceKind == Windows && t.OpenedOn == nil:
 		return fmt.Errorf("%w: windows count from the day the card's contract was made", family.ErrValidation)
 	case t.MinPercent.IsNegative() || t.MinPercent.GreaterThan(hundred):
@@ -534,6 +546,20 @@ type Status struct {
 	// the card names no rules).
 	CashbackExpected int64
 	CashbackOn       time.Time
+	// Extension is the running grace's extension (Terms.ExtendDays) while
+	// purchases are owed under it; nil with none.
+	Extension *Extension
+}
+
+// Extension is what the running grace's extension holds: the purchases
+// still owed under it may wait until Until; past their own last day
+// (Active) the bank charges about MonthlyFee a month for it — nothing when
+// Free.
+type Extension struct {
+	Until      time.Time
+	Active     bool
+	Free       bool
+	MonthlyFee int64
 }
 
 // item is one debit still (partly) owed: a purchase the grace covers, a
@@ -550,6 +576,18 @@ type item struct {
 	// from and to are the purchases it shares its deadline with: a period,
 	// a window, or a running grace.
 	from, to time.Time
+	// extended is the day a running grace's extension lets it wait until,
+	// past deadline; zero with none.
+	extended time.Time
+}
+
+// lastDay is the last day a purchase keeps its grace: its deadline, or its
+// extension's.
+func (it *item) lastDay() time.Time {
+	if it.extended.IsZero() {
+		return it.deadline
+	}
+	return it.extended
 }
 
 // purchase says whether a journal row is spending the grace covers: a
@@ -623,10 +661,10 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	miss := func(day time.Time) {
 		var missed time.Time
 		for _, it := range items {
-			if it.grace && !it.lost && it.left > 0 && it.deadline.Before(day) {
+			if it.grace && !it.lost && it.left > 0 && it.lastDay().Before(day) {
 				it.lost = true
-				if missed.IsZero() || it.deadline.Before(missed) {
-					missed = it.deadline
+				if missed.IsZero() || it.lastDay().Before(missed) {
+					missed = it.lastDay()
 				}
 			}
 		}
@@ -734,8 +772,11 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 							start := t.RunFrom.runStart(day)
 							end := start.AddDate(0, 0, t.GraceDays)
 							run = &item{from: start, to: end, deadline: t.toMonthEnd(end.AddDate(0, 0, -1))}
+							if t.ExtendDays > 0 {
+								run.extended = t.toMonthEnd(start.AddDate(0, 0, t.ExtendDays-1))
+							}
 						}
-						it.from, it.to, it.deadline = run.from, run.to, run.deadline
+						it.from, it.to, it.deadline, it.extended = run.from, run.to, run.deadline, run.extended
 					}
 					it.lost, it.early = off, off
 					if day.Before(periodLostUntil) {
@@ -809,13 +850,26 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 			continue
 		}
 		if !it.lost {
-			grace[it.deadline] += it.left
+			// Past its own last day, an extended purchase is due by its
+			// extension's, for the extension's fee.
+			due := it.deadline
+			if !it.extended.IsZero() {
+				ext := st.Extension
+				if ext == nil {
+					ext = &Extension{Until: it.extended, Free: t.ExtendFree}
+					st.Extension = ext
+				}
+				if today.After(it.deadline) {
+					due, ext.Active = it.extended, true
+				}
+			}
+			grace[due] += it.left
 			continue
 		}
-		key := lostKey{it.from, it.deadline}
+		key := lostKey{it.from, it.lastDay()}
 		l, ok := lost[key]
 		if !ok {
-			l = &Lost{From: it.from, To: it.to.AddDate(0, 0, -1), Deadline: it.deadline, Early: true}
+			l = &Lost{From: it.from, To: it.to.AddDate(0, 0, -1), Deadline: it.lastDay(), Early: true}
 			lost[key] = l
 		}
 		l.Early = l.Early && it.early
@@ -824,6 +878,19 @@ func Work(t Terms, ops []operation.Operation, currency string, today time.Time, 
 	}
 	for on, amount := range grace {
 		st.Grace = append(st.Grace, Due{On: on, Amount: amount})
+	}
+	// The extension's fee: its share of the purchases' debt under it.
+	if ext := st.Extension; ext != nil {
+		ext.MonthlyFee = 0
+		if !ext.Free {
+			owed := int64(0)
+			for _, it := range items {
+				if it.grace && !it.lost && !it.extended.IsZero() {
+					owed += it.left
+				}
+			}
+			ext.MonthlyFee, _ = money.Minor(decimal.NewFromInt(owed).Mul(t.ExtendPercent).Div(hundred))
+		}
 	}
 	slices.SortFunc(st.Grace, func(a, b Due) int { return a.On.Compare(b.On) })
 	for _, l := range lost {

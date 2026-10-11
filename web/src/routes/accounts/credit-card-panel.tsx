@@ -126,6 +126,17 @@ export function CreditCardPanel({ account, canEdit }: { account: AccountWithBala
               {t("card.graceLater", { amount: formatMinor(g.amount_minor, c), date: formatDate(g.on) })}
             </div>
           ))}
+          {st.grace_extension && (
+            <div className={st.grace_extension.active ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"} data-testid="card-extension">
+              {st.grace_extension.active
+                ? st.grace_extension.free
+                  ? t("card.extensionActiveFree", { date: formatDate(st.grace_extension.until) })
+                  : t("card.extensionActive", { date: formatDate(st.grace_extension.until), fee: formatMinor(st.grace_extension.monthly_fee_minor, c) })
+                : st.grace_extension.free
+                  ? t("card.extensionAheadFree", { date: formatDate(st.grace_extension.until) })
+                  : t("card.extensionAhead", { date: formatDate(st.grace_extension.until), fee: formatMinor(st.grace_extension.monthly_fee_minor, c) })}
+            </div>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground" data-testid="card-by-balance">
@@ -261,6 +272,8 @@ const FIELD_LABEL: Record<string, string> = {
   grace_periods: "gracePeriods",
   grace_moves: "graceMoves",
   grace_to_month_end: "graceToMonthEnd",
+  grace_extend_days: "extendDays",
+  grace_extend_percent: "extendPercent",
 };
 
 // CatalogUpdate offers the catalog's newer revision of the card's tariff
@@ -591,6 +604,9 @@ function graceLine(t: (key: string, values?: Record<string, unknown>) => string,
   const parts = [graceKindLine(t, terms)];
   if (terms.grace_kind === "statement" && terms.grace_periods > 0) parts.push(t("card.gracePeriodsLine", { n: terms.grace_periods }));
   if (terms.grace_to_month_end) parts.push(t("card.graceToMonthEndLine"));
+  if (terms.grace_kind === "running" && terms.grace_extend_days > 0) {
+    parts.push(t("card.extendLine", { days: terms.grace_extend_days, pct: terms.grace_extend_percent.replace(".", ",") }));
+  }
   if (terms.grace_moves) parts.push(t("card.graceMovesLine"));
   return parts.join(", ");
 }
@@ -679,6 +695,11 @@ interface Form {
   gracePeriods: string;
   graceCategories: { id: string; periods: string }[];
   graceToMonthEnd: boolean;
+  // extendDays, extendPercent and extendFree are a running grace's paid
+  // extension (#473); extendDays empty or 0 for none.
+  extendDays: string;
+  extendPercent: string;
+  extendFree: boolean;
   monthlyFee: string;
   yearlyFee: string;
   cashFree: string;
@@ -733,6 +754,9 @@ function termsOf(f: Form): CreditCardTerms {
     grace_periods: f.kind === "statement" ? int(f.gracePeriods) : 0,
     grace_categories: f.kind === "statement" ? f.graceCategories.map((c) => ({ category_id: c.id, periods: int(c.periods) })) : [],
     grace_to_month_end: (f.kind === "long" || f.kind === "running") && f.graceToMonthEnd,
+    grace_extend_days: f.kind === "running" ? int(f.extendDays) : 0,
+    grace_extend_percent: f.kind === "running" && int(f.extendDays) > 0 ? String(num(f.extendPercent)) : "0",
+    grace_extend_free: f.kind === "running" && int(f.extendDays) > 0 && f.extendFree,
     fees: {
       monthly_minor: money(f.monthlyFee),
       yearly_minor: money(f.yearlyFee),
@@ -796,6 +820,9 @@ function toForm(terms?: CreditCardTerms): Form {
     gracePeriods: terms ? String(terms.grace_periods) : "0",
     graceCategories: (terms?.grace_categories ?? []).map((c) => ({ id: c.category_id, periods: String(c.periods) })),
     graceToMonthEnd: terms?.grace_to_month_end ?? false,
+    extendDays: terms && terms.grace_extend_days > 0 ? String(terms.grace_extend_days) : "",
+    extendPercent: terms && terms.grace_extend_days > 0 ? terms.grace_extend_percent : "",
+    extendFree: terms?.grace_extend_free ?? false,
     monthlyFee: terms ? minorToInput(terms.fees.monthly_minor) : "0",
     yearlyFee: terms ? minorToInput(terms.fees.yearly_minor) : "0",
     cashFree: terms ? minorToInput(terms.fees.cash_free_minor) : "0",
@@ -858,6 +885,8 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
     int(f.statementDay, 1, 31) && (f.dueMode !== "days" || int(f.paymentDays, 0, 60)) &&
     (f.dueMode !== "day" || int(f.payDay, 1, 31)) && money(f.minRound) !== null &&
     ((f.kind !== "long" && f.kind !== "running") || int(f.graceDays, 1, 1100)) &&
+    (f.kind !== "running" || f.extendDays.trim() === "" || f.extendDays === "0" ||
+      (int(f.extendDays, Number(f.graceDays) + 1, 1100) && decimalOk(f.extendPercent || "0", 100))) &&
     (f.kind !== "windows" ||
       (int(f.windowMonths, 1, 12) && int(f.graceMonths, Number(f.windowMonths), 36) && /^\d{4}-\d{2}-\d{2}$/.test(f.openedOn))) &&
     decimalOk(f.minPercent, 100.0001) && decimalOk(f.rate, 1000) && (f.ownRate.trim() === "" || decimalOk(f.ownRate, 1000)) &&
@@ -898,7 +927,7 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
-  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints" | "graceMoves" | "graceToMonthEnd";
+  type Switch = "graceAllLost" | "missedMinimumPeriod" | "chargesInFull" | "cashbackPoints" | "graceMoves" | "graceToMonthEnd" | "extendFree";
   const toggle = (id: Switch, label: string, hint: string) => (
     <div className="flex items-start gap-2">
       <Checkbox id={`card-${id}`} checked={f[id]} onCheckedChange={(v) => set({ [id]: v === true } as Partial<Form>)} className="mt-0.5" />
@@ -1066,6 +1095,14 @@ function TermsDialog({ account, card, onClose }: { account: AccountWithBalance; 
             </div>
           )}
           {(f.kind === "long" || f.kind === "running") && toggle("graceToMonthEnd", t("card.graceToMonthEnd"), t("card.graceToMonthEndHint"))}
+          {f.kind === "running" && (
+            <div className="grid gap-2 sm:grid-cols-2" data-testid="card-extension-terms">
+              {field("extendDays", t("card.extendDays"), t("card.extendDaysHint"))}
+              {f.extendDays.trim() !== "" && f.extendDays !== "0" && field("extendPercent", t("card.extendPercent"))}
+            </div>
+          )}
+          {f.kind === "running" && f.extendDays.trim() !== "" && f.extendDays !== "0" &&
+            toggle("extendFree", t("card.extendFree"), t("card.extendFreeHint"))}
           {toggle("graceMoves", t("card.graceMoves"), t("card.graceMovesHint"))}
           {toggle("graceAllLost", t("card.graceAllLost"), t("card.graceAllLostHint"))}
           {toggle("missedMinimumPeriod", t("card.missedMinimumPeriod"), t("card.missedMinimumPeriodHint"))}
