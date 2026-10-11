@@ -28,6 +28,10 @@ const (
 	// maxPixels is the longest side a photo is read at: a receipt's QR code
 	// reads from a scaled phone photo, and in a second rather than ten.
 	maxPixels = 2000
+	// maxDecoded is the most pixels a photo may have to be decoded at all:
+	// a phone's photo is up to 50 megapixels, while a small file can claim
+	// a picture whose decoding takes all the server's memory.
+	maxDecoded = 64_000_000
 )
 
 // handleShare takes what the installed app was handed by «Поделиться» on a
@@ -136,6 +140,10 @@ func QRText(text string) (Receipt, bool) {
 
 // ReadQR is the text of the QR code a photo shows, when it shows one.
 func ReadQR(data []byte) (string, bool) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxDecoded {
+		return "", false
+	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return "", false
