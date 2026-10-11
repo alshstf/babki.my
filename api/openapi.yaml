@@ -3798,8 +3798,8 @@ components:
         checked_at: { type: string, format: date-time, nullable: true, description: "When it was read last; null before the first reading" }
         problem:
           type: string
-          enum: ["", connect, login, folder, read]
-          description: "What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well"
+          enum: ["", connect, login, folder, read, key]
+          description: "What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read, the app password sealed with a key the program no longer has (state it again); empty when it went well"
         last_found: { type: integer, description: "Receipts the last reading's new letters held" }
     MailboxSettings:
       type: object

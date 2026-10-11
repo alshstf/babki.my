@@ -3033,10 +3033,10 @@ export interface components {
              */
             checked_at: string | null;
             /**
-             * @description What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well
+             * @description What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read, the app password sealed with a key the program no longer has (state it again); empty when it went well
              * @enum {string}
              */
-            problem: "" | "connect" | "login" | "folder" | "read";
+            problem: "" | "connect" | "login" | "folder" | "read" | "key";
             /** @description Receipts the last reading's new letters held */
             last_found: number;
         };

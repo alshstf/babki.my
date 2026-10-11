@@ -70,6 +70,12 @@ describe("MailboxSection", () => {
     expect((await screen.findByTestId("mailbox-result")).textContent).toBe("Чеков в новых письмах: 3.");
   });
 
+  it("asks for the password again when the key changed", async () => {
+    answer({ ...stated, problem: "key" });
+    show();
+    expect((await screen.findByTestId("mailbox-status")).textContent).toMatch(/введите пароль приложения заново/);
+  });
+
   it("says what went wrong and keeps the password when edited", async () => {
     answer({ ...stated, problem: "login" });
     show();

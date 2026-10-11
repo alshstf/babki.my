@@ -28,6 +28,9 @@ const (
 	ProblemLogin   Problem = "login"
 	ProblemFolder  Problem = "folder"
 	ProblemRead    Problem = "read"
+	// ProblemKey: the app password was sealed with an encryption key the
+	// program no longer has — it is to be stated again.
+	ProblemKey Problem = "key"
 )
 
 // Box is a space's mailbox as the program shows it: where and as whom it is
