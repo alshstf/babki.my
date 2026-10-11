@@ -729,6 +729,7 @@ const (
 	Connect MailboxProblem = "connect"
 	Empty   MailboxProblem = ""
 	Folder  MailboxProblem = "folder"
+	Key     MailboxProblem = "key"
 	Login   MailboxProblem = "login"
 	Read    MailboxProblem = "read"
 )
@@ -741,6 +742,8 @@ func (e MailboxProblem) Valid() bool {
 	case Empty:
 		return true
 	case Folder:
+		return true
+	case Key:
 		return true
 	case Login:
 		return true
@@ -3322,12 +3325,12 @@ type Mailbox struct {
 	LastFound int `json:"last_found"`
 	Port      int `json:"port"`
 
-	// Problem What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well
+	// Problem What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read, the app password sealed with a key the program no longer has (state it again); empty when it went well
 	Problem  MailboxProblem `json:"problem"`
 	Username string         `json:"username"`
 }
 
-// MailboxProblem What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read; empty when it went well
+// MailboxProblem What went wrong the last time: the server not reached, the login or app password refused, no such folder, the letters not read, the app password sealed with a key the program no longer has (state it again); empty when it went well
 type MailboxProblem string
 
 // MailboxCheck defines model for MailboxCheck.

@@ -121,7 +121,15 @@ func (s *Service) Check(ctx context.Context, spaceID uuid.UUID) (Box, receipt.Im
 	}
 	password, err := s.box.Open(sealed)
 	if err != nil {
-		return Box{}, receipt.ImportResult{}, fmt.Errorf("mailbox: the app password cannot be opened with this encryption key: %w", err)
+		// Sealed with a key the program no longer has (a key change not
+		// finished with reseal): the family states the password again.
+		s.log.Warn("mailbox: the app password cannot be opened with this encryption key", "space", spaceID, "error", err)
+		if _, err := s.db.Exec(ctx, `UPDATE mailboxes SET checked_at = $2, last_error = $3 WHERE space_id = $1`,
+			spaceID, s.now(), ProblemKey); err != nil {
+			return Box{}, receipt.ImportResult{}, fmt.Errorf("mailbox: note: %w", err)
+		}
+		b, err := s.Get(ctx, spaceID)
+		return b, receipt.ImportResult{}, err
 	}
 	newValidity, letters, readErr := s.reader.Read(ctx, set, string(password), uint32(last), uint32(validity))
 	if readErr != nil {
@@ -162,6 +170,46 @@ func (s *Service) Check(ctx context.Context, spaceID uuid.UUID) (Box, receipt.Im
 	}
 	b, err := s.Get(ctx, spaceID)
 	return b, res, err
+}
+
+// Reseal re-encrypts every app password with the current key so an old key
+// can be dropped — part of `babki reseal`, with the brokers' tokens; all or
+// none. Returns how many.
+func (s *Service) Reseal(ctx context.Context) (int, error) {
+	if s.box == nil {
+		return 0, fmt.Errorf("mailbox: the program runs without an encryption key")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `SELECT space_id, password_sealed FROM mailboxes FOR UPDATE`)
+	if err != nil {
+		return 0, fmt.Errorf("mailbox: read passwords: %w", err)
+	}
+	type sealed struct {
+		space    uuid.UUID
+		password []byte
+	}
+	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (sealed, error) {
+		var c sealed
+		return c, r.Scan(&c.space, &c.password)
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range all {
+		plain, err := s.box.Open(c.password)
+		if err != nil {
+			return 0, fmt.Errorf("mailbox: space %s: no key opens its app password: %w", c.space, err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE mailboxes SET password_sealed = $2 WHERE space_id = $1`,
+			c.space, s.box.Seal(plain)); err != nil {
+			return 0, fmt.Errorf("mailbox: reseal space %s: %w", c.space, err)
+		}
+	}
+	return len(all), tx.Commit(ctx)
 }
 
 // Spaces are the spaces with a mailbox, for the hourly reading.

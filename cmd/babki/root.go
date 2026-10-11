@@ -464,13 +464,13 @@ func newMigrateCmd() *cobra.Command {
 	}
 }
 
-// newResealCmd re-encrypts every broker token with BABKI_ENCRYPTION_KEY, reading
-// those sealed with BABKI_ENCRYPTION_KEY_PREVIOUS, the last step of a key
-// change.
+// newResealCmd re-encrypts every broker token and receipts mailbox password
+// with BABKI_ENCRYPTION_KEY, reading those sealed with
+// BABKI_ENCRYPTION_KEY_PREVIOUS, the last step of a key change.
 func newResealCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reseal",
-		Short: "Перешифровать токены брокеров текущим ключом",
+		Short: "Перешифровать токены брокеров и пароли почты для чеков текущим ключом",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
@@ -485,6 +485,11 @@ func newResealCmd() *cobra.Command {
 				return err
 			}
 			r.log.Info("broker tokens resealed with the current key", "count", n)
+			m, err := mailbox.NewService(r.pool, r.box, mailbox.IMAP{}, nil, r.log).Reseal(ctx)
+			if err != nil {
+				return err
+			}
+			r.log.Info("receipts mailbox passwords resealed with the current key", "count", m)
 			return nil
 		},
 	}

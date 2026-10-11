@@ -128,3 +128,57 @@ func TestTheMailboxIsReadForReceipts(t *testing.T) {
 		t.Errorf("without a key = %v", err)
 	}
 }
+
+// A key change: the password sealed with the old key does not open with the
+// new one alone — noted on the box for the family to state it again; with
+// the old key still known, reseal puts it under the new one.
+func TestTheAppPasswordIsResealedOnAKeyChange(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	fam := family.NewStore(pool)
+	u, err := fam.CreateUser(ctx, "alex", "A", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := fam.CreateSpaceWithOwner(ctx, "S", u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey, newKey := bytes.Repeat([]byte{7}, secretbox.KeySize), bytes.Repeat([]byte{9}, secretbox.KeySize)
+	oldBox, err := secretbox.New(oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newBox, err := secretbox.New(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// WithPrevious adds to the box it is called on: a box of its own.
+	both, err := secretbox.New(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if both, err = both.WithPrevious(oldKey); err != nil {
+		t.Fatal(err)
+	}
+	opStore := operation.NewStore(pool)
+	receipts := receipt.NewService(pool, opStore, account.NewStore(pool), category.NewStore(pool), operation.NewService(opStore))
+	reader := &fakeReader{answer: 1}
+	pw := "app-password-123"
+	if _, err := mailbox.NewService(pool, oldBox, reader, receipts, slog.Default()).Set(ctx, sp.ID,
+		mailbox.Settings{Host: "imap.yandex.ru", Port: 993, Username: "cheki@example.ru", Password: &pw}); err != nil {
+		t.Fatal(err)
+	}
+
+	b, _, err := mailbox.NewService(pool, newBox, reader, receipts, slog.Default()).Check(ctx, sp.ID)
+	if err != nil || b.Problem != mailbox.ProblemKey {
+		t.Errorf("the new key alone: %+v, %v; want the key problem noted", b, err)
+	}
+	if n, err := mailbox.NewService(pool, both, reader, receipts, slog.Default()).Reseal(ctx); err != nil || n != 1 {
+		t.Fatalf("reseal = %d, %v", n, err)
+	}
+	b, _, err = mailbox.NewService(pool, newBox, reader, receipts, slog.Default()).Check(ctx, sp.ID)
+	if err != nil || b.Problem != mailbox.ProblemNone || reader.password != pw {
+		t.Errorf("after reseal: %+v, %v, asked with %q", b, err, reader.password)
+	}
+}
