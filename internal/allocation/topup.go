@@ -6,50 +6,66 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/structure"
 )
 
-// Buy is what a top-up puts into a kind and the kind's share of the worth
-// after it, in percent.
-type Buy struct {
+// Change is what a top-up moves in or out of a kind, and the kind's share of
+// the worth after it, in percent.
+type Change struct {
 	Key        string
 	Minor      int64
 	ShareAfter decimal.Decimal
 }
 
-// TopUp lays new money over the kinds by their targets (variant Б of Р-37):
-// to the kinds below their target in the worth with the money in, in
-// proportion to what each lacks; what is above its target gets nothing and
-// nothing is sold. With targets adding up to 100 what is lacking is never
-// less than the money: it is the money plus what the other kinds are above
-// their targets. Every kind of the view, in its order.
-func TopUp(v View, amount int64) ([]Buy, error) {
-	if amount <= 0 {
+// TopUp lays money over the kinds by their targets (variant Б of Р-37): new
+// money, which adds to the worth, and money the brokers hold free, which only
+// moves within it — out of the brokers' free money into the kinds. It goes to
+// the kinds below their target in the worth after, in proportion to what each
+// lacks; what is above its target gets nothing and nothing is sold. With
+// targets adding up to 100 what is lacking is never less than the money: it
+// is the money plus what the other kinds are above their targets. Every kind
+// of the view, in its order — the brokers' free money with what left it.
+func TopUp(v View, fresh, fromBrokers int64) ([]Change, error) {
+	if fresh < 0 || fromBrokers < 0 || fresh+fromBrokers == 0 {
 		return nil, fmt.Errorf("%w: the money to put in is above zero", family.ErrValidation)
 	}
 	targeted := false
+	held := map[string]int64{}
 	for _, r := range v.Kinds {
 		targeted = targeted || r.Target != nil
+		held[r.Key] = r.Minor
 	}
 	if !targeted {
 		return nil, fmt.Errorf("%w: no targets by kind to put the money by", family.ErrValidation)
 	}
-	after := v.Worth + amount
+	free := string(structure.KindBrokerCash)
+	if fromBrokers > held[free] {
+		return nil, fmt.Errorf("%w: the brokers hold less free money than that", family.ErrValidation)
+	}
+	held[free] -= fromBrokers
+	after := v.Worth + fresh
 	lacks := make([]int64, len(v.Kinds))
 	for i, r := range v.Kinds {
 		if r.Target == nil {
 			continue
 		}
 		want := decimal.NewFromInt(after).Mul(*r.Target).Div(hundred).Round(0).IntPart()
-		if gap := want - r.Minor; gap > 0 {
+		if gap := want - held[r.Key]; gap > 0 {
 			lacks[i] = gap
 		}
 	}
-	buys := make([]int64, len(v.Kinds))
-	share(buys, lacks, amount)
-	out := make([]Buy, 0, len(v.Kinds))
+	moves := make([]int64, len(v.Kinds))
+	share(moves, lacks, fresh+fromBrokers)
+	out := make([]Change, 0, len(v.Kinds))
 	for i, r := range v.Kinds {
-		after := decimal.NewFromInt(r.Minor + buys[i]).Mul(hundred).Div(decimal.NewFromInt(after)).Round(2)
-		out = append(out, Buy{Key: r.Key, Minor: buys[i], ShareAfter: after})
+		if r.Key == free {
+			moves[i] -= fromBrokers
+		}
+		shareAfter := decimal.Zero
+		if after > 0 {
+			shareAfter = decimal.NewFromInt(r.Minor + moves[i]).Mul(hundred).Div(decimal.NewFromInt(after)).Round(2)
+		}
+		out = append(out, Change{Key: r.Key, Minor: moves[i], ShareAfter: shareAfter})
 	}
 	return out, nil
 }

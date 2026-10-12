@@ -1704,11 +1704,11 @@ type Allocation struct {
 	WorthMinor int64 `json:"worth_minor"`
 }
 
-// AllocationBuy defines model for AllocationBuy.
-type AllocationBuy struct {
-	// BuyMinor What to put into it; 0 for a kind at or above its target
-	BuyMinor int64  `json:"buy_minor"`
-	Key      string `json:"key"`
+// AllocationChange defines model for AllocationChange.
+type AllocationChange struct {
+	// ChangeMinor What goes into it (above zero) or leaves it (below zero: the brokers' free money put in); 0 for a kind at or above its target
+	ChangeMinor int64  `json:"change_minor"`
+	Key         string `json:"key"`
 
 	// ShareAfter Decimal: its share of the worth after, percent, to hundredths
 	ShareAfter string `json:"share_after"`
@@ -1757,10 +1757,14 @@ type AllocationTargetsDimension string
 
 // AllocationTopUp defines model for AllocationTopUp.
 type AllocationTopUp struct {
+	// AmountMinor New money
 	AmountMinor int64 `json:"amount_minor"`
 
+	// FromBrokersMinor Taken from the brokers' free money
+	FromBrokersMinor int64 `json:"from_brokers_minor"`
+
 	// Kinds Every kind of GET /allocation, in its order
-	Kinds []AllocationBuy `json:"kinds"`
+	Kinds []AllocationChange `json:"kinds"`
 
 	// WorthAfterMinor The worth with the money in
 	WorthAfterMinor int64 `json:"worth_after_minor"`
@@ -4975,8 +4979,11 @@ type SetAllocationModeJSONBody struct {
 
 // GetAllocationTopUpParams defines parameters for GetAllocationTopUp.
 type GetAllocationTopUpParams struct {
-	// AmountMinor The money to put in, in the base currency
-	AmountMinor int64 `form:"amount_minor" json:"amount_minor"`
+	// AmountMinor New money to put in, in the base currency; 0 when absent
+	AmountMinor *int64 `form:"amount_minor,omitempty" json:"amount_minor,omitempty"`
+
+	// FromBrokersMinor Of the brokers' free money (kind broker_cash), what to put in too; 0 when absent
+	FromBrokersMinor *int64 `form:"from_brokers_minor,omitempty" json:"from_brokers_minor,omitempty"`
 
 	// Valuation Papers at the liquid (when absent) or the full valuation (decision Р-11)
 	Valuation *GetAllocationTopUpParamsValuation `form:"valuation,omitempty" json:"valuation,omitempty"`

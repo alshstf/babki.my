@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { apiError } from "./operations";
 import type { components } from "./schema";
@@ -22,15 +22,24 @@ export function useAllocation(valuation: "liquid" | "full" = "liquid") {
   });
 }
 
-// Where new money goes by the targets (GET /api/v1/allocation/topup,
-// variant Б of Р-37); asked only for money above zero.
-export function useTopUp(amountMinor: number | null, valuation: "liquid" | "full") {
+// The money a top-up lays over the kinds: new money, and of the brokers'
+// free money what is put in too.
+export interface TopUpMoney {
+  fresh: number;
+  fromBrokers: number;
+}
+
+// Where money goes by the targets (GET /api/v1/allocation/topup, variant Б
+// of Р-37); asked only for money above zero.
+export function useTopUp(money: TopUpMoney | null, valuation: "liquid" | "full") {
   return useQuery({
-    queryKey: ["allocation", valuation, "topup", amountMinor],
-    enabled: amountMinor !== null && amountMinor > 0,
+    queryKey: ["allocation", valuation, "topup", money?.fresh, money?.fromBrokers],
+    enabled: money !== null && money.fresh + money.fromBrokers > 0,
+    // Another sum asked: the bars keep the last one until it comes.
+    placeholderData: keepPreviousData,
     queryFn: async (): Promise<AllocationTopUp> => {
       const { data, error, response } = await api.GET("/api/v1/allocation/topup", {
-        params: { query: { amount_minor: amountMinor ?? 0, valuation } },
+        params: { query: { amount_minor: money?.fresh ?? 0, from_brokers_minor: money?.fromBrokers ?? 0, valuation } },
       });
       if (!data) throw apiError(response, error);
       return data;

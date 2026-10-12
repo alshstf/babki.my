@@ -112,11 +112,11 @@ func TestATopUpGoesWhereTheWorthIsShort(t *testing.T) {
 	v := view(s, ModeTopUp, []Target{
 		{"shares", pct("30")}, {"bonds", pct("30")}, {"funds", pct("15")}, {"deposits", pct("15")}, {"metals", pct("10")}, {"broker_cash", pct("0")},
 	}, nil)
-	buys, err := TopUp(v, 100_000_00)
+	buys, err := TopUp(v, 100_000_00, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]Buy{}
+	got := map[string]Change{}
 	var total int64
 	for _, b := range buys {
 		got[b.Key] = b
@@ -134,10 +134,31 @@ func TestATopUpGoesWhereTheWorthIsShort(t *testing.T) {
 	if got["bonds"].ShareAfter.String() != "21.46" || got["shares"].ShareAfter.String() != "33.87" {
 		t.Errorf("shares after: bonds %s, shares %s", got["bonds"].ShareAfter, got["shares"].ShareAfter)
 	}
-	if _, err := TopUp(v, 0); err == nil {
+	if _, err := TopUp(v, 0, 0); err == nil {
 		t.Error("a top-up of nothing accepted")
 	}
-	if _, err := TopUp(view(s, ModeTopUp, nil, nil), 100); err == nil {
+	if _, err := TopUp(view(s, ModeTopUp, nil, nil), 100, 0); err == nil {
 		t.Error("a top-up without targets accepted")
+	}
+
+	// The brokers' 150 000 free put in too: it leaves the brokers' free
+	// money and goes where the worth is short; the worth stays 3 100 000.
+	moved, err := TopUp(v, 100_000_00, 150_000_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, total = map[string]Change{}, 0
+	for _, c := range moved {
+		got[c.Key] = c
+		total += c.Minor
+	}
+	if got["broker_cash"].Minor != -150_000_00 || got["broker_cash"].ShareAfter.String() != "0" || total != 100_000_00 {
+		t.Errorf("brokers' money = %+v, net %d; want -150 000 to nothing, 100 000 net", got["broker_cash"], total)
+	}
+	if got["bonds"].Minor+got["metals"].Minor+got["funds"].Minor != 250_000_00 || got["shares"].Minor != 0 {
+		t.Errorf("moved = %+v", got)
+	}
+	if _, err := TopUp(v, 0, 200_000_00); err == nil {
+		t.Error("more than the brokers hold free accepted")
 	}
 }

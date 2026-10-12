@@ -3,10 +3,11 @@ import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAllocation, useSetTargets, useTopUp, type Allocation, type AllocationRow } from "@/api/allocation";
+import { useAllocation, useSetTargets, useTopUp, type Allocation, type AllocationRow, type TopUpMoney } from "@/api/allocation";
 import { useSession } from "@/api/session";
 import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -62,13 +63,14 @@ function percent(s: string): string {
 // TargetsCard is the worth against the family's target shares (decision
 // Р-37): by kind of asset — what the suggestions will bring to the targets —
 // and by currency, for the record. Each part's bar shows its share, the tick
-// its target.
+// its target; a top-up asked about shows on the kinds' bars what it moves.
 export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
   const { t } = useTranslation();
   const allocation = useAllocation(valuation);
   const { data: session } = useSession();
   const canEdit = session?.role === "owner" || session?.role === "editor";
   const [editing, setEditing] = useState<"kind" | "currency" | null>(null);
+  const [preview, setPreview] = useState<Map<string, Moved> | null>(null);
   const a = allocation.data;
   if (!a || (a.worth_minor === 0 && !canEdit)) return null;
   const c = a.base_currency;
@@ -86,7 +88,8 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
       </CardHeader>
       <CardContent className="grid gap-4">
         {!kindTargets && <p className="text-sm text-muted-foreground">{t("allocation.empty")}</p>}
-        <Rows rows={a.kinds} currency={c} name={(k) => kindName(t, k, c)} testId="allocation-kinds" />
+        {kindTargets && <TopUp allocation={a} valuation={valuation} onPreview={setPreview} />}
+        <Rows rows={a.kinds} currency={c} name={(k) => kindName(t, k, c)} testId="allocation-kinds" preview={kindTargets ? preview : null} />
         {(a.everyday_minor > 0 || a.unsplit_minor > 0) && (
           <p className="text-xs text-muted-foreground" data-testid="allocation-outside">
             {[
@@ -102,11 +105,10 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
             {kindTargets ? t("allocation.edit") : t("allocation.set")}
           </Button>
         )}
-        {kindTargets && <TopUp allocation={a} valuation={valuation} name={(k) => kindName(t, k, c)} />}
         <div className="grid gap-2 border-t pt-3">
           <p className="text-sm font-medium">{t("allocation.currenciesTitle")}</p>
           <p className="text-xs text-muted-foreground">{t("allocation.currenciesHint")}</p>
-          <Rows rows={a.currencies} currency={c} name={(k) => currencyName(t, k)} testId="allocation-currencies" />
+          <Rows rows={a.currencies} currency={c} name={(k) => currencyName(t, k)} testId="allocation-currencies" preview={null} />
           {canEdit && (
             <Button type="button" variant="outline" size="sm" className="justify-self-start" onClick={() => setEditing("currency")}>
               {currencyTargets ? t("allocation.editCurrencies") : t("allocation.setCurrencies")}
@@ -125,39 +127,95 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
   );
 }
 
-function Rows({ rows, currency, name, testId }: { rows: AllocationRow[]; currency: string; name: (key: string) => string; testId: string }) {
+// Moved is what a top-up moves into a kind (or out of the brokers' free
+// money) and the kind's share after it.
+interface Moved {
+  change: number;
+  shareAfter: number;
+}
+
+// LINE places the words under a row's bar: across the row on a phone, under
+// the bar on a wide screen.
+const LINE = "col-span-2 row-start-3 text-xs md:col-span-2 md:col-start-2 md:row-start-2";
+
+// The sign written out: «+48 036 ₽», «−1 722 433 ₽».
+function signed(minor: number, currency: string): string {
+  return minor > 0 ? `+${formatMinorCompact(minor, currency)}` : `−${formatMinorCompact(-minor, currency)}`;
+}
+
+function Rows({
+  rows,
+  currency,
+  name,
+  testId,
+  preview,
+}: {
+  rows: AllocationRow[];
+  currency: string;
+  name: (key: string) => string;
+  testId: string;
+  preview: Map<string, Moved> | null;
+}) {
   const { t } = useTranslation();
   return (
     <div className="grid min-w-0 gap-3" data-testid={testId}>
       {rows.map((r) => {
         const gap = r.gap === null ? null : Number(r.gap);
         const notable = gap !== null && Math.abs(gap) > NOTABLE_GAP;
+        const before = Number(r.share);
+        const moved = preview?.get(r.key);
+        const after = moved?.shareAfter ?? before;
+        const target = r.target === null ? null : Number(r.target);
         return (
-          <div key={r.key} className="grid min-w-0 gap-1" data-testid="allocation-row">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
-              <span className="min-w-0">{name(r.key)}</span>
-              <span className="ml-auto tabular-nums">
-                {formatMinorCompact(r.minor, currency)} <span className="text-muted-foreground">{percent(r.share)}</span>
-              </span>
-            </div>
-            <div className="relative h-2 rounded bg-muted">
-              <div className="h-full rounded bg-emerald-500" style={{ width: `${Math.min(Number(r.share), 100)}%` }} />
-              {r.target !== null && (
+          // On a wide screen the name, the bar and the figures sit in one
+          // line, the words under the bar; on a phone one under another.
+          <div
+            key={r.key}
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 md:grid-cols-[12rem_minmax(0,1fr)_auto]"
+            data-testid="allocation-row"
+          >
+            <span className="col-start-1 row-start-1 min-w-0 text-sm">{name(r.key)}</span>
+            <div className="relative col-span-2 row-start-2 h-2 rounded bg-muted md:col-span-1 md:col-start-2 md:row-start-1">
+              <div className="absolute inset-y-0 left-0 rounded bg-emerald-500" style={{ width: `${Math.min(before, after, 100)}%` }} />
+              {after > before && (
+                <div
+                  className="absolute inset-y-0 rounded-r bg-emerald-300 dark:bg-emerald-700"
+                  style={{ left: `${Math.min(before, 100)}%`, width: `${Math.min(after, 100) - Math.min(before, 100)}%` }}
+                  data-testid="allocation-added"
+                />
+              )}
+              {after < before && (
+                <div
+                  className="absolute inset-y-0 rounded-r bg-muted-foreground/25"
+                  style={{ left: `${Math.min(after, 100)}%`, width: `${Math.min(before, 100) - Math.min(after, 100)}%` }}
+                  data-testid="allocation-removed"
+                />
+              )}
+              {target !== null && (
                 <div
                   className="absolute -top-1 h-4 w-0.5 bg-foreground"
-                  style={{ left: `calc(${Math.min(Number(r.target), 100)}% - 1px)` }}
-                  title={t("allocation.targetTick", { target: percent(r.target) })}
+                  style={{ left: `calc(${Math.min(target, 100)}% - 1px)` }}
+                  title={t("allocation.targetTick", { target: percent(r.target ?? "0") })}
                 />
               )}
             </div>
-            {r.target !== null && gap !== null && r.off_minor !== null && (
-              <div className={cn("text-xs", notable ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
-                {gap === 0
-                  ? t("allocation.onTarget", { target: percent(r.target) })
-                  : gap > 0
-                    ? t("allocation.above", { target: percent(r.target), gap: percent(String(gap)).replace(" %", ""), amount: formatMinorCompact(r.off_minor, currency) })
-                    : t("allocation.below", { target: percent(r.target), gap: percent(String(-gap)).replace(" %", ""), amount: formatMinorCompact(-r.off_minor, currency) })}
-              </div>
+            <span className="col-start-2 row-start-1 text-right text-sm tabular-nums md:col-start-3">
+              {formatMinorCompact(r.minor, currency)} <span className="text-muted-foreground">{percent(r.share)}</span>
+            </span>
+            {moved ? (
+              <MovedLine moved={moved} before={before} target={target} currency={currency} />
+            ) : (
+              r.target !== null &&
+              gap !== null &&
+              r.off_minor !== null && (
+                <div className={cn(LINE, notable ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+                  {gap === 0
+                    ? t("allocation.onTarget", { target: percent(r.target) })
+                    : gap > 0
+                      ? t("allocation.above", { target: percent(r.target), gap: percent(String(gap)).replace(" %", ""), amount: formatMinorCompact(r.off_minor, currency) })
+                      : t("allocation.below", { target: percent(r.target), gap: percent(String(-gap)).replace(" %", ""), amount: formatMinorCompact(-r.off_minor, currency) })}
+                </div>
+              )
             )}
           </div>
         );
@@ -166,50 +224,116 @@ function Rows({ rows, currency, name, testId }: { rows: AllocationRow[]; currenc
   );
 }
 
-// TopUp is where new money goes by the targets (variant Б of Р-37): to the
-// kinds below their target, in proportion to what each lacks; nothing is
-// sold. The money the brokers hold free can be put in too.
-function TopUp({ allocation, valuation, name }: { allocation: Allocation; valuation: "liquid" | "full"; name: (key: string) => string }) {
+// MovedLine says what a top-up does to a kind: what goes in or out, the
+// share it comes to against the one before, and whether that is closer to
+// the target.
+function MovedLine({ moved, before, target, currency }: { moved: Moved; before: number; target: number | null; currency: string }) {
+  const { t } = useTranslation();
+  const shares = { after: percent(String(moved.shareAfter)), before: percent(String(before)) };
+  const head = moved.change !== 0 ? `${signed(moved.change, currency)} → ` : "→ ";
+  if (target === null) {
+    return <div className={cn(LINE, "text-muted-foreground")}>{head + t("allocation.movedNoTarget", shares)}</div>;
+  }
+  const was = Math.abs(before - target);
+  const now = Math.abs(moved.shareAfter - target);
+  const by = percent(Math.abs(was - now).toFixed(2)).replace(" %", "");
+  const verdict =
+    now < 0.005
+      ? t("allocation.verdictOn")
+      : now < was
+        ? t("allocation.verdictCloser", { by })
+        : now > was
+          ? t("allocation.verdictFurther", { by })
+          : t("allocation.verdictSame");
+  return (
+    <div
+      className={cn(
+        LINE,
+        now <= was ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400",
+      )}
+      data-testid="allocation-moved"
+    >
+      {head + t("allocation.moved", { ...shares, target: percent(String(target)), verdict })}
+    </div>
+  );
+}
+
+// TopUp asks where money goes by the targets (variant Б of Р-37): new money,
+// and of the brokers' free money what to put in too — it leaves the brokers'
+// line and goes into the kinds, the worth unchanged by it. What it moves
+// shows on the kinds' bars.
+function TopUp({
+  allocation,
+  valuation,
+  onPreview,
+}: {
+  allocation: Allocation;
+  valuation: "liquid" | "full";
+  onPreview: (moved: Map<string, Moved> | null) => void;
+}) {
   const { t } = useTranslation();
   const c = allocation.base_currency;
-  const [amount, setAmount] = useState("");
-  // Asked once the typing stops, not at every key.
-  const [asked, setAsked] = useState<number | null>(null);
-  const minor = parseToMinor(amount.trim() === "" ? "0" : amount);
-  useEffect(() => {
-    const id = setTimeout(() => setAsked(minor !== null && minor > 0 ? minor : null), 300);
-    return () => clearTimeout(id);
-  }, [minor]);
-  const topUp = useTopUp(asked, valuation);
   const free = allocation.kinds.find((r) => r.key === "broker_cash")?.minor ?? 0;
-  const buys = topUp.data?.kinds.filter((b) => b.buy_minor > 0) ?? [];
+  const [fresh, setFresh] = useState("");
+  const [useFree, setUseFree] = useState(false);
+  const [fromBrokers, setFromBrokers] = useState(minorToInput(free));
+  const freshMinor = parseToMinor(fresh.trim() === "" ? "0" : fresh);
+  const brokersMinor = useFree ? parseToMinor(fromBrokers.trim() === "" ? "0" : fromBrokers) : 0;
+  const brokersOk = brokersMinor !== null && brokersMinor >= 0 && brokersMinor <= free;
+  const valid = freshMinor !== null && freshMinor >= 0 && brokersOk && (freshMinor ?? 0) + (brokersMinor ?? 0) > 0;
+  // Asked once the typing stops, not at every key.
+  const [asked, setAsked] = useState<TopUpMoney | null>(null);
+  useEffect(() => {
+    const money = valid ? { fresh: freshMinor ?? 0, fromBrokers: brokersMinor ?? 0 } : null;
+    const id = setTimeout(() => setAsked(money), 300);
+    return () => clearTimeout(id);
+  }, [valid, freshMinor, brokersMinor]);
+  const topUp = useTopUp(asked, valuation);
+  const data = asked ? topUp.data : undefined;
+  useEffect(() => {
+    onPreview(data ? new Map(data.kinds.map((k) => [k.key, { change: k.change_minor, shareAfter: Number(k.share_after) }])) : null);
+  }, [data, onPreview]);
+  // The words say what was counted, not what is being typed.
+  const counted = data && asked && !topUp.isPlaceholderData ? asked : null;
   return (
-    <div className="grid gap-2 border-t pt-3" data-testid="allocation-topup">
+    <div className="grid gap-2 rounded-md border bg-muted/30 p-3" data-testid="allocation-topup">
       <p className="text-sm font-medium">{t("allocation.topUpTitle")}</p>
       <p className="text-xs text-muted-foreground">{t("allocation.topUpHint")}</p>
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
         <div className="grid gap-1">
           <Label htmlFor="allocation-topup">{t("allocation.topUpAmount", { currency: c })}</Label>
-          <Input id="allocation-topup" inputMode="decimal" className="w-40" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <Input id="allocation-topup" inputMode="decimal" className="w-40" value={fresh} onChange={(e) => setFresh(e.target.value)} />
         </div>
         {free > 0 && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setAmount(minorToInput((minor ?? 0) + free))}>
-            {t("allocation.topUpFree", { amount: formatMinorCompact(free, c) })}
-          </Button>
+          <div className="grid gap-1">
+            <Label htmlFor="allocation-use-free" className="flex items-center gap-2 font-normal">
+              <Checkbox id="allocation-use-free" checked={useFree} onCheckedChange={(v) => setUseFree(v === true)} />
+              {t("allocation.topUpUseFree", { amount: formatMinorCompact(free, c) })}
+            </Label>
+            {useFree && (
+              <Input
+                aria-label={t("allocation.topUpFromBrokers", { currency: c })}
+                inputMode="decimal"
+                className="w-40"
+                value={fromBrokers}
+                onChange={(e) => setFromBrokers(e.target.value)}
+                aria-invalid={!brokersOk}
+              />
+            )}
+          </div>
         )}
       </div>
-      {asked !== null && buys.length > 0 && (
-        <ul className="grid gap-1 text-sm" data-testid="allocation-buys">
-          {buys.map((b) => (
-            <li key={b.key} className="flex flex-wrap justify-between gap-x-3">
-              <span className="min-w-0">{name(b.key)}</span>
-              <span className="ml-auto tabular-nums">
-                {formatMinorCompact(b.buy_minor, c)}{" "}
-                <span className="text-muted-foreground">{t("allocation.shareAfter", { share: percent(b.share_after) })}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
+      {useFree && !brokersOk && <p className="text-xs text-red-700 dark:text-red-400">{t("allocation.topUpTooMuch", { amount: formatMinorCompact(free, c) })}</p>}
+      {counted && (
+        <p className="text-sm" data-testid="allocation-topup-total">
+          {counted.fromBrokers > 0
+            ? t("allocation.topUpTotalWithBrokers", {
+                fresh: formatMinorCompact(counted.fresh, c),
+                brokers: formatMinorCompact(counted.fromBrokers, c),
+                total: formatMinorCompact(counted.fresh + counted.fromBrokers, c),
+              })
+            : t("allocation.topUpTotal", { total: formatMinorCompact(counted.fresh, c) })}
+        </p>
       )}
       {topUp.isError && <p className="text-xs text-red-700 dark:text-red-400">{t("allocation.topUpFailed")}</p>}
     </div>

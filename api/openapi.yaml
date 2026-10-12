@@ -72,11 +72,14 @@ paths:
       tags: [allocation]
       operationId: getAllocationTopUp
       description: >-
-        Where new money goes by the targets (variant Б of decision Р-37): to the kinds below their target
-        in the worth with the money in, in proportion to what each lacks; what is above its target gets
-        nothing, nothing is sold. 400 without targets by kind or without money above zero.
+        Where money goes by the targets (variant Б of decision Р-37): new money, which adds to the worth,
+        and the brokers' free money, which only moves within it. To the kinds below their target in the
+        worth after, in proportion to what each lacks; what is above its target gets nothing, nothing is
+        sold. 400 without targets by kind, without money above zero, or with more taken from the brokers
+        than they hold free.
       parameters:
-        - { name: amount_minor, in: query, required: true, schema: { type: integer, format: int64, minimum: 1 }, description: "The money to put in, in the base currency" }
+        - { name: amount_minor, in: query, required: false, schema: { type: integer, format: int64, minimum: 0 }, description: "New money to put in, in the base currency; 0 when absent" }
+        - { name: from_brokers_minor, in: query, required: false, schema: { type: integer, format: int64, minimum: 0 }, description: "Of the brokers' free money (kind broker_cash), what to put in too; 0 when absent" }
         - { name: valuation, in: query, required: false, schema: { type: string, enum: [liquid, full] }, description: "Papers at the liquid (when absent) or the full valuation (decision Р-11)" }
       responses:
         "200":
@@ -3508,17 +3511,18 @@ components:
         missing_rates: { type: array, items: { type: string } }
     AllocationTopUp:
       type: object
-      required: [amount_minor, worth_after_minor, kinds]
+      required: [amount_minor, from_brokers_minor, worth_after_minor, kinds]
       properties:
-        amount_minor: { type: integer, format: int64 }
+        amount_minor: { type: integer, format: int64, description: "New money" }
+        from_brokers_minor: { type: integer, format: int64, description: "Taken from the brokers' free money" }
         worth_after_minor: { type: integer, format: int64, description: "The worth with the money in" }
-        kinds: { type: array, items: { $ref: "#/components/schemas/AllocationBuy" }, description: "Every kind of GET /allocation, in its order" }
-    AllocationBuy:
+        kinds: { type: array, items: { $ref: "#/components/schemas/AllocationChange" }, description: "Every kind of GET /allocation, in its order" }
+    AllocationChange:
       type: object
-      required: [key, buy_minor, share_after]
+      required: [key, change_minor, share_after]
       properties:
         key: { type: string }
-        buy_minor: { type: integer, format: int64, description: "What to put into it; 0 for a kind at or above its target" }
+        change_minor: { type: integer, format: int64, description: "What goes into it (above zero) or leaves it (below zero: the brokers' free money put in); 0 for a kind at or above its target" }
         share_after: { type: string, description: "Decimal: its share of the worth after, percent, to hundredths" }
     AllocationTarget:
       type: object
