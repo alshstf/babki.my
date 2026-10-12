@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
@@ -122,4 +124,108 @@ func TestASafeBoxOverHTTP(t *testing.T) {
 	if r := apitest.Do(t, c, "DELETE", base+"/items/"+it.Id.String(), ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("taken off twice = %d, want 404", r.StatusCode)
 	}
+}
+
+// A box's worth on days, as the family's total and capital chart read it: a
+// bar counts from the day it was bought, at the central bank's price of that
+// day or the nearest before; the liquid worth is as it would sell, the full
+// one by the bank's price; in dollars at that day's rate when the family
+// counts in dollars, left out and named when there is no rate.
+func TestABoxIsWorthItsPiecesOnADay(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	accStore, md := account.NewStore(pool), marketdata.NewStore(pool)
+	svc := valuables.NewService(pool, accStore, md).WithWorth(famStore, md, marketdata.NewConverter(md))
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	account.NewHandler(accStore, famStore, marketdata.NewConverter(md), nil, auth, sm).Mount(srv)
+	valuables.NewHandler(svc, auth, sm).Mount(srv)
+	url, c := apitest.Serve(t, srv.Handler())
+
+	var a struct {
+		ID string `json:"id"`
+	}
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Дом","type":"valuables","currency":"RUB"}`), &a)
+	var card struct {
+		ID string `json:"id"`
+	}
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Карта","type":"checking","currency":"RUB"}`), &card)
+	for _, body := range []string{
+		`{"kind":"bar","metal":"gold","weight":"100","fineness":"1000","maker":"","foreign_made":false,"serial":"","certificate":true,"sealed":true,"bought_on":"2026-01-10","cost_minor":1,"currency":"RUB","owner_user_id":null,"note":""}`,
+		`{"kind":"bar","metal":"silver","weight":"1000","fineness":"1000","maker":"","foreign_made":false,"serial":"","certificate":true,"sealed":true,"bought_on":"2026-03-01","cost_minor":1,"currency":"RUB","owner_user_id":null,"note":""}`,
+	} {
+		if r := apitest.Do(t, c, "POST", url+"/api/v1/accounts/"+a.ID+"/valuables/items", body); r.StatusCode != http.StatusOK {
+			t.Fatalf("add = %d", r.StatusCode)
+		}
+	}
+	on := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+	if err := md.UpsertMetalPrices(t.Context(), []marketdata.MetalPrice{
+		{Metal: marketdata.Gold, On: on("2026-01-09"), Price: decimal.NewFromInt(10000), Source: "cbr"},
+		{Metal: marketdata.Gold, On: on("2026-03-02"), Price: decimal.NewFromInt(11000), Source: "cbr"},
+		{Metal: marketdata.Silver, On: on("2026-03-02"), Price: decimal.NewFromInt(150), Source: "cbr"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	box := parseID(t, a.ID)
+	got, ok, err := svc.Worths(t.Context(), spaceOf(t, pool), box, []time.Time{on("2026-01-05"), on("2026-01-15"), on("2026-03-01"), on("2026-03-05")})
+	if err != nil || !ok {
+		t.Fatalf("worths: %v, %v", ok, err)
+	}
+	// Before the bar; the bar at 10 000 (5 % off: 950 000); the silver bought
+	// the day before its first price — not valued; both at the new prices.
+	want := []struct {
+		ops, unpriced    int
+		minor, fullMinor int64
+	}{
+		{0, 0, 0, 0},
+		{1, 0, 95_000_000, 100_000_000},
+		{2, 1, 95_000_000, 100_000_000},
+		{2, 0, 104_500_000 + 11_250_000, 110_000_000 + 15_000_000},
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.Operations != w.ops || g.Unpriced != w.unpriced || g.Minor != w.minor || g.FullMinor != w.fullMinor || g.Currency != "RUB" {
+			t.Errorf("day %d = %+v, want %+v", i, g, w)
+		}
+	}
+	if _, ok, err := svc.Worths(t.Context(), spaceOf(t, pool), parseID(t, card.ID), []time.Time{on("2026-03-05")}); ok || err != nil {
+		t.Errorf("a card is no box: %v, %v", ok, err)
+	}
+
+	// Counted in dollars: at 100 roubles a dollar, then with no rate.
+	if r := apitest.Do(t, c, "PATCH", url+"/api/v1/space", `{"base_currency":"USD"}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("base currency = %d", r.StatusCode)
+	}
+	got, _, err = svc.Worths(t.Context(), spaceOf(t, pool), box, []time.Time{on("2026-03-05")})
+	if err != nil || len(got[0].MissingRates) != 1 || got[0].Minor != 0 || got[0].Currency != "USD" {
+		t.Errorf("no rate: %+v, %v", got, err)
+	}
+	if err := md.UpsertFxRates(t.Context(), []marketdata.FxRate{{Base: "USD", Quote: "RUB", On: on("2026-03-01"), Rate: decimal.NewFromInt(100), Source: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = svc.Worths(t.Context(), spaceOf(t, pool), box, []time.Time{on("2026-03-05")})
+	if err != nil || got[0].Minor != 1_157_500 || got[0].FullMinor != 1_250_000 || got[0].ByCurrency["RUB"] != 115_750_000 {
+		t.Errorf("in dollars: %+v, %v", got, err)
+	}
+}
+
+func parseID(t *testing.T, s string) uuid.UUID {
+	t.Helper()
+	id, err := uuid.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// spaceOf is the one space the test signed up.
+func spaceOf(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := pool.QueryRow(t.Context(), `SELECT id FROM spaces LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

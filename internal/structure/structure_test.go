@@ -216,3 +216,38 @@ func TestTheTargetsShareOutTheWorthByKind(t *testing.T) {
 		t.Errorf("target currencies = %v", currencies)
 	}
 }
+
+// fakeWorths is a box whose bars would sell for 950 000 and are worth
+// 1 000 000 by the central bank, one coin not valued yet.
+type fakeWorths struct{ box uuid.UUID }
+
+func (f fakeWorths) Worths(_ context.Context, _, id uuid.UUID, days []time.Time) ([]account.JournalValue, bool, error) {
+	if id != f.box {
+		return nil, false, nil
+	}
+	return []account.JournalValue{{
+		Currency: "RUB", Operations: 3, Unpriced: 1, FullUnpriced: 1,
+		ByCurrency: map[string]int64{"RUB": 950_000_00}, FullByCurrency: map[string]int64{"RUB": 1_000_000_00},
+	}}, true, nil
+}
+
+// A valuables account's bars and coins are metals (decision Р-39): as they
+// would sell at the liquid valuation, by the central bank's price at the
+// full one; a piece not valued yet is counted unpriced.
+func TestBarsAreMetals(t *testing.T) {
+	box := uuid.New()
+	accounts := fakeAccounts{{Account: account.Account{ID: box, Type: account.TypeValuables, Currency: "RUB", Status: account.StatusActive}}}
+	svc := structure.NewService(accounts, fakePositions{}, fakeSpaces{}, fakeRates{}).WithValuables(fakeWorths{box})
+	for valuation, want := range map[structure.Valuation]int64{structure.Liquid: 950_000_00, structure.Full: 1_000_000_00} {
+		s, err := svc.Of(t.Context(), uuid.New(), valuation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.ByKind) != 1 || s.ByKind[0].Key != "metals" || s.ByKind[0].Minor != want || s.Targets != want || s.Unpriced != 1 {
+			t.Errorf("%s: kinds %+v, targets %d, unpriced %d", valuation, s.ByKind, s.Targets, s.Unpriced)
+		}
+		if len(s.ByClass) != 1 || s.ByClass[0].Key != "metals" {
+			t.Errorf("%s: classes %+v", valuation, s.ByClass)
+		}
+	}
+}

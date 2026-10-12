@@ -139,12 +139,24 @@ type spaces interface {
 	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
+type worths interface {
+	Worths(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]account.JournalValue, bool, error)
+}
+
 // Service builds structures.
 type Service struct {
 	accounts  accounts
 	positions positions
 	spaces    spaces
 	rates     marketdata.RateSource
+	valuables worths
+}
+
+// WithValuables lets the structure take valuables accounts apart: their bars
+// and coins are metals (decision Р-39).
+func (s *Service) WithValuables(v worths) *Service {
+	s.valuables = v
+	return s
 }
 
 func NewService(acc accounts, pos positions, sp spaces, rates marketdata.RateSource) *Service {
@@ -207,6 +219,9 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 	if !account.CountedByJournal(a.Account) {
 		return nil, false, nil
 	}
+	if a.Type == account.TypeValuables {
+		return s.valuablesPieces(ctx, spaceID, a, valuation, out)
+	}
 	resp, ops, err := s.positions.Positions(ctx, spaceID, a.ID)
 	if err != nil {
 		return nil, false, err
@@ -250,6 +265,32 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 		}
 	}
 	return got, true, nil
+}
+
+// valuablesPieces are a valuables account's bars and coins: metals, in the
+// currency the central bank prices them in, as they would sell now or by its
+// price; a piece not valued yet is counted unpriced.
+func (s *Service) valuablesPieces(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, valuation Valuation, out *Structure) ([]piece, bool, error) {
+	if s.valuables == nil {
+		return nil, false, nil
+	}
+	got, ok, err := s.valuables.Worths(ctx, spaceID, a.ID, []time.Time{time.Now().UTC()})
+	if err != nil || !ok || got[0].Operations == 0 {
+		return nil, false, err
+	}
+	v := got[0]
+	byCurrency, unpriced := v.ByCurrency, v.Unpriced
+	if valuation == Full {
+		byCurrency, unpriced = v.FullByCurrency, v.FullUnpriced
+	}
+	out.Unpriced += unpriced
+	var pieces []piece
+	for currency, minor := range byCurrency {
+		if minor != 0 {
+			pieces = append(pieces, piece{class: ClassMetals, kind: KindMetals, currency: currency, account: a.ID, country: NoCountry, minor: minor})
+		}
+	}
+	return pieces, true, nil
 }
 
 // paperClass is the kind of asset a paper of type t is.
