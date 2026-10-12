@@ -38,6 +38,7 @@ const ACCOUNT_TYPES: AccountType[] = [
   "credit_card",
   "loan",
   "cash",
+  "valuables",
 ];
 
 export function AccountDialog({
@@ -110,7 +111,8 @@ export function AccountDialog({
         {
           name,
           type,
-          currency: effectiveCurrency,
+          // Bars and coins are valued in roubles, the central bank's prices.
+          currency: type === "valuables" ? "RUB" : effectiveCurrency,
           institution,
           owner_user_id: ownerUserId,
           ...(type === "brokerage" ? { trades_abroad: tradesAbroad } : {}),
@@ -148,6 +150,7 @@ export function AccountDialog({
                   </SelectContent>
                 </Select>
               </div>
+              {type !== "valuables" && (
               <div className="grid gap-2">
                 {/* Tied to the control by id, the way the fields above and
                     below it already are: a bare <Label> beside a Radix trigger
@@ -173,6 +176,8 @@ export function AccountDialog({
                   />
                 )}
               </div>
+              )}
+              {type === "valuables" && <p className="text-xs text-muted-foreground">{t("valuables.accountHint")}</p>}
             </>
           )}
           <div className="grid gap-2">

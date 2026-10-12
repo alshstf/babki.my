@@ -33,6 +33,7 @@ import { StatePriceDialog, type QuotedPaper } from "./state-price-dialog";
 import { OpeningBalanceDialog } from "./opening-balance-dialog";
 import { EverydayBalance } from "./everyday-balance";
 import { LoanPanel } from "./loan-panel";
+import { ValuablesPanel } from "./valuables-panel";
 import { CreditCardPanel } from "./credit-card-panel";
 import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
@@ -163,7 +164,16 @@ export function AccountDetailPage() {
           <CreditCardPanel account={account} canEdit={!readOnly} />
         </div>
       )}
+      {/* Bars and coins have no holdings or operations of a broker's: the
+          panel is all there is to such an account. */}
+      {account.type === "valuables" && (
+        <div className="grid gap-2">
+          <h2 className="text-lg font-semibold">{t("valuables.title")}</h2>
+          <ValuablesPanel account={account} canEdit={!readOnly} />
+        </div>
+      )}
 
+      {account.type !== "valuables" && (
       <div className="grid gap-2">
         <div className="flex items-center justify-between">
           <div className="flex flex-wrap items-baseline gap-x-3">
@@ -264,7 +274,9 @@ export function AccountDetailPage() {
           </div>
         )}
       </div>
+      )}
 
+      {account.type !== "valuables" && (
       <div className="grid gap-2">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
@@ -300,6 +312,7 @@ export function AccountDetailPage() {
           }))}
         />
       </div>
+      )}
 
       {(action === "buy" || action === "sell") && (
         <TradeDialog
