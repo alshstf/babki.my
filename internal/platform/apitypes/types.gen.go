@@ -1759,11 +1759,20 @@ type AllocationRebalance struct {
 	// AmountMinor New money
 	AmountMinor int64 `json:"amount_minor"`
 
+	// BoughtMinor What is bought: the new money, what is sold and the brokers' free money put in
+	BoughtMinor int64 `json:"bought_minor"`
+
+	// FromBrokersMinor Of the brokers' free money (kind broker_cash), what goes into the kinds bought
+	FromBrokersMinor int64 `json:"from_brokers_minor"`
+
 	// Kinds Every kind of GET /allocation, in its order
 	Kinds []AllocationMove `json:"kinds"`
 
 	// LongHoldingYears A lot held longer than this many years gains free of the tax; 0: no such rule
 	LongHoldingYears int `json:"long_holding_years"`
+
+	// SoldMinor What is sold now, every kind but the brokers' free money
+	SoldMinor int64 `json:"sold_minor"`
 
 	// TaxMinor Estimate of the tax the sales of papers would bring, in the base currency: tax_rate on the gain not freed by long holding, gains and losses of all kinds offset. An estimate, not a broker's figure: which lots a broker sells depends on the order; the year's other sales, the higher band and commissions are left out. Null when a sold lot's cost cannot be struck in the base currency (see a kind's sale.known) or the residency's rules give no estimate (tax_rate null); 0 when nothing gains or nothing is sold.
 	TaxMinor nullable.Nullable[int64] `json:"tax_minor"`

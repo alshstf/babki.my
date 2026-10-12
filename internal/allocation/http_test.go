@@ -139,6 +139,9 @@ func TestTheTargetsOverHTTP(t *testing.T) {
 	if re.WorthAfterMinor != 1_000_000_00 || len(re.Kinds) != 3 || re.Kinds[0].ChangeMinor != -100_000_00 || re.Kinds[1].ChangeMinor != 0 || re.Kinds[2].ChangeMinor != 100_000_00 {
 		t.Fatalf("rebalance = %+v", re)
 	}
+	if re.SoldMinor != 100_000_00 || re.FromBrokersMinor != 0 || re.BoughtMinor != 100_000_00 {
+		t.Errorf("sold %d, from brokers %d, bought %d", re.SoldMinor, re.FromBrokersMinor, re.BoughtMinor)
+	}
 	sale := re.Kinds[0].Sale.MustGet()
 	if !sale.Known || sale.GainMinor != 1_666_667 || sale.FreeMinor != 0 || re.TaxMinor.MustGet() != 216_667 || re.TaxRate.MustGet() != "13" || re.LongHoldingYears != 3 {
 		t.Errorf("the estimate = %+v, tax %v at %v", sale, re.TaxMinor, re.TaxRate)

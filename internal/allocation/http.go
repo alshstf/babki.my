@@ -142,6 +142,14 @@ func (h *Handler) handleRebalance(w http.ResponseWriter, r *http.Request) {
 		out.TaxRate = nullable.NewNullableWithValue(decimal.New(int64(rules.SaleTaxBP), -2).String())
 	}
 	for _, m := range moves {
+		switch {
+		case m.Minor > 0:
+			out.BoughtMinor += m.Minor
+		case m.Key == string(structure.KindBrokerCash):
+			out.FromBrokersMinor -= m.Minor
+		default:
+			out.SoldMinor -= m.Minor
+		}
 		move := apitypes.AllocationMove{
 			Key: m.Key, ChangeMinor: m.Minor, LaterMinor: m.Later, KeptMinor: m.Kept, ShareAfter: m.ShareAfter.StringFixed(2),
 			Sale: nullable.NewNullNullable[apitypes.AllocationSale](),

@@ -8,6 +8,8 @@ export type AllocationRow = components["schemas"]["AllocationRow"];
 export type AllocationMode = components["schemas"]["AllocationMode"];
 export type AllocationTargets = components["schemas"]["AllocationTargets"];
 export type AllocationTopUp = components["schemas"]["AllocationTopUp"];
+export type AllocationRebalance = components["schemas"]["AllocationRebalance"];
+export type AllocationSale = components["schemas"]["AllocationSale"];
 
 // The family's worth against its target shares (GET /api/v1/allocation,
 // decision Р-37), papers at the valuation picked on «Структура».
@@ -40,6 +42,23 @@ export function useTopUp(money: TopUpMoney | null, valuation: "liquid" | "full")
     queryFn: async (): Promise<AllocationTopUp> => {
       const { data, error, response } = await api.GET("/api/v1/allocation/topup", {
         params: { query: { amount_minor: money?.fresh ?? 0, from_brokers_minor: money?.fromBrokers ?? 0, valuation } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+// What to sell and buy to the targets (GET /api/v1/allocation/rebalance,
+// variant В of Р-37), with new money or none; null asks nothing.
+export function useRebalance(fresh: number | null, valuation: "liquid" | "full") {
+  return useQuery({
+    queryKey: ["allocation", valuation, "rebalance", fresh],
+    enabled: fresh !== null,
+    placeholderData: keepPreviousData,
+    queryFn: async (): Promise<AllocationRebalance> => {
+      const { data, error, response } = await api.GET("/api/v1/allocation/rebalance", {
+        params: { query: { amount_minor: fresh ?? 0, valuation } },
       });
       if (!data) throw apiError(response, error);
       return data;
