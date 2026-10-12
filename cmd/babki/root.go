@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/allocation"
 	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/benchmark"
 	"babki.my/babki/internal/budget"
@@ -123,7 +124,10 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	accHandler := account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM)
 	accHandler.Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
-	structure.NewHandler(structure.NewService(accStore, positions, famStore, converter), famAuth, famSM).Mount(srv)
+	structureSvc := structure.NewService(accStore, positions, famStore, converter)
+	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
+	allocationSvc := allocation.NewService(r.pool, structureSvc)
+	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)
@@ -174,7 +178,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
 	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, category.NewStore(r.pool),
-		loanSvc, cardSvc, budgetSvc, receiptSvc, famAuth, famSM).Mount(srv)
+		loanSvc, cardSvc, budgetSvc, receiptSvc, allocationSvc, famAuth, famSM).Mount(srv)
 	// A hand entry is followed by the registry at once (a purchase before a
 	// known split must not wait for the sweep); opSvc is the one service every
 	// hand-entry door writes through.

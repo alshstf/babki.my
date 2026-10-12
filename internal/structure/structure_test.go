@@ -38,12 +38,16 @@ func (fakeSpaces) SpaceByID(context.Context, uuid.UUID) (family.Space, error) {
 	return family.Space{BaseCurrency: "RUB"}, nil
 }
 
-// fakeRates knows the dollar at 90 roubles and nothing else.
+// fakeRates knows the dollar at 90 roubles, a gram of gold at 10 000, and
+// nothing else.
 type fakeRates struct{}
 
 func (fakeRates) Rate(_ context.Context, from, to string, _ time.Time) (decimal.Decimal, time.Time, error) {
 	if from == "USD" && to == "RUB" {
 		return decimal.NewFromInt(90), time.Now(), nil
+	}
+	if from == "XAU" && to == "RUB" {
+		return decimal.NewFromInt(10_000), time.Now(), nil
 	}
 	return decimal.Zero, time.Time{}, marketdata.ErrNoRate
 }
@@ -142,5 +146,68 @@ func TestTheWorthComesApart(t *testing.T) {
 	}
 	if _, err := svc.Of(t.Context(), uuid.New(), "market"); err == nil {
 		t.Error("an unknown valuation was accepted")
+	}
+}
+
+// The kinds the targets share the worth out by (decision Р-37): the broker's
+// papers by class, its roubles waiting to be put in, its dollars foreign
+// currency and its gold a metal; dollars in cash foreign currency too; a
+// dollar deposit a deposit; roubles on a card to live on and a broker known
+// only by its balance outside the targets; a debt nowhere.
+func TestTheTargetsShareOutTheWorthByKind(t *testing.T) {
+	broker, card, dollars, deposit, other, credit := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	balance := func(id uuid.UUID, typ account.Type, currency string, minor int64) account.WithBalance {
+		return account.WithBalance{
+			Account: account.Account{ID: id, Type: typ, Currency: currency, Status: account.StatusActive},
+			Balance: &account.BalancePoint{AmountMinor: minor},
+		}
+	}
+	accounts := fakeAccounts{
+		{Account: account.Account{ID: broker, Type: account.TypeBrokerage, Currency: "RUB", Status: account.StatusActive}},
+		balance(card, account.TypeChecking, "RUB", 100_000_00),
+		balance(dollars, account.TypeCash, "USD", 1_000_00),
+		balance(deposit, account.TypeDeposit, "USD", 2_000_00),
+		balance(other, account.TypeBrokerage, "RUB", 50_000_00),
+		balance(credit, account.TypeCreditCard, "RUB", -30_000_00),
+	}
+	positions := fakePositions{broker: {
+		Positions: []apitypes.Position{
+			position(apitypes.InstrumentTypeShare, "RU0009029540", "RUB", of(300_000_00), of(300_000_00)),
+			position(apitypes.InstrumentTypeEtf, "RU000A101X68", "RUB", of(100_000_00), of(100_000_00)),
+		},
+		Cash: []apitypes.CashPosition{
+			{Currency: "RUB", AmountMinor: 20_000_00}, {Currency: "USD", AmountMinor: 500_00}, {Currency: "XAU", AmountMinor: 1_000},
+		},
+	}}
+	s, err := structure.NewService(accounts, positions, fakeSpaces{}, fakeRates{}).Of(t.Context(), uuid.New(), structure.Liquid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int64{}
+	for _, sl := range s.ByKind {
+		kinds[sl.Key] = sl.Minor
+	}
+	// $500 at the broker and $1 000 in cash: 135 000; 10 g of gold: 100 000.
+	want := map[string]int64{
+		"shares": 300_000_00, "funds": 100_000_00, "broker_cash": 20_000_00, "foreign_currency": 135_000_00,
+		"metals": 100_000_00, "deposits": 180_000_00,
+	}
+	if len(kinds) != len(want) {
+		t.Errorf("kinds = %v, want %v", kinds, want)
+	}
+	for k, v := range want {
+		if kinds[k] != v {
+			t.Errorf("kind %s = %d, want %d", k, kinds[k], v)
+		}
+	}
+	if s.Targets != 835_000_00 || s.Everyday != 100_000_00 || s.Unsplit != 50_000_00 || s.Debts != -30_000_00 {
+		t.Errorf("targets %d, everyday %d, unsplit %d, debts %d", s.Targets, s.Everyday, s.Unsplit, s.Debts)
+	}
+	currencies := map[string]int64{}
+	for _, sl := range s.ByTargetCurrency {
+		currencies[sl.Key] = sl.Minor
+	}
+	if currencies["RUB"] != 420_000_00 || currencies["USD"] != 315_000_00 || currencies["XAU"] != 100_000_00 {
+		t.Errorf("target currencies = %v", currencies)
 	}
 }

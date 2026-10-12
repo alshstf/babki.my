@@ -30,6 +30,8 @@ var owners = map[string]string{
 	"category_defaults":           "internal/category",
 	"category_rules":              "internal/category",
 	"budget_limits":               "internal/budget",
+	"allocation_targets":          "internal/allocation",
+	"allocation_settings":         "internal/allocation",
 	"receipts":                    "internal/receipt",
 	"mailboxes":                   "internal/mailbox",
 	"loans":                       "internal/loan",

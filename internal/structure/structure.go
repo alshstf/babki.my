@@ -46,6 +46,35 @@ const (
 	ClassBrokerBalance Class = "broker_balance"
 )
 
+// Kind is a kind of asset the family's targets share the worth out by
+// (decision Р-37): the classes, with foreign currency and metals held as
+// money counted as such, and the base currency at brokers apart — money
+// waiting to be put in.
+type Kind string
+
+const (
+	KindShares          Kind = "shares"
+	KindBonds           Kind = "bonds"
+	KindFunds           Kind = "funds"
+	KindForeignCurrency Kind = "foreign_currency"
+	KindMetals          Kind = "metals"
+	KindDeposits        Kind = "deposits"
+	KindCrypto          Kind = "crypto"
+	KindOther           Kind = "other"
+	KindBrokerCash      Kind = "broker_cash"
+	// kindEveryday is the base currency on cards, current accounts and in
+	// cash — money to live on; kindUnsplit a broker's account counted by its
+	// balance, whose kinds are not known. Neither is in the targets' worth.
+	kindEveryday Kind = "everyday"
+	kindUnsplit  Kind = "unsplit"
+)
+
+// Kinds are the kinds targets are set for, in the order they are shown.
+var Kinds = []Kind{KindShares, KindBonds, KindFunds, KindForeignCurrency, KindMetals, KindDeposits, KindCrypto, KindOther, KindBrokerCash}
+
+// metalCodes are the codes the brokers hold metals under as money.
+var metalCodes = map[string]bool{"XAU": true, "XAG": true, "XPT": true, "XPD": true}
+
 // NoCountry stands for what was not issued anywhere: money, deposits, an
 // account known only by its balance. UnknownCountry is a paper with no ISIN
 // to tell its country by.
@@ -84,6 +113,14 @@ type Structure struct {
 	// the currencies left out for want of a rate.
 	Unpriced     int
 	MissingRates []string
+	// Targets is the worth the family's targets share out (decision Р-37):
+	// the assets but the money to live on (Everyday) and the brokers'
+	// accounts known only by their balance (Unsplit), by kind and by
+	// currency.
+	Targets           int64
+	ByKind            []Slice
+	ByTargetCurrency  []Slice
+	Everyday, Unsplit int64
 }
 
 type accounts interface {
@@ -113,6 +150,7 @@ func NewService(acc accounts, pos positions, sp spaces, rates marketdata.RateSou
 // piece is one holding, before conversion.
 type piece struct {
 	class    Class
+	kind     Kind
 	currency string
 	account  uuid.UUID
 	country  string
@@ -138,7 +176,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation
 		if a.Status != account.StatusActive {
 			continue
 		}
-		got, byJournal, err := s.accountPieces(ctx, spaceID, a, valuation, &out)
+		got, byJournal, err := s.accountPieces(ctx, spaceID, a, sp.BaseCurrency, valuation, &out)
 		if err != nil {
 			return Structure{}, err
 		}
@@ -149,14 +187,17 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation
 		if a.Balance == nil || a.Balance.AmountMinor == 0 {
 			continue
 		}
-		pieces = append(pieces, piece{class: balanceClass(a.Type), currency: a.Currency, account: a.ID, country: NoCountry, minor: a.Balance.AmountMinor})
+		pieces = append(pieces, piece{
+			class: balanceClass(a.Type), kind: moneyKind(a.Type, a.Currency, sp.BaseCurrency, false),
+			currency: a.Currency, account: a.ID, country: NoCountry, minor: a.Balance.AmountMinor,
+		})
 	}
 	return out, s.lay(ctx, &out, pieces)
 }
 
 // accountPieces is an account counted by its journal, taken apart; byJournal
 // is false when the total counts its balance instead.
-func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, valuation Valuation, out *Structure) ([]piece, bool, error) {
+func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, base string, valuation Valuation, out *Structure) ([]piece, bool, error) {
 	if !account.CountedByJournal(a.Account) {
 		return nil, false, nil
 	}
@@ -183,8 +224,9 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 			out.Unpriced++
 			continue
 		}
+		class := paperClass(instrument.Type(p.Instrument.Type))
 		got = append(got, piece{
-			class: paperClass(instrument.Type(p.Instrument.Type)), currency: currency, account: a.ID,
+			class: class, kind: paperKind(class), currency: currency, account: a.ID,
 			country: issuerCountry(p.Instrument.Isin), minor: value.MustGet(),
 		})
 	}
@@ -194,7 +236,10 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 	}
 	for _, c := range resp.Cash {
 		if c.AmountMinor != 0 {
-			got = append(got, piece{class: cashClass, currency: c.Currency, account: a.ID, country: NoCountry, minor: c.AmountMinor})
+			got = append(got, piece{
+				class: cashClass, kind: moneyKind(a.Type, c.Currency, base, true),
+				currency: c.Currency, account: a.ID, country: NoCountry, minor: c.AmountMinor,
+			})
 		}
 	}
 	return got, true, nil
@@ -217,6 +262,47 @@ func paperClass(t instrument.Type) Class {
 		return ClassCrypto
 	}
 	return ClassOther
+}
+
+// paperKind is the kind a paper of class c is for the targets.
+func paperKind(c Class) Kind {
+	switch c {
+	case ClassShares:
+		return KindShares
+	case ClassBonds:
+		return KindBonds
+	case ClassFunds:
+		return KindFunds
+	case ClassCurrency:
+		return KindForeignCurrency
+	case ClassMetals:
+		return KindMetals
+	case ClassCrypto:
+		return KindCrypto
+	}
+	return KindOther
+}
+
+// moneyKind is the kind money in currency on an account of type t is for the
+// targets; byJournal says the journal, not a balance, holds it. Metals held
+// as money are metals; deposits and savings are deposits in any currency; a
+// broker's base currency is money waiting to be put in, its balance alone
+// tells no kinds; other foreign currency is foreign currency — at a broker,
+// on a current account or in cash; the base currency elsewhere is to live on.
+func moneyKind(t account.Type, currency, base string, byJournal bool) Kind {
+	switch {
+	case metalCodes[currency]:
+		return KindMetals
+	case t == account.TypeSavings || t == account.TypeDeposit:
+		return KindDeposits
+	case t == account.TypeBrokerage && !byJournal:
+		return kindUnsplit
+	case t == account.TypeBrokerage && currency == base:
+		return KindBrokerCash
+	case currency != base:
+		return KindForeignCurrency
+	}
+	return kindEveryday
 }
 
 // balanceClass is the kind of asset an account counted by its balance is.
@@ -247,7 +333,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	memo := marketdata.NewRateMemo(s.rates)
 	today := time.Now().UTC()
 	missing := map[string]bool{}
-	sums := map[string]map[string]int64{"class": {}, "currency": {}, "account": {}, "country": {}}
+	sums := map[string]map[string]int64{"class": {}, "currency": {}, "account": {}, "country": {}, "kind": {}, "targetCurrency": {}}
 	for _, p := range pieces {
 		inBase := p.minor
 		if p.currency != out.BaseCurrency {
@@ -270,6 +356,16 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 			continue
 		}
 		out.Assets += inBase
+		switch p.kind {
+		case kindEveryday:
+			out.Everyday += inBase
+		case kindUnsplit:
+			out.Unsplit += inBase
+		default:
+			out.Targets += inBase
+			sums["kind"][string(p.kind)] += inBase
+			sums["targetCurrency"][p.currency] += inBase
+		}
 		sums["class"][string(p.class)] += inBase
 		sums["currency"][p.currency] += inBase
 		sums["account"][p.account.String()] += inBase
@@ -281,6 +377,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	slices.Sort(out.MissingRates)
 	out.ByClass, out.ByCurrency = slicesOf(sums["class"]), slicesOf(sums["currency"])
 	out.ByAccount, out.ByCountry = slicesOf(sums["account"]), slicesOf(sums["country"])
+	out.ByKind, out.ByTargetCurrency = slicesOf(sums["kind"]), slicesOf(sums["targetCurrency"])
 	return nil
 }
 

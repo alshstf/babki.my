@@ -21,6 +21,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/allocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's worth today against its targets (decision Р-37), at the liquid valuation (the one in «Итого»). The worth the targets share out is GET /structure's assets less the base currency on cards, current accounts and in cash (money to live on) and the brokers' accounts known only by their balance (their kinds are not known); debts are not in it. By kind of asset — foreign currency held as money (at a broker, in cash, on a current account) is foreign currency, metals held as money are metals, deposits in any currency are deposits, the base currency at brokers is money waiting to be put in — and by the currency each part is valued in, for the record only. */
+        get: operations["getAllocation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/allocation/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description States the targets of one dimension anew: none, or percents to hundredths that add up to 100, each key once — a kind of `kinds`, or a currency of three capital letters. 400 otherwise. */
+        put: operations["setAllocationTargets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/allocation/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description How the family brings its worth to the targets — by top-ups only, or by buying and selling. */
+        put: operations["setAllocationMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/loan": {
         parameters: {
             query?: never;
@@ -2129,6 +2180,12 @@ export interface components {
             category_rules: components["schemas"]["CategoryRule"][];
             /** @description The budget's limits, by category and the month each runs from (GET /budget/limits) */
             budget_limits: components["schemas"]["BudgetLimit"][];
+            /** @description The target shares of the worth and how the family comes to them (decision Р-37) */
+            allocation: {
+                mode: components["schemas"]["AllocationMode"];
+                kinds: components["schemas"]["AllocationTarget"][];
+                currencies: components["schemas"]["AllocationTarget"][];
+            };
             /** @description The cash receipts, by their time; operation_id names the row each completes */
             receipts: components["schemas"]["Receipt"][];
         };
@@ -2438,6 +2495,67 @@ export interface components {
              * @description In minor units of the base currency
              */
             minor: number;
+        };
+        /**
+         * @description topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
+         * @enum {string}
+         */
+        AllocationMode: "topup" | "rebalance";
+        AllocationRow: {
+            /** @description A kind of asset (shares, bonds, funds, foreign_currency, metals, deposits, crypto, other, broker_cash) or a currency */
+            key: string;
+            /**
+             * Format: int64
+             * @description Its part of the worth, in the base currency
+             */
+            minor: number;
+            /** @description Decimal: its share of the worth, percent, to hundredths */
+            share: string;
+            /** @description Decimal: its target, percent; null when none is set */
+            target: string | null;
+            /** @description Decimal: share less target, in points; null without a target */
+            gap: string | null;
+            /**
+             * Format: int64
+             * @description What its part is above (positive) or below its target, in the base currency; null without a target
+             */
+            off_minor: number | null;
+        };
+        Allocation: {
+            base_currency: string;
+            mode: components["schemas"]["AllocationMode"];
+            /**
+             * Format: int64
+             * @description What the targets share out
+             */
+            worth_minor: number;
+            /**
+             * Format: int64
+             * @description The base currency on cards, current accounts and in cash: left out of the targets
+             */
+            everyday_minor: number;
+            /**
+             * Format: int64
+             * @description Brokers' accounts known only by their balance: left out, their kinds not known
+             */
+            unsplit_minor: number;
+            /** @description Every kind held or targeted, in the kinds' order */
+            kinds: components["schemas"]["AllocationRow"][];
+            /** @description Every currency held or targeted, the base currency first, then largest first */
+            currencies: components["schemas"]["AllocationRow"][];
+            /** @description Papers left out for want of a price */
+            unpriced: number;
+            missing_rates: string[];
+        };
+        AllocationTarget: {
+            key: string;
+            /** @description Decimal, 0 to 100, to hundredths */
+            percent: string;
+        };
+        AllocationTargets: {
+            /** @enum {string} */
+            dimension: "kind" | "currency";
+            targets: components["schemas"]["AllocationTarget"][];
         };
         Structure: {
             base_currency: string;
@@ -4616,6 +4734,83 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getAllocation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The worth against the targets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Allocation"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    setAllocationTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AllocationTargets"];
+            };
+        };
+        responses: {
+            /** @description The worth against the targets as stated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Allocation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    setAllocationMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    mode: components["schemas"]["AllocationMode"];
+                };
+            };
+        };
+        responses: {
+            /** @description The worth against the targets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Allocation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     getLoan: {
