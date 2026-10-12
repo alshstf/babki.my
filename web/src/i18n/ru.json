@@ -1431,6 +1431,7 @@
     "legendHeld": "есть сейчас",
     "legendIn": "прибавка",
     "legendOut": "уйдёт со счетов брокеров",
+    "legendStill": "сюда пополнение не идёт",
     "legendTarget": "цель",
     "kinds": {
       "shares": "Акции и расписки",

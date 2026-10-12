@@ -110,7 +110,10 @@ describe("TargetsCard", () => {
     // A share that only thins as the worth grows gets words, not a mark.
     expect(within(rows[0]).queryByTestId("allocation-added")).toBeNull();
     expect(within(rows[0]).queryByTestId("allocation-removed")).toBeNull();
-    expect(norm(screen.getByTestId("allocation-topup-legend").textContent)).toBe("есть сейчасприбавкацель");
+    // …and goes grey, so the kinds the money goes to stand out.
+    expect(within(rows[0]).getByTestId("allocation-still")).toBeTruthy();
+    expect(within(rows[1]).queryByTestId("allocation-still")).toBeNull();
+    expect(norm(screen.getByTestId("allocation-topup-legend").textContent)).toBe("есть сейчасприбавкасюда пополнение не идётцель");
 
     fireEvent.click(screen.getByLabelText(/Взять и свободные деньги у брокеров/));
     expect((screen.getByLabelText("Сколько взять у брокеров, RUB") as HTMLInputElement).value).toBe("300000");
@@ -123,7 +126,7 @@ describe("TargetsCard", () => {
     const brokers = within(screen.getByTestId("allocation-kinds")).getAllByTestId("allocation-row")[5];
     expect(norm(brokers.textContent)).toMatch(/−300 000 ₽ → 0 % \(было 10 %, цель 0 %\) — в цели/);
     expect(within(brokers).getByTestId("allocation-removed")).toBeTruthy();
-    expect(norm(screen.getByTestId("allocation-topup-legend").textContent)).toBe("есть сейчасприбавкауйдёт со счетов брокеровцель");
+    expect(norm(screen.getByTestId("allocation-topup-legend").textContent)).toBe("есть сейчасприбавкауйдёт со счетов брокеровсюда пополнение не идётцель");
 
     fireEvent.change(screen.getByLabelText("Сколько взять у брокеров, RUB"), { target: { value: "500 000" } });
     expect(screen.getByText("У брокеров свободно только 300 000 ₽.")).toBeTruthy();

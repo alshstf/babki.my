@@ -136,11 +136,13 @@ interface Moved {
   shareAfter: number;
 }
 
-// HELD is what a kind holds on a bar, in a quiet grey: the colour is kept
-// for what a top-up changes. SEGMENT is that change: half again as tall as
-// the bar on each side, never thinner than a few pixels; ADDED is money put
-// in, a see-through green; HATCH fills money taken out.
-const HELD = "bg-muted-foreground/45";
+// HELD is what a kind holds on a bar, in the page's calm bar colour, green
+// being kept for money put in; with a top-up counted the kinds it does not
+// touch go grey (STILL), so the ones it moves stand out. SEGMENT is that move: half again as tall as the bar on
+// each side, never thinner than a few pixels; ADDED is money put in, a
+// see-through green; HATCH fills money taken out.
+const HELD = "bg-bar";
+const STILL = "bg-muted-foreground";
 const SEGMENT = "absolute -top-1 -bottom-1 rounded-sm ring-2 ring-background";
 const ADDED = "border border-emerald-600/60 bg-emerald-500/40 dark:border-emerald-400/60 dark:bg-emerald-400/35";
 const HATCH = "repeating-linear-gradient(135deg, var(--muted-foreground) 0 2px, transparent 2px 6px)";
@@ -194,7 +196,11 @@ function Rows({
           >
             <span className="col-start-1 row-start-1 min-w-0 text-sm">{name(r.key)}</span>
             <div className="relative col-span-2 row-start-2 h-2 rounded bg-muted md:col-span-1 md:col-start-2 md:row-start-1">
-              <div className={cn("absolute inset-y-0 left-0 rounded", HELD)} style={{ width: `${held}%` }} />
+              <div
+                className={cn("absolute inset-y-0 left-0 rounded", moved && moved.change === 0 ? STILL : HELD)}
+                style={{ width: `${held}%` }}
+                data-testid={moved && moved.change === 0 ? "allocation-still" : undefined}
+              />
               {moved && moved.change > 0 && (
                 <div
                   className={cn(SEGMENT, ADDED)}
@@ -365,6 +371,10 @@ function TopUp({
               {t("allocation.legendOut")}
             </span>
           )}
+          <span className="flex items-center gap-1.5">
+            <span className={cn("inline-block h-2 w-4 rounded-sm", STILL)} />
+            {t("allocation.legendStill")}
+          </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-3 w-0.5 bg-foreground" />
             {t("allocation.legendTarget")}
