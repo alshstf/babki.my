@@ -39,6 +39,8 @@ function sourceName(t: TFunction, kind: string): string {
       return t("dataSources.kinds.bondSchedules");
     case "marketdata.refresh_indexes":
       return t("dataSources.kinds.indexes");
+    case "marketdata.refresh_metal_prices":
+      return t("dataSources.kinds.metalPrices");
     default:
       return kind;
   }

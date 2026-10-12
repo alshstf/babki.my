@@ -45,3 +45,8 @@ func NewBackfillFxWorkerWithClock(
 	w.now = now
 	return w
 }
+
+// NewMetalPricesWorkerAt is the metals' worker with its clock pinned.
+func NewMetalPricesWorkerAt(store *Store, provider MetalPriceProvider, now time.Time) river.Worker[RefreshMetalPricesArgs] {
+	return &metalPricesWorker{store: store, provider: provider, log: slog.Default(), now: func() time.Time { return now }}
+}

@@ -537,3 +537,47 @@ func TestEveryRequestNamesThisProgram(t *testing.T) {
 		})
 	}
 }
+
+// The metals' feed: a record per metal and day, comma decimals, the bank's
+// codes 1–4; a code the bank adds later is skipped.
+func TestMetalPrices_ParsesTheFeed(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="windows-1251"?><Metall FromDate="20261001" ToDate="20261002" name="Precious metals quotations">` +
+		`<Record Date="01.10.2026" Code="1"><Buy>11184,87</Buy><Sell>11184,87</Sell></Record>` +
+		`<Record Date="01.10.2026" Code="2"><Buy>163,51</Buy><Sell>163,51</Sell></Record>` +
+		`<Record Date="01.10.2026" Code="3"><Buy>4540,82</Buy><Sell>4540,82</Sell></Record>` +
+		`<Record Date="02.10.2026" Code="4"><Buy>3270,56</Buy><Sell>3270,56</Sell></Record>` +
+		`<Record Date="02.10.2026" Code="9"><Buy>1</Buy><Sell>1</Sell></Record></Metall>`)
+	srv, gotQuery := serve(t, http.StatusOK, body)
+	c := cbr.New(srv.Client(), srv.URL)
+	got, err := c.MetalPrices(context.Background(), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *gotQuery != "date_req1=01/10/2026&date_req2=02/10/2026" {
+		t.Errorf("query = %q", *gotQuery)
+	}
+	want := []struct {
+		metal marketdata.Metal
+		on    string
+		price string
+	}{{marketdata.Gold, "2026-10-01", "11184.87"}, {marketdata.Silver, "2026-10-01", "163.51"}, {marketdata.Platinum, "2026-10-01", "4540.82"}, {marketdata.Palladium, "2026-10-02", "3270.56"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for i, w := range want {
+		if got[i].Metal != w.metal || got[i].On.Format(time.DateOnly) != w.on || !got[i].Price.Equal(decimal.RequireFromString(w.price)) || got[i].Source != "cbr" {
+			t.Errorf("price %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+}
+
+func TestMetalPrices_RefusesAWrongRangeAndABadPrice(t *testing.T) {
+	c := cbr.New(nil, "http://unused")
+	if _, err := c.MetalPrices(context.Background(), time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Error("a backwards range was asked")
+	}
+	srv, _ := serve(t, http.StatusOK, []byte(`<Metall><Record Date="01.10.2026" Code="1"><Buy>0</Buy></Record></Metall>`))
+	if _, err := cbr.New(srv.Client(), srv.URL).MetalPrices(context.Background(), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Error("gold at nothing was taken")
+	}
+}

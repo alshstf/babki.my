@@ -606,7 +606,8 @@
       "dividendCalendar": "Yahoo Finance — календарь дивидендов, если брокер его не даёт",
       "cryptoPrices": "CoinGecko — цены криптовалют (данные CoinGecko)",
       "bondSchedules": "Графики купонов и погашений облигаций (Мосбиржа)",
-      "indexes": "Индексы для сравнения: MCFTR, RGBITR (Мосбиржа), S&P 500 (Yahoo)"
+      "indexes": "Индексы для сравнения: MCFTR, RGBITR (Мосбиржа), S&P 500 (Yahoo)",
+      "metalPrices": "ЦБ — учётные цены драгоценных металлов"
     }
   },
   "instrumentPage": {
