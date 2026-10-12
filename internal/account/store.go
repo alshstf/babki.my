@@ -18,6 +18,8 @@ const (
 	pgForeignKeyViolation = "23503"
 	// accountsOwnerFK is the constraint behind accounts.owner_user_id.
 	accountsOwnerFK = "accounts_owner_user_id_fkey"
+	// accountsTaxOwnerFK is the constraint behind accounts.tax_owner_user_id.
+	accountsTaxOwnerFK = "accounts_tax_owner_user_id_fkey"
 )
 
 // ErrOwnerNotFound means owner_user_id names no user: a 400 rather than an
@@ -25,14 +27,21 @@ const (
 // check would be needed too.
 var ErrOwnerNotFound = fmt.Errorf("%w: owner_user_id does not name a user of this instance", family.ErrValidation)
 
+// ErrTaxOwnerNotFound is ErrOwnerNotFound for tax_owner_user_id.
+var ErrTaxOwnerNotFound = fmt.Errorf("%w: tax_owner_user_id does not name a user of this instance", family.ErrValidation)
+
 // wrapOwnerFK maps the owner foreign-key violation to ErrOwnerNotFound. A
 // space_id violation is not translated: the space never comes from the
 // request.
 func wrapOwnerFK(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) &&
-		pgErr.Code == pgForeignKeyViolation && pgErr.ConstraintName == accountsOwnerFK {
-		return ErrOwnerNotFound
+	if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+		switch pgErr.ConstraintName {
+		case accountsOwnerFK:
+			return ErrOwnerNotFound
+		case accountsTaxOwnerFK:
+			return ErrTaxOwnerNotFound
+		}
 	}
 	return err
 }
@@ -42,7 +51,8 @@ type Store struct{ db db.Executor }
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const accCols = `a.id, a.space_id, a.owner_user_id, a.name, a.type, a.currency,
-	a.institution, a.status, a.valued_by_balance, a.trades_abroad, a.kept_by_operations, a.created_at, a.updated_at`
+	a.institution, a.status, a.valued_by_balance, a.trades_abroad, a.kept_by_operations, a.foreign_broker, a.tax_owner_user_id,
+	a.created_at, a.updated_at`
 
 // withBalanceQuery joins the latest balance mark per account.
 const withBalanceQuery = `
@@ -58,7 +68,8 @@ func scanWithBalance(row pgx.Row) (WithBalance, error) {
 	var asOf *time.Time
 	var amount *int64
 	err := row.Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
-		&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.KeptByOperations, &a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
+		&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.KeptByOperations, &a.ForeignBroker, &a.TaxOwnerUserID,
+		&a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
 	if err != nil {
 		return WithBalance{}, err
 	}
@@ -81,10 +92,11 @@ func (s *Store) Create(
 		INSERT INTO accounts (space_id, owner_user_id, name, type, currency, institution)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, space_id, owner_user_id, name, type, currency, institution, status,
-			valued_by_balance, trades_abroad, kept_by_operations, created_at, updated_at`,
+			valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_user_id, created_at, updated_at`,
 		spaceID, ownerUserID, name, t, currency, institution).
 		Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
-			&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.KeptByOperations, &a.CreatedAt, &a.UpdatedAt)
+			&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.KeptByOperations, &a.ForeignBroker, &a.TaxOwnerUserID,
+			&a.CreatedAt, &a.UpdatedAt)
 	return a, wrapOwnerFK(err)
 }
 
@@ -122,11 +134,13 @@ func (s *Store) Update(ctx context.Context, spaceID, id uuid.UUID, upd Update) (
 			valued_by_balance = COALESCE($8, valued_by_balance),
 			trades_abroad = COALESCE($9, trades_abroad),
 			kept_by_operations = COALESCE($10, kept_by_operations),
+			foreign_broker = COALESCE($11, foreign_broker),
+			tax_owner_user_id = CASE WHEN $12 THEN $13 ELSE tax_owner_user_id END,
 			updated_at    = now()
 		WHERE space_id = $1 AND id = $2`,
 		spaceID, id, upd.Name, upd.Institution,
 		upd.OwnerUserID != nil, ownerValue(upd.OwnerUserID), upd.Status, upd.ValuedByBalance, upd.TradesAbroad,
-		upd.KeptByOperations)
+		upd.KeptByOperations, upd.ForeignBroker, upd.TaxOwnerUserID != nil, ownerValue(upd.TaxOwnerUserID))
 	if err != nil {
 		return WithBalance{}, wrapOwnerFK(err)
 	}

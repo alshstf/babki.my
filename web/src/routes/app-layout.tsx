@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { CalendarDays, ChartPie, KeyRound, LogOut, PiggyBank, Settings, Users, Wallet } from "lucide-react";
+import { CalendarDays, ChartPie, KeyRound, Landmark, LogOut, PiggyBank, Settings, Users, Wallet } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,7 @@ function NavLink({
   icon,
   label,
 }: {
-  to: "/accounts" | "/money" | "/payouts" | "/structure" | "/family" | "/settings";
+  to: "/accounts" | "/money" | "/payouts" | "/taxes" | "/structure" | "/family" | "/settings";
   icon: ReactNode;
   label: string;
 }) {
@@ -71,6 +71,7 @@ export function AppLayout() {
             <NavLink to="/money" icon={<PiggyBank className="size-4" />} label={t("nav.money")} />
             <NavLink to="/structure" icon={<ChartPie className="size-4" />} label={t("nav.structure")} />
             <NavLink to="/payouts" icon={<CalendarDays className="size-4" />} label={t("nav.payouts")} />
+            <NavLink to="/taxes" icon={<Landmark className="size-4" />} label={t("nav.taxes")} />
             <NavLink to="/family" icon={<Users className="size-4" />} label={t("nav.family")} />
             {session?.role === "owner" && (
               <NavLink to="/settings" icon={<Settings className="size-4" />} label={t("nav.settings")} />

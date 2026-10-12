@@ -6,6 +6,7 @@ tags:
   - { name: family, description: "Setup, sign-in and sessions, the space, its members and roles (internal/family)." }
   - { name: accounts, description: "Accounts, balance marks, the family's total and capital (internal/account)." }
   - { name: valuables, description: "Bars and coins of precious metal on valuables accounts, and where they are kept (internal/valuables)." }
+  - { name: taxyear, description: "The family's income tax for a year, an estimate (internal/taxyear)." }
   - { name: instruments, description: "The catalog of papers (internal/instrument)." }
   - { name: corporate-actions, description: "The registry of splits, conversions and spin-offs (internal/corporateaction)." }
   - { name: journal, description: "Operations: entry, edit, delete, transfers, arrivals (internal/operation)." }
@@ -176,6 +177,24 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/tax-year:
+    get:
+      tags: [taxyear]
+      operationId: getTaxYear
+      description: >-
+        The family's income tax for a year, an estimate (decisions Р-41, Р-42): per person, the investment
+        incomes of the brokers' accounts — the papers' result at the rates of each day, the gain on pieces held
+        longer than the long-holding years taken off, coupons and dividends — the tax on them by the bands,
+        what the brokers who are tax agents withhold each on its own account, the tax withheld abroad on
+        dividends that offsets the Russian one, and what is left to pay by return. Deposits, wages and property
+        join in later steps. supported is false, with no people, when the space's tax residency has no rules
+        for it. 400 for a year past this one.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer }, description: "The year; this one when absent" }
+      responses:
+        "200": { description: The year, content: { application/json: { schema: { $ref: "#/components/schemas/TaxYear" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/allocation/rebalance:
     get:
       tags: [allocation]
@@ -2959,7 +2978,7 @@ components:
       enum: [active, archived]
     AccountWithBalance:
       type: object
-      required: [id, name, type, currency, institution, status, created_at, valued_by_balance, trades_abroad, kept_by_operations, counted_by]
+      required: [id, name, type, currency, institution, status, created_at, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_user_id, counted_by]
       properties:
         id: { type: string, format: uuid }
         owner_user_id: { type: string, format: uuid, nullable: true }
@@ -2984,6 +3003,14 @@ components:
         trades_abroad:
           type: boolean
           description: "Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it."
+        foreign_broker:
+          type: boolean
+          description: "A broker abroad, who withholds no Russian tax: its client pays it by return (decision Р-41). False until somebody sets it."
+        tax_owner_user_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Whose income the account's is for tax (decision Р-42); null: its personal owner (owner_user_id), else the space's owner."
         counted_by:
           type: string
           enum: [journal, balance]
@@ -3060,6 +3087,7 @@ components:
         institution: { type: string, maxLength: 100 }
         owner_user_id: { type: string, format: uuid, nullable: true }
         trades_abroad: { type: boolean, description: "See AccountWithBalance.trades_abroad. Omitted, false." }
+        foreign_broker: { type: boolean, description: "See AccountWithBalance.foreign_broker. Omitted, false." }
     UpdateAccountRequest:
       type: object
       properties:
@@ -3074,6 +3102,8 @@ components:
         valued_by_balance: { type: boolean, description: "See AccountWithBalance.valued_by_balance. Omitted, it stays as it is." }
         trades_abroad: { type: boolean, description: "See AccountWithBalance.trades_abroad. Omitted, it stays as it is." }
         kept_by_operations: { type: boolean, description: "See AccountWithBalance.kept_by_operations. Omitted, it stays as it is." }
+        foreign_broker: { type: boolean, description: "See AccountWithBalance.foreign_broker. Omitted, it stays as it is." }
+        tax_owner_user_id: { type: string, format: uuid, nullable: true, description: "See AccountWithBalance.tax_owner_user_id. Omitted, it stays as it is; null gives the account back to its default owner for tax." }
     SetBalanceRequest:
       type: object
       required: [as_of, amount_minor]
@@ -3366,7 +3396,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -3378,6 +3408,8 @@ components:
         valued_by_balance: { type: boolean }
         trades_abroad: { type: boolean }
         kept_by_operations: { type: boolean }
+        foreign_broker: { type: boolean }
+        tax_owner_username: { type: string, nullable: true, description: "Whose the account is for tax when set apart from its owner; null otherwise" }
         created_at: { type: string, format: date-time }
         balances:
           type: array
@@ -3773,6 +3805,49 @@ components:
         market_minor: { type: integer, format: int64, nullable: true, description: "All pieces by the central bank's price; null when one cannot be valued yet" }
         sell_minor: { type: integer, format: int64, nullable: true, description: "All pieces as they would sell now; null when one cannot be valued yet" }
         currency: { type: string, description: "RUB: the central bank prices metals in roubles" }
+    TaxYear:
+      type: object
+      required: [year, supported, currency, declare_by, pay_by, to_pay_minor, refund_minor, people]
+      properties:
+        year: { type: integer }
+        to_pay_minor: { type: integer, format: int64, description: "The people's to_pay_minor summed" }
+        refund_minor: { type: integer, format: int64, description: "The people's refund_minor summed" }
+        supported: { type: boolean, description: "False when the space's tax residency has no rules for the year's tax; people is then empty" }
+        currency: { type: string, description: "What the tax is counted in; empty when not supported" }
+        declare_by: { type: string, description: "Date YYYY-MM-DD: the return's last day" }
+        pay_by: { type: string, description: "Date YYYY-MM-DD: the last day to pay what the return says" }
+        people: { type: array, items: { $ref: "#/components/schemas/TaxYearPerson" }, description: "The space's owner first; a person with no counted account is absent" }
+    TaxYearPerson:
+      type: object
+      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, unvalued, accounts]
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        base_minor: { type: integer, format: int64, description: "The investment incomes over the person's accounts: the papers' result, losses on one broker offsetting gains on another, not below zero, plus the dividends" }
+        tax_minor: { type: integer, format: int64, description: "The tax on base_minor by the bands" }
+        by_agents_minor: { type: integer, format: int64, description: "What the brokers who are tax agents withhold for the year, each on its own account by the same bands" }
+        withheld_minor: { type: integer, format: int64, description: "The tax the journals of those brokers' accounts show already taken this year" }
+        credit_minor: { type: integer, format: int64, description: "The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them" }
+        to_pay_minor: { type: integer, format: int64, description: "Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero" }
+        refund_minor: { type: integer, format: int64, description: "What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise" }
+        unvalued: { type: integer, description: "Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them" }
+        accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearAccount" } }
+    TaxYearAccount:
+      type: object
+      required: [account_id, name, foreign_broker, sales_minor, sales_long_minor, coupons_minor, dividends_minor, interest_minor, withheld_minor, securities_minor, agent_tax_minor, unvalued]
+      properties:
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        foreign_broker: { type: boolean }
+        sales_minor: { type: integer, format: int64, description: "The year's disposals' result, signed: proceeds and fee at the disposal's day's rate, each piece at its purchase's" }
+        sales_long_minor: { type: integer, format: int64, description: "Of it, the result on pieces held longer than the long-holding years" }
+        coupons_minor: { type: integer, format: int64 }
+        dividends_minor: { type: integer, format: int64 }
+        interest_minor: { type: integer, format: int64, description: "Interest paid on the account; counted with deposits in a later step" }
+        withheld_minor: { type: integer, format: int64, description: "Tax rows of the year: what was withheld" }
+        securities_minor: { type: integer, format: int64, description: "The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons" }
+        agent_tax_minor: { type: integer, format: int64, description: "What the broker withholds for the year as a tax agent; 0 for a broker abroad" }
+        unvalued: { type: integer }
     AllocationTarget:
       type: object
       required: [key, percent]

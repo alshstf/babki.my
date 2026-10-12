@@ -138,8 +138,13 @@ func toAPI(a WithBalance) apitypes.AccountWithBalance {
 		ValuedByBalance:  a.ValuedByBalance,
 		TradesAbroad:     a.TradesAbroad,
 		KeptByOperations: a.KeptByOperations,
+		ForeignBroker:    a.ForeignBroker,
+		TaxOwnerUserId:   nullable.NewNullNullable[uuid.UUID](),
 		CountedBy:        apitypes.AccountWithBalanceCountedByBalance,
 		Journal:          nullable.NewNullNullable[apitypes.AccountJournal](),
+	}
+	if a.TaxOwnerUserID != nil {
+		out.TaxOwnerUserId = nullable.NewNullableWithValue(*a.TaxOwnerUserID)
 	}
 	if a.Balance != nil {
 		out.Balance = &apitypes.BalancePoint{
@@ -297,8 +302,8 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	created := WithBalance{Account: a}
-	if req.TradesAbroad != nil && *req.TradesAbroad {
-		if created, err = h.store.Update(r.Context(), p.SpaceID, a.ID, Update{TradesAbroad: req.TradesAbroad}); err != nil {
+	if (req.TradesAbroad != nil && *req.TradesAbroad) || (req.ForeignBroker != nil && *req.ForeignBroker) {
+		if created, err = h.store.Update(r.Context(), p.SpaceID, a.ID, Update{TradesAbroad: req.TradesAbroad, ForeignBroker: req.ForeignBroker}); err != nil {
 			family.WriteError(w, err)
 			return
 		}
@@ -345,6 +350,15 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	upd.ValuedByBalance = req.ValuedByBalance
 	upd.TradesAbroad = req.TradesAbroad
 	upd.KeptByOperations = req.KeptByOperations
+	upd.ForeignBroker = req.ForeignBroker
+	if req.TaxOwnerUserId.IsSpecified() {
+		var owner *uuid.UUID
+		if !req.TaxOwnerUserId.IsNull() {
+			v := req.TaxOwnerUserId.MustGet()
+			owner = &v
+		}
+		upd.TaxOwnerUserID = &owner
+	}
 	a, err := h.store.Update(r.Context(), p.SpaceID, id, upd)
 	if err != nil {
 		family.WriteError(w, err)

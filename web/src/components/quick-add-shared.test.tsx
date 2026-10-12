@@ -18,7 +18,7 @@ const fetchMock = vi.hoisted(() => {
 
 const card: AccountWithBalance = {
   id: "card", name: "Кредитка Альфа", type: "credit_card", currency: "RUB", institution: "", status: "active",
-  created_at: "2026-01-01T00:00:00Z", valued_by_balance: false, trades_abroad: false, kept_by_operations: true,
+  created_at: "2026-01-01T00:00:00Z", valued_by_balance: false, trades_abroad: false, kept_by_operations: true, foreign_broker: false, tax_owner_user_id: null,
   counted_by: "journal", balance: { as_of: "2026-10-01", amount_minor: 0 },
 };
 

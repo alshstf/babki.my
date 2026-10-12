@@ -20,7 +20,7 @@ if (!Element.prototype.scrollIntoView) {
 
 const box: AccountWithBalance = {
   id: "box-1", name: "Ячейка", type: "valuables", currency: "RUB", institution: "", status: "active",
-  created_at: "2026-01-01T00:00:00Z", valued_by_balance: false, trades_abroad: false, kept_by_operations: false, counted_by: "journal",
+  created_at: "2026-01-01T00:00:00Z", valued_by_balance: false, trades_abroad: false, kept_by_operations: false, foreign_broker: false, tax_owner_user_id: null, counted_by: "journal",
 };
 
 const piece = (over: Partial<ValuablesItem>): ValuablesItem => ({

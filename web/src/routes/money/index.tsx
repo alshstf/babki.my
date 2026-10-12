@@ -24,6 +24,7 @@ import { useMembers } from "@/api/members";
 import { useFileByRules } from "@/api/operations";
 import { useSession } from "@/api/session";
 import { FileByRulesBar } from "@/routes/accounts/operations-table";
+import { TaxCard } from "@/routes/taxes/tax-card";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 import { formatMinorCompact } from "@/lib/money";
@@ -144,6 +145,7 @@ export function MoneyPage() {
           <BudgetCard />
           <ReceiptsCard />
           <ForecastCard />
+          <TaxCard />
           <RecurringPayments />
           <Investments report={data.investments} currency={data.base_currency} />
         </>

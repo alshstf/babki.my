@@ -1819,11 +1819,14 @@ type AccountWithBalance struct {
 	BalanceInBase nullable.Nullable[MoneyInBase] `json:"balance_in_base,omitempty"`
 
 	// CountedBy Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
-	CountedBy   AccountWithBalanceCountedBy `json:"counted_by"`
-	CreatedAt   time.Time                   `json:"created_at"`
-	Currency    string                      `json:"currency"`
-	Id          openapi_types.UUID          `json:"id"`
-	Institution string                      `json:"institution"`
+	CountedBy AccountWithBalanceCountedBy `json:"counted_by"`
+	CreatedAt time.Time                   `json:"created_at"`
+	Currency  string                      `json:"currency"`
+
+	// ForeignBroker A broker abroad, who withholds no Russian tax: its client pays it by return (decision Р-41). False until somebody sets it.
+	ForeignBroker bool               `json:"foreign_broker"`
+	Id            openapi_types.UUID `json:"id"`
+	Institution   string             `json:"institution"`
 
 	// Journal What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE account with at least one operation, whichever figure counted_by names, so an account counted by its balance can still say what its journal comes to. Null on every other account.
 	Journal nullable.Nullable[AccountJournal] `json:"journal,omitempty"`
@@ -1833,6 +1836,9 @@ type AccountWithBalance struct {
 	Name             string                                `json:"name"`
 	OwnerUserId      nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status           AccountStatus                         `json:"status"`
+
+	// TaxOwnerUserId Whose income the account's is for tax (decision Р-42); null: its personal owner (owner_user_id), else the space's owner.
+	TaxOwnerUserId nullable.Nullable[openapi_types.UUID] `json:"tax_owner_user_id"`
 
 	// TradesAbroad Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it.
 	TradesAbroad bool `json:"trades_abroad"`
@@ -2373,8 +2379,11 @@ type CostBasisRules struct {
 // CreateAccountRequest defines model for CreateAccountRequest.
 type CreateAccountRequest struct {
 	// Currency ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateAccountRequest carries no currency — because the balance marks recorded against the account carry no currency of their own and are denominated in this one.
-	Currency    string  `json:"currency"`
-	Institution *string `json:"institution,omitempty"`
+	Currency string `json:"currency"`
+
+	// ForeignBroker See AccountWithBalance.foreign_broker. Omitted, false.
+	ForeignBroker *bool   `json:"foreign_broker,omitempty"`
+	Institution   *string `json:"institution,omitempty"`
 
 	// Name What to call the account. Refused EMPTY or longer than 100 characters (account.MaxNameRunes, counted as Unicode code points) and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no shape is stated because the server checks none.
 	Name        string                                `json:"name"`
@@ -3085,6 +3094,7 @@ type ExportAccount struct {
 	// CreditCardInstallments A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account
 	CreditCardInstallments []ExportCardInstallment `json:"credit_card_installments"`
 	Currency               string                  `json:"currency"`
+	ForeignBroker          bool                    `json:"foreign_broker"`
 	Id                     openapi_types.UUID      `json:"id"`
 	Institution            string                  `json:"institution"`
 	KeptByOperations       bool                    `json:"kept_by_operations"`
@@ -3102,8 +3112,11 @@ type ExportAccount struct {
 	// OwnerUsername The member the account is personal to; null for a shared one
 	OwnerUsername nullable.Nullable[string] `json:"owner_username"`
 	Status        string                    `json:"status"`
-	TradesAbroad  bool                      `json:"trades_abroad"`
-	Type          string                    `json:"type"`
+
+	// TaxOwnerUsername Whose the account is for tax when set apart from its owner; null otherwise
+	TaxOwnerUsername nullable.Nullable[string] `json:"tax_owner_username"`
+	TradesAbroad     bool                      `json:"trades_abroad"`
+	Type             string                    `json:"type"`
 
 	// Valuables A valuables account's storage, bank prices and bars and coins as written in (decision Р-39), nothing valued; null on every other account
 	Valuables       nullable.Nullable[ExportValuables] `json:"valuables,omitempty"`
@@ -4733,6 +4746,90 @@ type TableImport struct {
 	RowsWritten    int                          `json:"rows_written"`
 }
 
+// TaxYear defines model for TaxYear.
+type TaxYear struct {
+	// Currency What the tax is counted in; empty when not supported
+	Currency string `json:"currency"`
+
+	// DeclareBy Date YYYY-MM-DD: the return's last day
+	DeclareBy string `json:"declare_by"`
+
+	// PayBy Date YYYY-MM-DD: the last day to pay what the return says
+	PayBy string `json:"pay_by"`
+
+	// People The space's owner first; a person with no counted account is absent
+	People []TaxYearPerson `json:"people"`
+
+	// RefundMinor The people's refund_minor summed
+	RefundMinor int64 `json:"refund_minor"`
+
+	// Supported False when the space's tax residency has no rules for the year's tax; people is then empty
+	Supported bool `json:"supported"`
+
+	// ToPayMinor The people's to_pay_minor summed
+	ToPayMinor int64 `json:"to_pay_minor"`
+	Year       int   `json:"year"`
+}
+
+// TaxYearAccount defines model for TaxYearAccount.
+type TaxYearAccount struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AgentTaxMinor What the broker withholds for the year as a tax agent; 0 for a broker abroad
+	AgentTaxMinor  int64 `json:"agent_tax_minor"`
+	CouponsMinor   int64 `json:"coupons_minor"`
+	DividendsMinor int64 `json:"dividends_minor"`
+	ForeignBroker  bool  `json:"foreign_broker"`
+
+	// InterestMinor Interest paid on the account; counted with deposits in a later step
+	InterestMinor int64  `json:"interest_minor"`
+	Name          string `json:"name"`
+
+	// SalesLongMinor Of it, the result on pieces held longer than the long-holding years
+	SalesLongMinor int64 `json:"sales_long_minor"`
+
+	// SalesMinor The year's disposals' result, signed: proceeds and fee at the disposal's day's rate, each piece at its purchase's
+	SalesMinor int64 `json:"sales_minor"`
+
+	// SecuritiesMinor The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons
+	SecuritiesMinor int64 `json:"securities_minor"`
+	Unvalued        int   `json:"unvalued"`
+
+	// WithheldMinor Tax rows of the year: what was withheld
+	WithheldMinor int64 `json:"withheld_minor"`
+}
+
+// TaxYearPerson defines model for TaxYearPerson.
+type TaxYearPerson struct {
+	Accounts []TaxYearAccount `json:"accounts"`
+
+	// BaseMinor The investment incomes over the person's accounts: the papers' result, losses on one broker offsetting gains on another, not below zero, plus the dividends
+	BaseMinor int64 `json:"base_minor"`
+
+	// ByAgentsMinor What the brokers who are tax agents withhold for the year, each on its own account by the same bands
+	ByAgentsMinor int64 `json:"by_agents_minor"`
+
+	// CreditMinor The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them
+	CreditMinor int64  `json:"credit_minor"`
+	Name        string `json:"name"`
+
+	// RefundMinor What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise
+	RefundMinor int64 `json:"refund_minor"`
+
+	// TaxMinor The tax on base_minor by the bands
+	TaxMinor int64 `json:"tax_minor"`
+
+	// ToPayMinor Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero
+	ToPayMinor int64 `json:"to_pay_minor"`
+
+	// Unvalued Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them
+	Unvalued int                `json:"unvalued"`
+	UserId   openapi_types.UUID `json:"user_id"`
+
+	// WithheldMinor The tax the journals of those brokers' accounts show already taken this year
+	WithheldMinor int64 `json:"withheld_minor"`
+}
+
 // TinvestAccountPick defines model for TinvestAccountPick.
 type TinvestAccountPick struct {
 	// AccountName What to call the NEW babki account this broker account is imported into. A new account every time — never an existing one — so imported history is never mixed into anything hand-entered.
@@ -5068,7 +5165,9 @@ type TransferResponse struct {
 
 // UpdateAccountRequest defines model for UpdateAccountRequest.
 type UpdateAccountRequest struct {
-	Institution *string `json:"institution,omitempty"`
+	// ForeignBroker See AccountWithBalance.foreign_broker. Omitted, it stays as it is.
+	ForeignBroker *bool   `json:"foreign_broker,omitempty"`
+	Institution   *string `json:"institution,omitempty"`
 
 	// KeptByOperations See AccountWithBalance.kept_by_operations. Omitted, it stays as it is.
 	KeptByOperations *bool `json:"kept_by_operations,omitempty"`
@@ -5077,6 +5176,9 @@ type UpdateAccountRequest struct {
 	Name        *string                               `json:"name,omitempty"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status      *AccountStatus                        `json:"status,omitempty"`
+
+	// TaxOwnerUserId See AccountWithBalance.tax_owner_user_id. Omitted, it stays as it is; null gives the account back to its default owner for tax.
+	TaxOwnerUserId nullable.Nullable[openapi_types.UUID] `json:"tax_owner_user_id,omitempty"`
 
 	// TradesAbroad See AccountWithBalance.trades_abroad. Omitted, it stays as it is.
 	TradesAbroad *bool `json:"trades_abroad,omitempty"`
@@ -5600,6 +5702,12 @@ type GetStructureParams struct {
 
 // GetStructureParamsValuation defines parameters for GetStructure.
 type GetStructureParamsValuation string
+
+// GetTaxYearParams defines parameters for GetTaxYear.
+type GetTaxYearParams struct {
+	// Year The year; this one when absent
+	Year *int `form:"year,omitempty" json:"year,omitempty"`
+}
 
 // ListTinvestSyncRunsParams defines parameters for ListTinvestSyncRuns.
 type ListTinvestSyncRunsParams struct {

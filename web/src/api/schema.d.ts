@@ -141,6 +141,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tax-year": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's income tax for a year, an estimate (decisions Р-41, Р-42): per person, the investment incomes of the brokers' accounts — the papers' result at the rates of each day, the gain on pieces held longer than the long-holding years taken off, coupons and dividends — the tax on them by the bands, what the brokers who are tax agents withhold each on its own account, the tax withheld abroad on dividends that offsets the Russian one, and what is left to pay by return. Deposits, wages and property join in later steps. supported is false, with no people, when the space's tax residency has no rules for it. 400 for a year past this one. */
+        get: operations["getTaxYear"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/rebalance": {
         parameters: {
             query?: never;
@@ -2002,6 +2019,13 @@ export interface components {
             kept_by_operations: boolean;
             /** @description Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it. */
             trades_abroad: boolean;
+            /** @description A broker abroad, who withholds no Russian tax: its client pays it by return (decision Р-41). False until somebody sets it. */
+            foreign_broker: boolean;
+            /**
+             * Format: uuid
+             * @description Whose income the account's is for tax (decision Р-42); null: its personal owner (owner_user_id), else the space's owner.
+             */
+            tax_owner_user_id: string | null;
             /**
              * @description Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
              * @enum {string}
@@ -2083,6 +2107,8 @@ export interface components {
             owner_user_id?: string | null;
             /** @description See AccountWithBalance.trades_abroad. Omitted, false. */
             trades_abroad?: boolean;
+            /** @description See AccountWithBalance.foreign_broker. Omitted, false. */
+            foreign_broker?: boolean;
         };
         UpdateAccountRequest: {
             /** @description Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states. */
@@ -2097,6 +2123,13 @@ export interface components {
             trades_abroad?: boolean;
             /** @description See AccountWithBalance.kept_by_operations. Omitted, it stays as it is. */
             kept_by_operations?: boolean;
+            /** @description See AccountWithBalance.foreign_broker. Omitted, it stays as it is. */
+            foreign_broker?: boolean;
+            /**
+             * Format: uuid
+             * @description See AccountWithBalance.tax_owner_user_id. Omitted, it stays as it is; null gives the account back to its default owner for tax.
+             */
+            tax_owner_user_id?: string | null;
         };
         SetBalanceRequest: {
             /** @description Date YYYY-MM-DD */
@@ -2357,6 +2390,9 @@ export interface components {
             valued_by_balance: boolean;
             trades_abroad: boolean;
             kept_by_operations: boolean;
+            foreign_broker: boolean;
+            /** @description Whose the account is for tax when set apart from its owner; null otherwise */
+            tax_owner_username: string | null;
             /** Format: date-time */
             created_at: string;
             /** @description Balance marks, oldest first */
@@ -2938,6 +2974,113 @@ export interface components {
             sell_minor: number | null;
             /** @description RUB: the central bank prices metals in roubles */
             currency: string;
+        };
+        TaxYear: {
+            year: number;
+            /**
+             * Format: int64
+             * @description The people's to_pay_minor summed
+             */
+            to_pay_minor: number;
+            /**
+             * Format: int64
+             * @description The people's refund_minor summed
+             */
+            refund_minor: number;
+            /** @description False when the space's tax residency has no rules for the year's tax; people is then empty */
+            supported: boolean;
+            /** @description What the tax is counted in; empty when not supported */
+            currency: string;
+            /** @description Date YYYY-MM-DD: the return's last day */
+            declare_by: string;
+            /** @description Date YYYY-MM-DD: the last day to pay what the return says */
+            pay_by: string;
+            /** @description The space's owner first; a person with no counted account is absent */
+            people: components["schemas"]["TaxYearPerson"][];
+        };
+        TaxYearPerson: {
+            /** Format: uuid */
+            user_id: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description The investment incomes over the person's accounts: the papers' result, losses on one broker offsetting gains on another, not below zero, plus the dividends
+             */
+            base_minor: number;
+            /**
+             * Format: int64
+             * @description The tax on base_minor by the bands
+             */
+            tax_minor: number;
+            /**
+             * Format: int64
+             * @description What the brokers who are tax agents withhold for the year, each on its own account by the same bands
+             */
+            by_agents_minor: number;
+            /**
+             * Format: int64
+             * @description The tax the journals of those brokers' accounts show already taken this year
+             */
+            withheld_minor: number;
+            /**
+             * Format: int64
+             * @description The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them
+             */
+            credit_minor: number;
+            /**
+             * Format: int64
+             * @description Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero
+             */
+            to_pay_minor: number;
+            /**
+             * Format: int64
+             * @description What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise
+             */
+            refund_minor: number;
+            /** @description Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them */
+            unvalued: number;
+            accounts: components["schemas"]["TaxYearAccount"][];
+        };
+        TaxYearAccount: {
+            /** Format: uuid */
+            account_id: string;
+            name: string;
+            foreign_broker: boolean;
+            /**
+             * Format: int64
+             * @description The year's disposals' result, signed: proceeds and fee at the disposal's day's rate, each piece at its purchase's
+             */
+            sales_minor: number;
+            /**
+             * Format: int64
+             * @description Of it, the result on pieces held longer than the long-holding years
+             */
+            sales_long_minor: number;
+            /** Format: int64 */
+            coupons_minor: number;
+            /** Format: int64 */
+            dividends_minor: number;
+            /**
+             * Format: int64
+             * @description Interest paid on the account; counted with deposits in a later step
+             */
+            interest_minor: number;
+            /**
+             * Format: int64
+             * @description Tax rows of the year: what was withheld
+             */
+            withheld_minor: number;
+            /**
+             * Format: int64
+             * @description The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons
+             */
+            securities_minor: number;
+            /**
+             * Format: int64
+             * @description What the broker withholds for the year as a tax agent; 0 for a broker abroad
+             */
+            agent_tax_minor: number;
+            unvalued: number;
         };
         AllocationTarget: {
             key: string;
@@ -5351,6 +5494,31 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    getTaxYear: {
+        parameters: {
+            query?: {
+                /** @description The year; this one when absent */
+                year?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The year */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxYear"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     getAllocationRebalance: {

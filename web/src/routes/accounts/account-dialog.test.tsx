@@ -55,7 +55,7 @@ const account: AccountWithBalance = {
   created_at: "2026-01-01T00:00:00Z",
   valued_by_balance: false,
   trades_abroad: false,
-  kept_by_operations: false,
+  kept_by_operations: false, foreign_broker: false, tax_owner_user_id: null,
   counted_by: "balance",
 };
 
@@ -143,5 +143,28 @@ describe("AccountDialog — a broker trading abroad", () => {
     open({ ...account, type: "checking" });
 
     expect(screen.queryByLabelText("Брокер торгует на зарубежных биржах")).toBeNull();
+  });
+});
+
+// Decision Р-41: a broker abroad withholds no Russian tax — said on a broker's
+// account only; a valuables account asks no currency.
+describe("AccountDialog — a foreign broker", () => {
+  it("sends the tick with an edited broker's account", async () => {
+    serve(200, { ...account, foreign_broker: true });
+    open(account);
+
+    fireEvent.click(screen.getByLabelText("Иностранный брокер — налог в России не удерживает"));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    const patch = () =>
+      fetchMock.mock.calls.map((call) => call[0] as Request).find((request) => request.method === "PATCH");
+    await vi.waitFor(() => expect(patch()).toBeDefined());
+    expect(await patch()!.clone().json()).toMatchObject({ foreign_broker: true, trades_abroad: false });
+  });
+
+  it("does not offer it on a bank account", () => {
+    open({ ...account, type: "checking" });
+
+    expect(screen.queryByLabelText("Иностранный брокер — налог в России не удерживает")).toBeNull();
   });
 });
