@@ -130,9 +130,9 @@ var taxRules = map[string]TaxRules{
 	// 2,4, 5, 20 and 50 млн.
 	"RU": {
 		Country: "RU", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, SaleTaxBP: 1300, LongHoldingYears: 3,
-		TaxCurrency:     "RUB",
+		TaxCurrency: "RUB",
 		// Tax is in whole roubles, half up (ст. 52 п. 6).
-		TaxUnitMinor: 100,
+		TaxUnitMinor:    100,
 		InvestmentBands: [2]TaxBand{{UpToMinor: 2_400_000_00, BP: 1300}, {BP: 1500}},
 		MainBands: [5]TaxBand{
 			{UpToMinor: 2_400_000_00, BP: 1300},
