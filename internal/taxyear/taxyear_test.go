@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/portfolio"
 )
@@ -199,5 +200,77 @@ func TestDepositsInterest(t *testing.T) {
 	y, err = NewService(fakeAccounts{mariaSavings}, f, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}, fakeKeys{}).Of(t.Context(), uuid.New(), 2025)
 	if err != nil || y.KeyRate != nil || y.People[0].InterestFree != nil || y.People[0].Tax != 0 || y.People[0].Interest != 400_000_00 {
 		t.Errorf("no key rate: %+v, %v", y, err)
+	}
+}
+
+type fakeFlows []portfolio.Operation
+
+func (f fakeFlows) ListMoneyFlows(context.Context, uuid.UUID, time.Time, time.Time) ([]portfolio.Operation, error) {
+	return f, nil
+}
+
+type fakeCategories []category.Category
+
+func (f fakeCategories) List(context.Context, uuid.UUID) ([]category.Category, error) { return f, nil }
+
+// The gross behind a net: 87 000 is 100 000 less 13 %; after 2 300 000 paid
+// before, 172 000 is 200 000 — 100 000 at 13 % and 100 000 at 15 %.
+func TestGrossOfNet(t *testing.T) {
+	ru := family.TaxRulesFor("RU")
+	bands := ru.MainBands[:]
+	if g := grossOf(bands, 0, 87_000_00); g != 100_000_00 {
+		t.Errorf("87 000: %d", g)
+	}
+	if g := grossOf(bands, 2_300_000_00, 172_000_00); g != 200_000_00 {
+		t.Errorf("172 000 after 2 300 000: %d", g)
+	}
+}
+
+// Wages are earnings under a category marked wages, by employer — the row's
+// counterparty — whose they are the member who earned them, else the
+// account's person. Alex's two employers each pay under 2,4 млн, so each
+// withholds 13 % and the 15 % past the threshold on their sum is his to pay.
+// Interest filed under the marked category joins the interest; a wage in
+// dollars is not counted.
+func TestWages(t *testing.T) {
+	alex, maria := member("Алекс", family.RoleOwner), member("Мария", family.RoleEditor)
+	card := bank("Карта", account.TypeChecking, nil, true)
+	wages, interest := category.TaxWages, category.TaxInterest
+	salary := category.Category{ID: uuid.New(), Kind: category.KindIncome, Name: "Зарплата", TaxMark: &wages}
+	pct := category.Category{ID: uuid.New(), Kind: category.KindIncome, Name: "Проценты", TaxMark: &interest}
+	other := category.Category{ID: uuid.New(), Kind: category.KindIncome, Name: "Подарки"}
+	day := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	op := func(cat uuid.UUID, minor int64, who *uuid.UUID, employer, currency string) portfolio.Operation {
+		return portfolio.Operation{
+			Type: portfolio.TypeDeposit, AccountID: card.ID, OccurredOn: day, AmountMinor: minor, Currency: currency,
+			CategoryID: &cat, Counterparty: employer, MemberID: who,
+		}
+	}
+	flows := fakeFlows{
+		op(salary.ID, 1_740_000_00, nil, "ООО «Ромашка»", "RUB"),
+		op(salary.ID, 1_740_000_00, nil, "ООО «Василёк»", "RUB"),
+		op(salary.ID, 87_000_00, &maria.ID, "ООО «Ромашка»", "RUB"),
+		op(pct.ID, 300_000_00, &maria.ID, "", "RUB"),
+		op(other.ID, 50_000_00, nil, "", "RUB"),
+		op(salary.ID, 1_000_00, nil, "Acme", "USD"),
+	}
+	svc := NewService(fakeAccounts{card}, fakeFacts{}, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}, fakeKeys{rate21}).
+		WithEarnings(flows, fakeCategories{salary, pct, other})
+	y, err := svc.Of(t.Context(), uuid.New(), 2025)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(y.People) != 2 {
+		t.Fatalf("people = %+v", y.People)
+	}
+	a, m := y.People[0], y.People[1]
+	if len(a.Employers) != 2 || a.Employers[0].Name != "ООО «Ромашка»" || a.Employers[0].Gross != 2_000_000_00 || a.Employers[0].Withheld != 260_000_00 {
+		t.Errorf("Alex's employers = %+v", a.Employers)
+	}
+	if a.Wages != 4_000_000_00 || a.WagesTax != 552_000_00 || a.WagesWithheld != 520_000_00 || a.WagesToPay != 32_000_00 || a.Unvalued != 1 {
+		t.Errorf("Alex = %+v", a)
+	}
+	if m.Wages != 100_000_00 || m.WagesToPay != 0 || m.Interest != 300_000_00 || m.ByNotice != 11_700_00 {
+		t.Errorf("Maria = %+v", m)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/portfolio"
 )
@@ -48,6 +49,9 @@ type Service struct {
 	spaces   spaces
 	keys     keyRates
 	now      func() time.Time
+	// For the earnings under marked categories (WithEarnings).
+	flows      flows
+	categories categories
 }
 
 func NewService(a accounts, f facts, s spaces, k keyRates) *Service {
@@ -101,7 +105,14 @@ type Person struct {
 	Interest     int64
 	InterestFree *int64
 	ByNotice     int64
-	Unvalued     int
+	// Employers are the wages by employer, as reckoned from what reached the
+	// accounts; Wages their gross, WagesTax the tax on it by the wages'
+	// scale, WagesWithheld what the employers withheld, each on its own;
+	// WagesToPay what is left to pay — when two employers each stayed under
+	// a band the sum crosses.
+	Employers                                            []Employer
+	WagesNet, Wages, WagesTax, WagesWithheld, WagesToPay int64
+	Unvalued                                             int
 }
 
 // Year is the family's year.
@@ -146,8 +157,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	}
 	people := map[uuid.UUID]*Person{}
 	var order []uuid.UUID
-	personOf := func(a account.Account) *Person {
-		who := whose(a, owner)
+	personByID := func(who uuid.UUID) *Person {
 		p, ok := people[who]
 		if !ok {
 			p = &Person{UserID: who, Name: names[who]}
@@ -155,6 +165,11 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			order = append(order, who)
 		}
 		return p
+	}
+	personOf := func(a account.Account) *Person { return personByID(whose(a, owner)) }
+	byID := map[uuid.UUID]account.Account{}
+	for _, a := range list {
+		byID[a.ID] = a.Account
 	}
 	byBalance := 0
 	for _, a := range list {
@@ -201,6 +216,23 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		p.Accounts = append(p.Accounts, acc)
 		p.Unvalued += f.Unvalued
 	}
+	// Earnings under marked categories: wages by employer, interest.
+	rows, err := s.earnings(ctx, spaceID, year, rules.TaxCurrency, byID, owner)
+	if err != nil {
+		return Year{}, err
+	}
+	wages := map[uuid.UUID][]earning{}
+	for _, r := range rows {
+		p := personByID(r.person)
+		switch {
+		case r.unvalued:
+			p.Unvalued++
+		case r.mark == category.TaxInterest:
+			p.Interest += r.minor
+		case r.mark == category.TaxWages:
+			wages[r.person] = append(wages[r.person], r)
+		}
+	}
 	out := Year{
 		Year: year, Currency: rules.TaxCurrency, People: []Person{}, ByBalance: byBalance,
 		DeclareBy: time.Date(year+1, time.April, 30, 0, 0, 0, 0, time.UTC),
@@ -239,6 +271,14 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		p.ByNotice = p.Tax - family.Banded(rules.InvestmentBands[:], invested, rules.TaxUnitMinor)
 		due := max(p.Tax-p.ByNotice-p.Credit, 0)
 		p.ToPay, p.Refund = max(due-p.ByAgents, 0), max(p.ByAgents-due, 0)
+		p.Employers = wagesOf(rules.MainBands[:], rules.TaxUnitMinor, wages[who])
+		for _, e := range p.Employers {
+			p.WagesNet += e.Net
+			p.Wages += e.Gross
+			p.WagesWithheld += e.Withheld
+		}
+		p.WagesTax = family.Banded(rules.MainBands[:], p.Wages, rules.TaxUnitMinor)
+		p.WagesToPay = max(p.WagesTax-p.WagesWithheld, 0)
 		out.People = append(out.People, *p)
 	}
 	slices.SortStableFunc(out.People, func(a, b Person) int {

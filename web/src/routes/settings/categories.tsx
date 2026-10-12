@@ -45,6 +45,7 @@ import { CategoryRules } from "./category-rules";
 import { queryState } from "@/lib/query-state";
 
 const KINDS: CategoryKind[] = ["expense", "income"];
+const NO_MARK = "none";
 const TOP = "top";
 const MAX_NAME = 60;
 
@@ -233,6 +234,16 @@ function Row({
             {t("categories.archived")}
           </Badge>
         )}
+        {category.tax_mark === "wages" && (
+          <Badge variant="secondary" className="ml-2" data-testid="category-tax-mark">
+            {t("categories.taxMarks.wages")}
+          </Badge>
+        )}
+        {category.tax_mark === "interest" && (
+          <Badge variant="secondary" className="ml-2" data-testid="category-tax-mark">
+            {t("categories.taxMarks.interest")}
+          </Badge>
+        )}
       </span>
       {canEdit && (
         <DropdownMenu>
@@ -269,6 +280,8 @@ function CategoryDialog({ editing, all, onClose }: { editing: Editing; all: Cate
     (editing.mode === "create" ? editing.parentId : editing.category.parent_id) ?? TOP,
   );
   const self = editing.mode === "edit" ? editing.category.id : undefined;
+  // What an earning category means for tax (decision Р-41).
+  const [taxMark, setTaxMark] = useState<string>((editing.mode === "edit" ? editing.category.tax_mark : null) ?? NO_MARK);
   const parents = all.filter((c) => c.kind === kind && c.parent_id === null && c.id !== self && !c.archived);
   const canMove = editing.mode === "create" || !editing.hasChildren;
   const parentId = place === TOP ? null : place;
@@ -285,7 +298,8 @@ function CategoryDialog({ editing, all, onClose }: { editing: Editing; all: Cate
     if (editing.mode === "create") {
       create.mutate({ kind, name: trimmed, parent_id: parentId }, done);
     } else {
-      update.mutate({ id: editing.category.id, body: { name: trimmed, parent_id: parentId } }, done);
+      const mark = taxMark === "wages" || taxMark === "interest" ? taxMark : null;
+      update.mutate({ id: editing.category.id, body: { name: trimmed, parent_id: parentId, ...(kind === "income" ? { tax_mark: mark } : {}) } }, done);
     }
   };
 
@@ -328,6 +342,22 @@ function CategoryDialog({ editing, all, onClose }: { editing: Editing; all: Cate
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">{t("categories.staysOnTop")}</p>
+          )}
+          {editing.mode === "edit" && kind === "income" && (
+            <div className="grid gap-2">
+              <Label htmlFor="category-tax-mark">{t("categories.taxMark")}</Label>
+              <Select value={taxMark} onValueChange={setTaxMark}>
+                <SelectTrigger id="category-tax-mark">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_MARK}>{t("categories.taxMarks.none")}</SelectItem>
+                  <SelectItem value="wages">{t("categories.taxMarks.wages")}</SelectItem>
+                  <SelectItem value="interest">{t("categories.taxMarks.interest")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{t("categories.taxMarkHint")}</p>
+            </div>
           )}
           {failed && (
             <Alert variant="destructive">

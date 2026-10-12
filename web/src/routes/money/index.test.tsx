@@ -29,9 +29,9 @@ if (!Element.prototype.scrollIntoView) {
 }
 
 const CATEGORIES: Category[] = [
-  { id: "c-tr", kind: "expense", name: "Транспорт", parent_id: null, archived: false, position: 1 },
-  { id: "c-taxi", kind: "expense", name: "Такси", parent_id: "c-tr", archived: false, position: 1 },
-  { id: "c-salary", kind: "income", name: "Зарплата", parent_id: null, archived: false, position: 1 },
+  { id: "c-tr", kind: "expense", name: "Транспорт", parent_id: null, archived: false, position: 1, tax_mark: null },
+  { id: "c-taxi", kind: "expense", name: "Такси", parent_id: "c-tr", archived: false, position: 1, tax_mark: null },
+  { id: "c-salary", kind: "income", name: "Зарплата", parent_id: null, archived: false, position: 1, tax_mark: null },
 ];
 
 const flow = (byMonth: number[]): CashflowFlow => ({ total_minor: byMonth.reduce((a, b) => a + b, 0), by_month: byMonth });

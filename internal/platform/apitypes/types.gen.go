@@ -226,6 +226,24 @@ func (e CashflowLineGroup) Valid() bool {
 	}
 }
 
+// Defines values for CategoryTaxMark.
+const (
+	CategoryTaxMarkInterest CategoryTaxMark = "interest"
+	CategoryTaxMarkWages    CategoryTaxMark = "wages"
+)
+
+// Valid indicates whether the value is a known member of the CategoryTaxMark enum.
+func (e CategoryTaxMark) Valid() bool {
+	switch e {
+	case CategoryTaxMarkInterest:
+		return true
+	case CategoryTaxMarkWages:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryKind.
 const (
 	Expense CategoryKind = "expense"
@@ -1435,6 +1453,24 @@ func (e TradingModeKind) Valid() bool {
 	}
 }
 
+// Defines values for UpdateCategoryRequestTaxMark.
+const (
+	UpdateCategoryRequestTaxMarkInterest UpdateCategoryRequestTaxMark = "interest"
+	UpdateCategoryRequestTaxMarkWages    UpdateCategoryRequestTaxMark = "wages"
+)
+
+// Valid indicates whether the value is a known member of the UpdateCategoryRequestTaxMark enum.
+func (e UpdateCategoryRequestTaxMark) Valid() bool {
+	switch e {
+	case UpdateCategoryRequestTaxMarkInterest:
+		return true
+	case UpdateCategoryRequestTaxMarkWages:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ValuablesItemHardToSell.
 const (
 	ForeignMade   ValuablesItemHardToSell = "foreign_made"
@@ -2318,7 +2354,13 @@ type Category struct {
 
 	// Position Its place among its siblings, smallest first
 	Position int `json:"position"`
+
+	// TaxMark What an earning category means for the year's tax (decision Р-41): wages — paid net of the employer's withholding, the main base; interest — deposits' interest. Null for none; always null on a spending category
+	TaxMark nullable.Nullable[CategoryTaxMark] `json:"tax_mark"`
 }
+
+// CategoryTaxMark What an earning category means for the year's tax (decision Р-41): wages — paid net of the employer's withholding, the main base; interest — deposits' interest. Null for none; always null on a spending category
+type CategoryTaxMark string
 
 // CategoryKind expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)
 type CategoryKind string
@@ -4811,6 +4853,19 @@ type TaxYearAccount struct {
 	WithheldMinor int64 `json:"withheld_minor"`
 }
 
+// TaxYearEmployer defines model for TaxYearEmployer.
+type TaxYearEmployer struct {
+	// GrossMinor Before tax, as the program reckons it
+	GrossMinor int64 `json:"gross_minor"`
+
+	// Name The earning rows' counterparty; empty when they name none
+	Name string `json:"name"`
+
+	// NetMinor What reached the accounts
+	NetMinor      int64 `json:"net_minor"`
+	WithheldMinor int64 `json:"withheld_minor"`
+}
+
 // TaxYearPerson defines model for TaxYearPerson.
 type TaxYearPerson struct {
 	Accounts []TaxYearAccount `json:"accounts"`
@@ -4827,6 +4882,9 @@ type TaxYearPerson struct {
 	// CreditMinor The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them
 	CreditMinor int64 `json:"credit_minor"`
 
+	// Employers In the order they first paid
+	Employers []TaxYearEmployer `json:"employers"`
+
 	// InterestFreeMinor What of it is free of tax: 1 млн × the year's highest key rate; null without the rate
 	InterestFreeMinor nullable.Nullable[int64] `json:"interest_free_minor"`
 
@@ -4840,12 +4898,27 @@ type TaxYearPerson struct {
 	// TaxMinor The tax on base_minor by the bands
 	TaxMinor int64 `json:"tax_minor"`
 
-	// ToPayMinor Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero
+	// ToPayMinor Left to pay by return: on the investment incomes tax_minor less by_notice_minor, credit_minor and by_agents_minor, not below zero, plus wages_to_pay_minor
 	ToPayMinor int64 `json:"to_pay_minor"`
 
 	// Unvalued Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them
 	Unvalued int                `json:"unvalued"`
 	UserId   openapi_types.UUID `json:"user_id"`
+
+	// WagesMinor Wages before tax: earnings under categories marked wages, each employer's reckoned from what reached the account by the wages' scale over the year
+	WagesMinor int64 `json:"wages_minor"`
+
+	// WagesNetMinor Wages as they reached the accounts
+	WagesNetMinor int64 `json:"wages_net_minor"`
+
+	// WagesTaxMinor The tax on wages_minor by the wages' scale (13, 15, 18, 20, 22 %)
+	WagesTaxMinor int64 `json:"wages_tax_minor"`
+
+	// WagesToPayMinor Left to pay on the wages: two employers each under a band the sum crosses
+	WagesToPayMinor int64 `json:"wages_to_pay_minor"`
+
+	// WagesWithheldMinor What the employers withheld, each on what it paid alone
+	WagesWithheldMinor int64 `json:"wages_withheld_minor"`
 
 	// WithheldMinor The tax the journals of those brokers' accounts show already taken this year
 	WithheldMinor int64 `json:"withheld_minor"`
@@ -5216,7 +5289,13 @@ type UpdateCategoryRequest struct {
 	// ParentId null moves it to the top level; absent leaves it
 	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id,omitempty"`
 	Position *int                                  `json:"position,omitempty"`
+
+	// TaxMark See Category.tax_mark; null takes it off, absent leaves it. 400 on a spending category
+	TaxMark nullable.Nullable[UpdateCategoryRequestTaxMark] `json:"tax_mark,omitempty"`
 }
+
+// UpdateCategoryRequestTaxMark See Category.tax_mark; null takes it off, absent leaves it. 400 on a spending category
+type UpdateCategoryRequestTaxMark string
 
 // UpdateCategoryRuleRequest defines model for UpdateCategoryRuleRequest.
 type UpdateCategoryRuleRequest struct {

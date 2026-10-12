@@ -3822,7 +3822,7 @@ components:
         people: { type: array, items: { $ref: "#/components/schemas/TaxYearPerson" }, description: "The space's owner first; a person with no counted account is absent" }
     TaxYearPerson:
       type: object
-      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, unvalued, accounts]
+      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, wages_net_minor, wages_minor, wages_tax_minor, wages_withheld_minor, wages_to_pay_minor, employers, unvalued, accounts]
       properties:
         user_id: { type: string, format: uuid }
         name: { type: string }
@@ -3831,13 +3831,27 @@ components:
         by_agents_minor: { type: integer, format: int64, description: "What the brokers who are tax agents withhold for the year, each on its own account by the same bands" }
         withheld_minor: { type: integer, format: int64, description: "The tax the journals of those brokers' accounts show already taken this year" }
         credit_minor: { type: integer, format: int64, description: "The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them" }
-        to_pay_minor: { type: integer, format: int64, description: "Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero" }
+        to_pay_minor: { type: integer, format: int64, description: "Left to pay by return: on the investment incomes tax_minor less by_notice_minor, credit_minor and by_agents_minor, not below zero, plus wages_to_pay_minor" }
         refund_minor: { type: integer, format: int64, description: "What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise" }
         interest_minor: { type: integer, format: int64, description: "Interest the banks' accounts kept by their operations paid in the year" }
         interest_free_minor: { type: integer, format: int64, nullable: true, description: "What of it is free of tax: 1 млн × the year's highest key rate; null without the rate" }
         by_notice_minor: { type: integer, format: int64, description: "The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor" }
+        wages_net_minor: { type: integer, format: int64, description: "Wages as they reached the accounts" }
+        wages_minor: { type: integer, format: int64, description: "Wages before tax: earnings under categories marked wages, each employer's reckoned from what reached the account by the wages' scale over the year" }
+        wages_tax_minor: { type: integer, format: int64, description: "The tax on wages_minor by the wages' scale (13, 15, 18, 20, 22 %)" }
+        wages_withheld_minor: { type: integer, format: int64, description: "What the employers withheld, each on what it paid alone" }
+        wages_to_pay_minor: { type: integer, format: int64, description: "Left to pay on the wages: two employers each under a band the sum crosses" }
+        employers: { type: array, items: { $ref: "#/components/schemas/TaxYearEmployer" }, description: "In the order they first paid" }
         unvalued: { type: integer, description: "Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them" }
         accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearAccount" } }
+    TaxYearEmployer:
+      type: object
+      required: [name, net_minor, gross_minor, withheld_minor]
+      properties:
+        name: { type: string, description: "The earning rows' counterparty; empty when they name none" }
+        net_minor: { type: integer, format: int64, description: "What reached the accounts" }
+        gross_minor: { type: integer, format: int64, description: "Before tax, as the program reckons it" }
+        withheld_minor: { type: integer, format: int64 }
     TaxYearAccount:
       type: object
       required: [account_id, name, bank, foreign_broker, sales_minor, sales_long_minor, coupons_minor, dividends_minor, interest_minor, withheld_minor, securities_minor, agent_tax_minor, unvalued]
@@ -4522,7 +4536,7 @@ components:
         left_out: { type: integer, description: "How many rows were left out for want of a rate" }
     Category:
       type: object
-      required: [id, kind, name, parent_id, archived, position]
+      required: [id, kind, name, parent_id, archived, position, tax_mark]
       properties:
         id: { type: string, format: uuid }
         kind: { $ref: "#/components/schemas/CategoryKind" }
@@ -4530,6 +4544,11 @@ components:
         parent_id: { type: string, format: uuid, nullable: true, description: "The category it sits under; null on the top level" }
         archived: { type: boolean, description: "Kept for the operations naming it, out of the lists a new entry picks from" }
         position: { type: integer, description: "Its place among its siblings, smallest first" }
+        tax_mark:
+          type: string
+          nullable: true
+          enum: [wages, interest]
+          description: "What an earning category means for the year's tax (decision Р-41): wages — paid net of the employer's withholding, the main base; interest — deposits' interest. Null for none; always null on a spending category"
     CreateCategoryRequest:
       type: object
       required: [kind, name]
@@ -4544,6 +4563,7 @@ components:
         parent_id: { type: string, format: uuid, nullable: true, description: "null moves it to the top level; absent leaves it" }
         archived: { type: boolean }
         position: { type: integer }
+        tax_mark: { type: string, nullable: true, enum: [wages, interest], description: "See Category.tax_mark; null takes it off, absent leaves it. 400 on a spending category" }
     BackgroundTask:
       type: object
       required: [id, kind, stage, done, total, account_ids, whole_instance, started_at]

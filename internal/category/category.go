@@ -27,6 +27,16 @@ const (
 
 func (k Kind) Valid() bool { return k == KindExpense || k == KindIncome }
 
+// TaxMark is what an earning category means for tax (decision Р-41).
+type TaxMark string
+
+const (
+	// TaxWages: wages, paid net of the employer's withholding — the main base.
+	TaxWages TaxMark = "wages"
+	// TaxInterest: deposits' interest, free up to the key rate's share.
+	TaxInterest TaxMark = "interest"
+)
+
 // Category is one category of a family's.
 type Category struct {
 	ID       uuid.UUID
@@ -36,8 +46,10 @@ type Category struct {
 	Name     string
 	// Archived keeps a category its operations still name, out of the lists
 	// a new entry picks from.
-	Archived  bool
-	Position  int
+	Archived bool
+	Position int
+	// TaxMark is an earning category's meaning for tax; nil for none.
+	TaxMark   *TaxMark
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -66,46 +78,48 @@ func cleanName(name string) (string, error) {
 	return name, nil
 }
 
-// seed is one category of the default set, with the ones under it.
+// seed is one category of the default set, with the ones under it and
+// its meaning for tax.
 type seed struct {
 	name     string
 	children []string
+	tax      TaxMark
 }
 
 // defaults is the set a family starts with: what Russian household apps and
 // banks commonly split spending into, kept short so it is edited, not read.
 var defaults = map[Kind][]seed{
 	KindExpense: {
-		{"Продукты", nil},
-		{"Кафе и рестораны", nil},
-		{"Транспорт", []string{"Такси", "Общественный транспорт"}},
-		{"Автомобиль", []string{"Топливо", "Обслуживание и ремонт", "Парковка и штрафы"}},
-		{"Дом", []string{"Аренда", "Коммунальные платежи", "Ремонт и мебель"}},
-		{"Связь и интернет", nil},
-		{"Здоровье", []string{"Аптеки", "Врачи и анализы"}},
-		{"Одежда и обувь", nil},
-		{"Дети", nil},
-		{"Образование", nil},
-		{"Развлечения и хобби", nil},
-		{"Путешествия", nil},
-		{"Подарки", nil},
-		{"Красота и уход", nil},
-		{"Подписки и сервисы", nil},
-		{"Домашние животные", nil},
-		{"Налоги и сборы", nil},
-		{"Проценты по кредитам", nil},
-		{"Банковские комиссии", nil},
-		{"Прочие расходы", nil},
+		{"Продукты", nil, ""},
+		{"Кафе и рестораны", nil, ""},
+		{"Транспорт", []string{"Такси", "Общественный транспорт"}, ""},
+		{"Автомобиль", []string{"Топливо", "Обслуживание и ремонт", "Парковка и штрафы"}, ""},
+		{"Дом", []string{"Аренда", "Коммунальные платежи", "Ремонт и мебель"}, ""},
+		{"Связь и интернет", nil, ""},
+		{"Здоровье", []string{"Аптеки", "Врачи и анализы"}, ""},
+		{"Одежда и обувь", nil, ""},
+		{"Дети", nil, ""},
+		{"Образование", nil, ""},
+		{"Развлечения и хобби", nil, ""},
+		{"Путешествия", nil, ""},
+		{"Подарки", nil, ""},
+		{"Красота и уход", nil, ""},
+		{"Подписки и сервисы", nil, ""},
+		{"Домашние животные", nil, ""},
+		{"Налоги и сборы", nil, ""},
+		{"Проценты по кредитам", nil, ""},
+		{"Банковские комиссии", nil, ""},
+		{"Прочие расходы", nil, ""},
 	},
 	KindIncome: {
-		{"Зарплата", nil},
-		{"Премии", nil},
-		{"Подработка", nil},
-		{"Проценты по вкладам", nil},
-		{"Кэшбэк", nil},
-		{"Подарки", nil},
-		{"Возврат долга", nil},
-		{"Продажа вещей", nil},
-		{"Прочие доходы", nil},
+		{"Зарплата", nil, TaxWages},
+		{"Премии", nil, TaxWages},
+		{"Подработка", nil, ""},
+		{"Проценты по вкладам", nil, TaxInterest},
+		{"Кэшбэк", nil, ""},
+		{"Подарки", nil, ""},
+		{"Возврат долга", nil, ""},
+		{"Продажа вещей", nil, ""},
+		{"Прочие доходы", nil, ""},
 	},
 }
