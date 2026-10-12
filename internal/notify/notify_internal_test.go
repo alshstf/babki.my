@@ -13,6 +13,7 @@ import (
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/platform/secretbox"
+	"babki.my/babki/internal/valuables"
 )
 
 func d(s string) time.Time {
@@ -173,5 +174,29 @@ func TestTheBudgetCallsForItsReminders(t *testing.T) {
 	}
 	if _, ok := got["budget:"+trips.String()+":2026-09:near"]; !ok {
 		t.Error("the trip at 18 500 of 20 000 is not warned of")
+	}
+}
+
+// A safe box's rent: within a month of its end a reminder to renew, past it
+// another; further off, or with no end, nothing.
+func TestStorageReminders(t *testing.T) {
+	today := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	at := func(until string) valuables.StorageAt {
+		var u *time.Time
+		if until != "" {
+			d, _ := time.Parse(time.DateOnly, until)
+			u = &d
+		}
+		return valuables.StorageAt{AccountID: uuid.New(), Name: "Ячейка ВТБ", Storage: valuables.Storage{Place: valuables.PlaceSafeBox, Until: u}}
+	}
+	got := StorageReminders([]valuables.StorageAt{at("2026-11-05"), at("2026-12-31"), at("2026-10-01"), at("")}, today)
+	if len(got) != 2 {
+		t.Fatalf("reminders = %+v", got)
+	}
+	if got[0].Body != "Аренда или хранение до 05.11.2026 — продлите договор заранее." || !strings.HasSuffix(got[0].Key, ":2026-11-05:soon") {
+		t.Errorf("soon = %+v", got[0])
+	}
+	if !strings.HasPrefix(got[1].Body, "Срок аренды или хранения истёк 01.10") || !strings.HasSuffix(got[1].Key, ":over") {
+		t.Errorf("over = %+v", got[1])
 	}
 }

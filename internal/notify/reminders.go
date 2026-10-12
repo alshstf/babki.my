@@ -10,6 +10,7 @@ import (
 
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/valuables"
 )
 
 // Reminder is one push: Key names it for good, so it is sent once to each
@@ -126,6 +127,38 @@ func BudgetReminders(b budget.Month, names map[uuid.UUID]string) []Reminder {
 					amount(planned, b.BaseCurrency), amount(l.Left, b.BaseCurrency)),
 			})
 		}
+	}
+	return out
+}
+
+// storageDays is how long before a safe box's rent or a custody's contract
+// ends the push comes: time to go to the bank.
+const storageDays = 30
+
+// StorageReminders are the pushes the storages of bars and coins call for
+// (physical metals, plan step 4): a month before the rent of a safe box or a
+// custody's contract ends, and once it has — the bank may open a box whose
+// rent ran out.
+func StorageReminders(list []valuables.StorageAt, today time.Time) []Reminder {
+	var out []Reminder
+	for _, s := range list {
+		until := s.Storage.Until
+		if until == nil {
+			continue
+		}
+		acc := s.AccountID.String()
+		r := Reminder{Owner: s.Owner, Title: s.Name, URL: "/accounts/" + acc}
+		switch d := daysBetween(today, *until); {
+		case d < 0:
+			r.Key = "storage:" + acc + ":" + day(*until) + ":over"
+			r.Body = fmt.Sprintf("Срок аренды или хранения истёк %s — продлите договор: банк может вскрыть ячейку.", short(*until))
+		case d <= storageDays:
+			r.Key = "storage:" + acc + ":" + day(*until) + ":soon"
+			r.Body = fmt.Sprintf("Аренда или хранение до %s — продлите договор заранее.", until.Format("02.01.2006"))
+		default:
+			continue
+		}
+		out = append(out, r)
 	}
 	return out
 }

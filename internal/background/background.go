@@ -28,6 +28,7 @@ import (
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/valuables"
 )
 
 // How often each periodic job runs. Rates change once a business day; quotes
@@ -184,9 +185,11 @@ func NewWorkers(
 	receipts := receipt.NewService(pool, operations, accounts, category.NewStore(pool), operation.NewService(operations))
 	river.AddWorker(workers, mailbox.NewWorker(mailbox.NewService(pool, tinvestDeps.Box, mailbox.IMAP{}, receipts, log), log))
 	report := cashflow.NewService(operations, accounts, category.NewStore(pool), spaces, marketdata.NewConverter(mdStore))
-	river.AddWorker(workers, notify.NewRemindersWorker(notify.NewStore(pool),
+	// The bars' storages too: a safe box's rent ending (physical metals).
+	river.AddWorker(workers, notify.WithStorages(notify.NewRemindersWorker(notify.NewStore(pool),
 		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
-		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log))
+		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log),
+		valuables.NewService(pool, accounts, mdStore)))
 	return workers
 }
 

@@ -11,6 +11,7 @@ import (
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/valuables"
 )
 
 // SendRemindersArgs is the hourly job that pushes what is due.
@@ -36,12 +37,17 @@ type categories interface {
 	List(ctx context.Context, spaceID uuid.UUID) ([]category.Category, error)
 }
 
+type storages interface {
+	Storages(ctx context.Context, spaceID uuid.UUID) ([]valuables.StorageAt, error)
+}
+
 type remindersWorker struct {
 	river.WorkerDefaults[SendRemindersArgs]
 	store      *Store
 	cards      cards
 	budgets    budgets
 	categories categories
+	storages   storages
 	sender     Sender
 	log        *slog.Logger
 	now        func() time.Time
@@ -51,6 +57,14 @@ type remindersWorker struct {
 // to derive the push keys from) it does nothing.
 func NewRemindersWorker(store *Store, c cards, b budgets, cats categories, sender Sender, log *slog.Logger) river.Worker[SendRemindersArgs] {
 	return &remindersWorker{store: store, cards: c, budgets: b, categories: cats, sender: sender, log: log, now: time.Now}
+}
+
+// WithStorages adds the storages of bars and coins to what is reminded of.
+func WithStorages(w river.Worker[SendRemindersArgs], s storages) river.Worker[SendRemindersArgs] {
+	if r, ok := w.(*remindersWorker); ok {
+		r.storages = s
+	}
+	return w
 }
 
 func (w *remindersWorker) Timeout(*river.Job[SendRemindersArgs]) time.Duration {
@@ -76,6 +90,13 @@ func (w *remindersWorker) Work(ctx context.Context, _ *river.Job[SendRemindersAr
 		more, err := w.budgetReminders(ctx, spaceID, today)
 		if err != nil {
 			return err
+		}
+		if w.storages != nil {
+			list, err := w.storages.Storages(ctx, spaceID)
+			if err != nil {
+				return err
+			}
+			more = append(more, StorageReminders(list, today)...)
 		}
 		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, append(reminders, more...)); err != nil {
 			return err
