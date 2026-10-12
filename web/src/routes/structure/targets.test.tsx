@@ -37,6 +37,15 @@ function answer(role: string, a: Allocation) {
     const url = new URL(input.url);
     const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     if (url.pathname.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space: { id: "s", name: "S", base_currency: "RUB" } });
+    if (url.pathname.endsWith("/allocation/topup")) {
+      return json({
+        amount_minor: Number(url.searchParams.get("amount_minor")), worth_after_minor: 3_100_000_00,
+        kinds: [
+          { key: "shares", buy_minor: 0, share_after: "33.87" }, { key: "bonds", buy_minor: 65_346_55, share_after: "21.46" },
+          { key: "funds", buy_minor: 2_970_29, share_after: "14.61" }, { key: "metals", buy_minor: 31_683_16, share_after: "1.02" },
+        ],
+      });
+    }
     return json(a);
   });
 }
@@ -76,6 +85,19 @@ describe("TargetsCard", () => {
     expect(norm((await screen.findByTestId("allocation")).textContent)).toMatch(/по полной оценке, с замороженными бумагами/);
     const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/allocation"));
     expect(asked.every((u) => u.searchParams.get("valuation") === "full")).toBe(true);
+  });
+
+  it("says where a top-up goes, the brokers' free money addable", async () => {
+    answer("viewer", allocation);
+    show();
+    fireEvent.change(await screen.findByLabelText("Сколько вложить, RUB"), { target: { value: "100 000" } });
+    const list = await screen.findByTestId("allocation-buys");
+    const items = within(list).getAllByRole("listitem").map((li) => norm(li.textContent));
+    expect(items).toEqual(["Облигации65 347 ₽ доля станет 21,46 %", "Фонды2 970 ₽ доля станет 14,61 %", "Металлы31 683 ₽ доля станет 1,02 %"]);
+    const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).find((u) => u.pathname.endsWith("/topup"))!;
+    expect(asked.searchParams.get("amount_minor")).toBe("10000000");
+    fireEvent.click(screen.getByRole("button", { name: /свободные деньги у брокеров/ }));
+    expect((screen.getByLabelText("Сколько вложить, RUB") as HTMLInputElement).value).toBe("400000");
   });
 
   it("states targets that add up to 100", async () => {

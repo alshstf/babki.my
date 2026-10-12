@@ -92,3 +92,52 @@ func TestTargetsAddUpToAHundred(t *testing.T) {
 		t.Errorf("currency targets refused: %v", err)
 	}
 }
+
+// The note's top-up (Р-37, variant Б): 100 000 to the kinds below their
+// target in 3 100 000 — bonds lack 330 000, gold 160 000, funds 15 000 — in
+// that proportion; shares, deposits and the brokers' money above their
+// targets get nothing.
+func TestATopUpGoesWhereTheWorthIsShort(t *testing.T) {
+	s := structure.Structure{
+		BaseCurrency: "RUB", Targets: 3_000_000_00,
+		ByKind: []structure.Slice{
+			{Key: "shares", Minor: 1_050_000_00},
+			{Key: "bonds", Minor: 600_000_00},
+			{Key: "funds", Minor: 450_000_00},
+			{Key: "deposits", Minor: 600_000_00},
+			{Key: "metals", Minor: 150_000_00},
+			{Key: "broker_cash", Minor: 150_000_00},
+		},
+	}
+	v := view(s, ModeTopUp, []Target{
+		{"shares", pct("30")}, {"bonds", pct("30")}, {"funds", pct("15")}, {"deposits", pct("15")}, {"metals", pct("10")}, {"broker_cash", pct("0")},
+	}, nil)
+	buys, err := TopUp(v, 100_000_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Buy{}
+	var total int64
+	for _, b := range buys {
+		got[b.Key] = b
+		total += b.Minor
+	}
+	want := map[string]int64{"bonds": 65_346_55, "metals": 31_683_16, "funds": 2_970_29, "shares": 0, "deposits": 0, "broker_cash": 0}
+	for k, w := range want {
+		if got[k].Minor != w {
+			t.Errorf("%s: %d, want %d", k, got[k].Minor, w)
+		}
+	}
+	if total != 100_000_00 || len(buys) != 6 {
+		t.Errorf("put in %d over %d kinds, want all 100 000 over 6", total, len(buys))
+	}
+	if got["bonds"].ShareAfter.String() != "21.46" || got["shares"].ShareAfter.String() != "33.87" {
+		t.Errorf("shares after: bonds %s, shares %s", got["bonds"].ShareAfter, got["shares"].ShareAfter)
+	}
+	if _, err := TopUp(v, 0); err == nil {
+		t.Error("a top-up of nothing accepted")
+	}
+	if _, err := TopUp(view(s, ModeTopUp, nil, nil), 100); err == nil {
+		t.Error("a top-up without targets accepted")
+	}
+}

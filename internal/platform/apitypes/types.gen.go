@@ -1477,6 +1477,24 @@ func (e GetAllocationParamsValuation) Valid() bool {
 	}
 }
 
+// Defines values for GetAllocationTopUpParamsValuation.
+const (
+	GetAllocationTopUpParamsValuationFull   GetAllocationTopUpParamsValuation = "full"
+	GetAllocationTopUpParamsValuationLiquid GetAllocationTopUpParamsValuation = "liquid"
+)
+
+// Valid indicates whether the value is a known member of the GetAllocationTopUpParamsValuation enum.
+func (e GetAllocationTopUpParamsValuation) Valid() bool {
+	switch e {
+	case GetAllocationTopUpParamsValuationFull:
+		return true
+	case GetAllocationTopUpParamsValuationLiquid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetCapitalParamsStep.
 const (
 	Month GetCapitalParamsStep = "month"
@@ -1686,6 +1704,16 @@ type Allocation struct {
 	WorthMinor int64 `json:"worth_minor"`
 }
 
+// AllocationBuy defines model for AllocationBuy.
+type AllocationBuy struct {
+	// BuyMinor What to put into it; 0 for a kind at or above its target
+	BuyMinor int64  `json:"buy_minor"`
+	Key      string `json:"key"`
+
+	// ShareAfter Decimal: its share of the worth after, percent, to hundredths
+	ShareAfter string `json:"share_after"`
+}
+
 // AllocationMode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 type AllocationMode string
 
@@ -1726,6 +1754,17 @@ type AllocationTargets struct {
 
 // AllocationTargetsDimension defines model for AllocationTargets.Dimension.
 type AllocationTargetsDimension string
+
+// AllocationTopUp defines model for AllocationTopUp.
+type AllocationTopUp struct {
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Kinds Every kind of GET /allocation, in its order
+	Kinds []AllocationBuy `json:"kinds"`
+
+	// WorthAfterMinor The worth with the money in
+	WorthAfterMinor int64 `json:"worth_after_minor"`
+}
 
 // Arrival defines model for Arrival.
 type Arrival struct {
@@ -4933,6 +4972,18 @@ type SetAllocationModeJSONBody struct {
 	// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 	Mode AllocationMode `json:"mode"`
 }
+
+// GetAllocationTopUpParams defines parameters for GetAllocationTopUp.
+type GetAllocationTopUpParams struct {
+	// AmountMinor The money to put in, in the base currency
+	AmountMinor int64 `form:"amount_minor" json:"amount_minor"`
+
+	// Valuation Papers at the liquid (when absent) or the full valuation (decision Р-11)
+	Valuation *GetAllocationTopUpParamsValuation `form:"valuation,omitempty" json:"valuation,omitempty"`
+}
+
+// GetAllocationTopUpParamsValuation defines parameters for GetAllocationTopUp.
+type GetAllocationTopUpParamsValuation string
 
 // GetBudgetParams defines parameters for GetBudget.
 type GetBudgetParams struct {

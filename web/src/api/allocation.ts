@@ -7,6 +7,7 @@ export type Allocation = components["schemas"]["Allocation"];
 export type AllocationRow = components["schemas"]["AllocationRow"];
 export type AllocationMode = components["schemas"]["AllocationMode"];
 export type AllocationTargets = components["schemas"]["AllocationTargets"];
+export type AllocationTopUp = components["schemas"]["AllocationTopUp"];
 
 // The family's worth against its target shares (GET /api/v1/allocation,
 // decision Р-37), papers at the valuation picked on «Структура».
@@ -15,6 +16,22 @@ export function useAllocation(valuation: "liquid" | "full" = "liquid") {
     queryKey: ["allocation", valuation],
     queryFn: async (): Promise<Allocation> => {
       const { data, error, response } = await api.GET("/api/v1/allocation", { params: { query: { valuation } } });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+// Where new money goes by the targets (GET /api/v1/allocation/topup,
+// variant Б of Р-37); asked only for money above zero.
+export function useTopUp(amountMinor: number | null, valuation: "liquid" | "full") {
+  return useQuery({
+    queryKey: ["allocation", valuation, "topup", amountMinor],
+    enabled: amountMinor !== null && amountMinor > 0,
+    queryFn: async (): Promise<AllocationTopUp> => {
+      const { data, error, response } = await api.GET("/api/v1/allocation/topup", {
+        params: { query: { amount_minor: amountMinor ?? 0, valuation } },
+      });
       if (!data) throw apiError(response, error);
       return data;
     },

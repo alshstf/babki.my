@@ -2,6 +2,7 @@ package allocation
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -29,6 +30,8 @@ func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handle
 func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/allocation", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleView)))))
+	srv.Mount("GET /api/v1/allocation/topup", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleTopUp)))))
 	srv.Mount("PUT /api/v1/allocation/targets", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleTargets)))))
 	srv.Mount("PUT /api/v1/allocation/mode", h.sm.LoadAndSave(h.auth.RequireAuth(
@@ -75,14 +78,43 @@ func (h *Handler) handleMode(w http.ResponseWriter, r *http.Request) {
 	h.writeView(w, r, p.SpaceID)
 }
 
+func (h *Handler) handleTopUp(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	amount, err := strconv.ParseInt(r.URL.Query().Get("amount_minor"), 10, 64)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "amount_minor must be a whole number")
+		return
+	}
+	v, err := h.svc.View(r.Context(), p.SpaceID, valuationOf(r))
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	buys, err := TopUp(v, amount)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.AllocationTopUp{AmountMinor: amount, WorthAfterMinor: v.Worth + amount, Kinds: make([]apitypes.AllocationBuy, 0, len(buys))}
+	for _, b := range buys {
+		out.Kinds = append(out.Kinds, apitypes.AllocationBuy{Key: b.Key, BuyMinor: b.Minor, ShareAfter: b.ShareAfter.StringFixed(2)})
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+// valuationOf is the valuation asked (?valuation=liquid|full), liquid when
+// absent.
+func valuationOf(r *http.Request) structure.Valuation {
+	if raw := r.URL.Query().Get("valuation"); raw != "" {
+		return structure.Valuation(raw)
+	}
+	return structure.Liquid
+}
+
 // writeView answers with the worth against the targets, papers at the
 // valuation asked (?valuation=liquid|full, liquid when absent).
 func (h *Handler) writeView(w http.ResponseWriter, r *http.Request, spaceID uuid.UUID) {
-	valuation := structure.Liquid
-	if raw := r.URL.Query().Get("valuation"); raw != "" {
-		valuation = structure.Valuation(raw)
-	}
-	v, err := h.svc.View(r.Context(), spaceID, valuation)
+	v, err := h.svc.View(r.Context(), spaceID, valuationOf(r))
 	if err != nil {
 		family.WriteError(w, err)
 		return

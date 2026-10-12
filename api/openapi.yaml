@@ -67,6 +67,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Allocation" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/allocation/topup:
+    get:
+      tags: [allocation]
+      operationId: getAllocationTopUp
+      description: >-
+        Where new money goes by the targets (variant Б of decision Р-37): to the kinds below their target
+        in the worth with the money in, in proportion to what each lacks; what is above its target gets
+        nothing, nothing is sold. 400 without targets by kind or without money above zero.
+      parameters:
+        - { name: amount_minor, in: query, required: true, schema: { type: integer, format: int64, minimum: 1 }, description: "The money to put in, in the base currency" }
+        - { name: valuation, in: query, required: false, schema: { type: string, enum: [liquid, full] }, description: "Papers at the liquid (when absent) or the full valuation (decision Р-11)" }
+      responses:
+        "200":
+          description: What goes where
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllocationTopUp" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/allocation/targets:
     put:
       tags: [allocation]
@@ -3487,6 +3506,20 @@ components:
         currencies: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "Every currency held or targeted, the base currency first, then largest first" }
         unpriced: { type: integer, description: "Papers left out for want of a price" }
         missing_rates: { type: array, items: { type: string } }
+    AllocationTopUp:
+      type: object
+      required: [amount_minor, worth_after_minor, kinds]
+      properties:
+        amount_minor: { type: integer, format: int64 }
+        worth_after_minor: { type: integer, format: int64, description: "The worth with the money in" }
+        kinds: { type: array, items: { $ref: "#/components/schemas/AllocationBuy" }, description: "Every kind of GET /allocation, in its order" }
+    AllocationBuy:
+      type: object
+      required: [key, buy_minor, share_after]
+      properties:
+        key: { type: string }
+        buy_minor: { type: integer, format: int64, description: "What to put into it; 0 for a kind at or above its target" }
+        share_after: { type: string, description: "Decimal: its share of the worth after, percent, to hundredths" }
     AllocationTarget:
       type: object
       required: [key, percent]

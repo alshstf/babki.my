@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -6,9 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAllocation, useSetTargets, type Allocation, type AllocationRow } from "@/api/allocation";
+import { useAllocation, useSetTargets, useTopUp, type Allocation, type AllocationRow } from "@/api/allocation";
 import { useSession } from "@/api/session";
-import { formatMinorCompact } from "@/lib/money";
+import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 // The kinds targets are set for, in the server's order.
@@ -102,6 +102,7 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
             {kindTargets ? t("allocation.edit") : t("allocation.set")}
           </Button>
         )}
+        {kindTargets && <TopUp allocation={a} valuation={valuation} name={(k) => kindName(t, k, c)} />}
         <div className="grid gap-2 border-t pt-3">
           <p className="text-sm font-medium">{t("allocation.currenciesTitle")}</p>
           <p className="text-xs text-muted-foreground">{t("allocation.currenciesHint")}</p>
@@ -161,6 +162,56 @@ function Rows({ rows, currency, name, testId }: { rows: AllocationRow[]; currenc
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// TopUp is where new money goes by the targets (variant Б of Р-37): to the
+// kinds below their target, in proportion to what each lacks; nothing is
+// sold. The money the brokers hold free can be put in too.
+function TopUp({ allocation, valuation, name }: { allocation: Allocation; valuation: "liquid" | "full"; name: (key: string) => string }) {
+  const { t } = useTranslation();
+  const c = allocation.base_currency;
+  const [amount, setAmount] = useState("");
+  // Asked once the typing stops, not at every key.
+  const [asked, setAsked] = useState<number | null>(null);
+  const minor = parseToMinor(amount.trim() === "" ? "0" : amount);
+  useEffect(() => {
+    const id = setTimeout(() => setAsked(minor !== null && minor > 0 ? minor : null), 300);
+    return () => clearTimeout(id);
+  }, [minor]);
+  const topUp = useTopUp(asked, valuation);
+  const free = allocation.kinds.find((r) => r.key === "broker_cash")?.minor ?? 0;
+  const buys = topUp.data?.kinds.filter((b) => b.buy_minor > 0) ?? [];
+  return (
+    <div className="grid gap-2 border-t pt-3" data-testid="allocation-topup">
+      <p className="text-sm font-medium">{t("allocation.topUpTitle")}</p>
+      <p className="text-xs text-muted-foreground">{t("allocation.topUpHint")}</p>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="grid gap-1">
+          <Label htmlFor="allocation-topup">{t("allocation.topUpAmount", { currency: c })}</Label>
+          <Input id="allocation-topup" inputMode="decimal" className="w-40" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </div>
+        {free > 0 && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setAmount(minorToInput((minor ?? 0) + free))}>
+            {t("allocation.topUpFree", { amount: formatMinorCompact(free, c) })}
+          </Button>
+        )}
+      </div>
+      {asked !== null && buys.length > 0 && (
+        <ul className="grid gap-1 text-sm" data-testid="allocation-buys">
+          {buys.map((b) => (
+            <li key={b.key} className="flex flex-wrap justify-between gap-x-3">
+              <span className="min-w-0">{name(b.key)}</span>
+              <span className="ml-auto tabular-nums">
+                {formatMinorCompact(b.buy_minor, c)}{" "}
+                <span className="text-muted-foreground">{t("allocation.shareAfter", { share: percent(b.share_after) })}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {topUp.isError && <p className="text-xs text-red-700 dark:text-red-400">{t("allocation.topUpFailed")}</p>}
     </div>
   );
 }
