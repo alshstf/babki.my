@@ -25,7 +25,7 @@ const norm = (s: string) => s.replace(/[  ]/g, " ");
 const check = (over: Partial<PayoutCheck>): PayoutCheck => ({
   on: "2026-09-02", record_on: "2026-09-01", kind: "coupon", instrument_id: "ofz", account_id: "acc",
   quantity: "15", per_unit: "35.4", amount_minor: 53_100, currency: "RUB", status: "missing",
-  got_minor: 0, got_currency: null, got_on: null, ...over,
+  got_minor: 0, got_currency: null, got_on: null, tax_minor: 0, ...over,
 });
 
 function show(list: PayoutCheck[]) {

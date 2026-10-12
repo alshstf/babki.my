@@ -3362,7 +3362,7 @@ components:
       description: "expense: money going out (a withdrawal names it); income: money coming in (a deposit names it)"
     Payout:
       type: object
-      required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, in_base_minor]
+      required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, in_base_minor, net_minor, net_in_base_minor, net_by]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD the money is due" }
         record_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the record day, when the source gives one" }
@@ -3374,6 +3374,13 @@ components:
         amount_minor: { type: integer, format: int64, nullable: true, description: "per_unit × quantity in minor units of `currency`, before tax" }
         currency: { type: string }
         in_base_minor: { type: integer, format: int64, nullable: true, description: "amount_minor in the base currency at today's rate; null without an amount or a rate" }
+        net_minor: { type: integer, format: int64, nullable: true, description: "What will reach the account, in `currency` (decision Р-38); null without an amount" }
+        net_in_base_minor: { type: integer, format: int64, nullable: true, description: "net_minor in the base currency at today's rate; null without an amount or a rate" }
+        net_by:
+          type: string
+          nullable: true
+          enum: [history, rule, none]
+          description: "How net_minor was told — history: as this paper's payout of this kind came to this account last time, its tax rows taken off; rule: a rouble coupon or dividend less 13 %, a repayment of face value whole; none: no tax known (a payout in another currency), the amount before tax. Null without an amount"
     Benchmark:
       type: object
       required: [code, index_currency, complete, end_minor, annual_rate]
@@ -3393,7 +3400,7 @@ components:
         benchmarks: { type: array, items: { $ref: "#/components/schemas/Benchmark" } }
     PayoutCheck:
       type: object
-      required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, status, got_minor, got_currency, got_on]
+      required: [on, record_on, kind, instrument_id, account_id, quantity, per_unit, amount_minor, currency, status, got_minor, got_currency, got_on, tax_minor]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD the money was due" }
         record_on: { type: string, description: "The record day held against" }
@@ -3408,9 +3415,10 @@ components:
         got_minor: { type: integer, format: int64, description: "What the journal's rows come to, in got_currency; 0 when none" }
         got_currency: { type: string, nullable: true }
         got_on: { type: string, nullable: true, description: "The first row's day" }
+        tax_minor: { type: integer, format: int64, description: "The tax rows on the paper about its day, in got_currency: negative; 0 when none" }
     PayoutsForecast:
       type: object
-      required: [base_currency, from, to, months, by_month, total_minor, payouts, missing_rates]
+      required: [base_currency, from, to, months, by_month, total_minor, net_by_month, net_total_minor, payouts, missing_rates]
       properties:
         base_currency: { type: string }
         from: { type: string, description: "Date YYYY-MM-DD, today" }
@@ -3418,6 +3426,8 @@ components:
         months: { type: array, items: { type: string }, description: "YYYY-MM, this month first" }
         by_month: { type: array, items: { type: integer, format: int64 }, description: "What each month's payouts come to in the base currency" }
         total_minor: { type: integer, format: int64 }
+        net_by_month: { type: array, items: { type: integer, format: int64 }, description: "What each month's payouts bring to the accounts (net_in_base_minor) in the base currency" }
+        net_total_minor: { type: integer, format: int64 }
         payouts: { type: array, items: { $ref: "#/components/schemas/Payout" }, description: "Earliest first" }
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out of the base figures for want of today's rate" }
     RecurringPayment:

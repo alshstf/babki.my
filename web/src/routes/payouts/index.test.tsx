@@ -30,12 +30,14 @@ const forecast: PayoutsForecast = {
   months: ["2026-10", "2026-11", "2026-12"],
   by_month: [0, 35_400, 91_800],
   total_minor: 127_200,
+  net_by_month: [0, 30_798, 91_800],
+  net_total_minor: 122_598,
   missing_rates: [],
   payouts: [
-    { on: "2026-11-18", record_on: "2026-11-17", kind: "coupon", instrument_id: "i-ofz", account_id: "a-1", quantity: "10", per_unit: "35.4", amount_minor: 35_400, currency: "RUB", in_base_minor: 35_400 },
-    { on: "2026-12-01", record_on: null, kind: "offer", instrument_id: "i-ofz", account_id: "a-1", quantity: "10", per_unit: null, amount_minor: null, currency: "RUB", in_base_minor: null },
-    { on: "2026-12-15", record_on: "2026-11-28", kind: "dividend", instrument_id: "i-ko", account_id: "a-1", quantity: "20", per_unit: "0.51", amount_minor: 1_020, currency: "USD", in_base_minor: 91_800 },
-    { on: "2026-12-20", record_on: null, kind: "coupon", instrument_id: "i-float", account_id: "a-1", quantity: "5", per_unit: null, amount_minor: null, currency: "RUB", in_base_minor: null },
+    { on: "2026-11-18", record_on: "2026-11-17", kind: "coupon", instrument_id: "i-ofz", account_id: "a-1", quantity: "10", per_unit: "35.4", amount_minor: 35_400, currency: "RUB", in_base_minor: 35_400, net_minor: 30_798, net_in_base_minor: 30_798, net_by: "rule" },
+    { on: "2026-12-01", record_on: null, kind: "offer", instrument_id: "i-ofz", account_id: "a-1", quantity: "10", per_unit: null, amount_minor: null, currency: "RUB", in_base_minor: null, net_minor: null, net_in_base_minor: null, net_by: null },
+    { on: "2026-12-15", record_on: "2026-11-28", kind: "dividend", instrument_id: "i-ko", account_id: "a-1", quantity: "20", per_unit: "0.51", amount_minor: 1_020, currency: "USD", in_base_minor: 91_800, net_minor: 1_020, net_in_base_minor: 91_800, net_by: "none" },
+    { on: "2026-12-20", record_on: null, kind: "coupon", instrument_id: "i-float", account_id: "a-1", quantity: "5", per_unit: null, amount_minor: null, currency: "RUB", in_base_minor: null, net_minor: null, net_in_base_minor: null, net_by: null },
   ],
 };
 

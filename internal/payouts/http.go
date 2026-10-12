@@ -81,7 +81,7 @@ func (h *Handler) handleReceived(w http.ResponseWriter, r *http.Request) {
 			Quantity: c.Quantity.String(), PerUnit: nullable.NewNullNullable[string](),
 			AmountMinor: nullable.NewNullNullable[int64](), Currency: c.Currency,
 			Status: apitypes.PayoutCheckStatus(c.Status), GotMinor: c.Got,
-			GotCurrency: nullable.NewNullNullable[string](), GotOn: nullable.NewNullNullable[string](),
+			GotCurrency: nullable.NewNullNullable[string](), GotOn: nullable.NewNullNullable[string](), TaxMinor: c.Tax,
 		}
 		if c.PerUnit != nil {
 			item.PerUnit = nullable.NewNullableWithValue(c.PerUnit.String())
@@ -127,6 +127,7 @@ func toAPI(f Forecast) apitypes.PayoutsForecast {
 		BaseCurrency: f.BaseCurrency,
 		From:         f.From.Format(time.DateOnly), To: f.To.Format(time.DateOnly),
 		Months: make([]string, len(f.Months)), ByMonth: f.ByMonth, TotalMinor: f.Total,
+		NetByMonth: f.NetByMonth, NetTotalMinor: f.NetTotal,
 		Payouts: make([]apitypes.Payout, 0, len(f.Events)), MissingRates: f.MissingRates,
 	}
 	for i, m := range f.Months {
@@ -138,7 +139,15 @@ func toAPI(f Forecast) apitypes.PayoutsForecast {
 			Kind: apitypes.PayoutKind(e.Kind), InstrumentId: e.InstrumentID, AccountId: e.AccountID,
 			Quantity: e.Quantity.String(), PerUnit: nullable.NewNullNullable[string](),
 			AmountMinor: nullable.NewNullNullable[int64](), Currency: e.Currency,
-			InBaseMinor: nullable.NewNullNullable[int64](),
+			InBaseMinor: nullable.NewNullNullable[int64](), NetMinor: nullable.NewNullNullable[int64](),
+			NetInBaseMinor: nullable.NewNullNullable[int64](), NetBy: nullable.NewNullNullable[apitypes.PayoutNetBy](),
+		}
+		if e.Net != nil {
+			p.NetMinor = nullable.NewNullableWithValue(*e.Net)
+			p.NetBy = nullable.NewNullableWithValue(apitypes.PayoutNetBy(e.NetBy))
+		}
+		if e.NetInBase != nil {
+			p.NetInBaseMinor = nullable.NewNullableWithValue(*e.NetInBase)
 		}
 		if e.RecordOn != nil {
 			p.RecordOn = nullable.NewNullableWithValue(e.RecordOn.Format(time.DateOnly))
