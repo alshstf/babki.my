@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/allocation/topup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Where money goes by the targets (variant Б of decision Р-37): new money, which adds to the worth, and the brokers' free money, which only moves within it. To the kinds below their target in the worth after, in proportion to what each lacks; what is above its target gets nothing, nothing is sold. 400 without targets by kind, without money above zero, or with more taken from the brokers than they hold free. */
+        get: operations["getAllocationTopUp"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/targets": {
         parameters: {
             query?: never;
@@ -2571,6 +2588,35 @@ export interface components {
             unpriced: number;
             missing_rates: string[];
         };
+        AllocationTopUp: {
+            /**
+             * Format: int64
+             * @description New money
+             */
+            amount_minor: number;
+            /**
+             * Format: int64
+             * @description Taken from the brokers' free money
+             */
+            from_brokers_minor: number;
+            /**
+             * Format: int64
+             * @description The worth with the money in
+             */
+            worth_after_minor: number;
+            /** @description Every kind of GET /allocation, in its order */
+            kinds: components["schemas"]["AllocationChange"][];
+        };
+        AllocationChange: {
+            key: string;
+            /**
+             * Format: int64
+             * @description What goes into it (above zero) or leaves it (below zero: the brokers' free money put in); 0 for a kind at or above its target
+             */
+            change_minor: number;
+            /** @description Decimal: its share of the worth after, percent, to hundredths */
+            share_after: string;
+        };
         AllocationTarget: {
             key: string;
             /** @description Decimal, 0 to 100, to hundredths */
@@ -4781,6 +4827,35 @@ export interface operations {
                     "application/json": components["schemas"]["Allocation"];
                 };
             };
+            401: components["responses"]["Error"];
+        };
+    };
+    getAllocationTopUp: {
+        parameters: {
+            query?: {
+                /** @description New money to put in, in the base currency; 0 when absent */
+                amount_minor?: number;
+                /** @description Of the brokers' free money (kind broker_cash), what to put in too; 0 when absent */
+                from_brokers_minor?: number;
+                /** @description Papers at the liquid (when absent) or the full valuation (decision Р-11) */
+                valuation?: "liquid" | "full";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What goes where */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationTopUp"];
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
         };
     };

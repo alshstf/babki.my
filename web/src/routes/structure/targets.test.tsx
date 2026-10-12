@@ -37,6 +37,21 @@ function answer(role: string, a: Allocation) {
     const url = new URL(input.url);
     const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     if (url.pathname.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space: { id: "s", name: "S", base_currency: "RUB" } });
+    if (url.pathname.endsWith("/allocation/topup")) {
+      const fromBrokers = Number(url.searchParams.get("from_brokers_minor") ?? 0);
+      const free = fromBrokers > 0;
+      return json({
+        amount_minor: Number(url.searchParams.get("amount_minor")), from_brokers_minor: fromBrokers, worth_after_minor: 3_100_000_00,
+        kinds: [
+          { key: "shares", change_minor: 0, share_after: "33.87" },
+          { key: "bonds", change_minor: free ? 200_000_00 : 65_346_55, share_after: free ? "25.81" : "21.46" },
+          { key: "funds", change_minor: 2_970_29, share_after: "14.61" },
+          { key: "metals", change_minor: free ? 197_029_71 : 31_683_16, share_after: free ? "6.36" : "1.02" },
+          { key: "deposits", change_minor: 0, share_after: "19.35" },
+          { key: "broker_cash", change_minor: free ? -300_000_00 : 0, share_after: free ? "0.00" : "9.68" },
+        ],
+      });
+    }
     return json(a);
   });
 }
@@ -76,6 +91,45 @@ describe("TargetsCard", () => {
     expect(norm((await screen.findByTestId("allocation")).textContent)).toMatch(/по полной оценке, с замороженными бумагами/);
     const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/allocation"));
     expect(asked.every((u) => u.searchParams.get("valuation") === "full")).toBe(true);
+  });
+
+  it("shows on the kinds where a top-up goes, the brokers' free money moved in", async () => {
+    answer("viewer", allocation);
+    show();
+    fireEvent.change(await screen.findByLabelText("Новые деньги, RUB"), { target: { value: "100 000" } });
+    expect(norm((await screen.findByTestId("allocation-topup-total")).textContent)).toBe("К вложению: 100 000 ₽.");
+    const rows = within(screen.getByTestId("allocation-kinds")).getAllByTestId("allocation-row");
+    expect(norm(rows[1].textContent)).toMatch(/Облигации.*\+65 347 ₽ → 21,46 % \(было 20 %, цель 30 %\) — ближе к цели на 1,46 п\.п\./);
+    expect(norm(rows[0].textContent)).toMatch(/→ 33,87 % \(было 35 %, цель 30 %\) — ближе к цели на 1,13 п\.п\./);
+    expect(within(rows[1]).getByTestId("allocation-added")).toBeTruthy();
+    // Funds get a little, yet their share falls as the worth grows: the
+    // mark sits right after what they hold, not hanging at the old share.
+    const funds = parseFloat(within(rows[2]).getByTestId("allocation-added").style.left);
+    expect(funds).toBeGreaterThan(14.5);
+    expect(funds).toBeLessThan(14.61);
+    // A share that only thins as the worth grows gets words, not a mark.
+    expect(within(rows[0]).queryByTestId("allocation-added")).toBeNull();
+    expect(within(rows[0]).queryByTestId("allocation-removed")).toBeNull();
+    // …and goes grey, so the kinds the money goes to stand out.
+    expect(within(rows[0]).getByTestId("allocation-still")).toBeTruthy();
+    expect(within(rows[1]).queryByTestId("allocation-still")).toBeNull();
+    expect(norm(screen.getByTestId("allocation-topup-legend").textContent)).toBe("есть сейчасприбавкасюда пополнение не идётцель");
+
+    fireEvent.click(screen.getByLabelText(/Взять и свободные деньги у брокеров/));
+    expect((screen.getByLabelText("Сколько взять у брокеров, RUB") as HTMLInputElement).value).toBe("300000");
+    await waitFor(() =>
+      expect(norm(screen.getByTestId("allocation-topup-total").textContent)).toBe("К вложению: 100 000 ₽ новых + 300 000 ₽ со счетов брокеров = 400 000 ₽."),
+    );
+    const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/topup")).at(-1)!;
+    expect(asked.searchParams.get("amount_minor")).toBe("10000000");
+    expect(asked.searchParams.get("from_brokers_minor")).toBe("30000000");
+    const brokers = within(screen.getByTestId("allocation-kinds")).getAllByTestId("allocation-row")[5];
+    expect(norm(brokers.textContent)).toMatch(/−300 000 ₽ → 0 % \(было 10 %, цель 0 %\) — в цели/);
+    expect(within(brokers).getByTestId("allocation-removed")).toBeTruthy();
+    expect(norm(screen.getByTestId("allocation-topup-legend").textContent)).toBe("есть сейчасприбавкауйдёт со счетов брокеровсюда пополнение не идётцель");
+
+    fireEvent.change(screen.getByLabelText("Сколько взять у брокеров, RUB"), { target: { value: "500 000" } });
+    expect(screen.getByText("У брокеров свободно только 300 000 ₽.")).toBeTruthy();
   });
 
   it("states targets that add up to 100", async () => {

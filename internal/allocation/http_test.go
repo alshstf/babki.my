@@ -96,6 +96,17 @@ func TestTheTargetsOverHTTP(t *testing.T) {
 		t.Errorf("full valuation: worth %d, kinds %+v", got.WorthMinor, got.Kinds)
 	}
 
+	// A top-up of 100 000 by the targets 50/40/10: shares are above theirs,
+	// bonds and metals below.
+	var topUp apitypes.AllocationTopUp
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/allocation/topup?amount_minor=10000000", ""), &topUp)
+	if topUp.WorthAfterMinor != 1_100_000_00 || len(topUp.Kinds) != 3 || topUp.Kinds[0].ChangeMinor != 0 || topUp.Kinds[1].ChangeMinor+topUp.Kinds[2].ChangeMinor != 100_000_00 {
+		t.Errorf("top-up = %+v", topUp)
+	}
+	if r := apitest.Do(t, c, "GET", url+"/api/v1/allocation/topup?amount_minor=0", ""); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a top-up of nothing = %d, want 400", r.StatusCode)
+	}
+
 	// Taken back: no targets, the rows as held.
 	apitest.Decode(t, apitest.Do(t, c, "PUT", url+"/api/v1/allocation/targets", `{"dimension":"kind","targets":[]}`), &got)
 	if len(got.Kinds) != 2 || !got.Kinds[0].Target.IsNull() || got.Mode != "rebalance" {

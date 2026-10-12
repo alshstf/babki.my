@@ -168,7 +168,7 @@ function Breakdown({
               </span>
             </div>
             <div className="h-2 overflow-hidden rounded bg-muted">
-              <div className="h-full rounded bg-emerald-500" style={{ width: `${share(s.minor)}%` }} />
+              <div className="h-full rounded bg-bar" style={{ width: `${share(s.minor)}%` }} />
             </div>
           </div>
         ))}
