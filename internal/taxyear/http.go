@@ -71,7 +71,8 @@ func YearAPI(y Year) apitypes.TaxYear {
 			UserId: p.UserID, Name: p.Name, BaseMinor: p.Base, TaxMinor: p.Tax, ByAgentsMinor: p.ByAgents,
 			WithheldMinor: p.Withheld, CreditMinor: p.Credit, ToPayMinor: p.ToPay + p.WagesToPay, RefundMinor: p.Refund, Unvalued: p.Unvalued,
 			WagesNetMinor: p.WagesNet, WagesMinor: p.Wages, WagesTaxMinor: p.WagesTax, WagesWithheldMinor: p.WagesWithheld, WagesToPayMinor: p.WagesToPay,
-			Employers:     make([]apitypes.TaxYearEmployer, 0, len(p.Employers)),
+			Employers:         make([]apitypes.TaxYearEmployer, 0, len(p.Employers)),
+			PropertySoldMinor: p.PropertySold, PropertyGainMinor: p.PropertyGain, PropertyBaseMinor: p.PropertyBase, PropertyFree: p.PropertyFree,
 			InterestMinor: p.Interest, InterestFreeMinor: nullable.NewNullNullable[int64](), ByNoticeMinor: p.ByNotice,
 			Accounts: make([]apitypes.TaxYearAccount, 0, len(p.Accounts)),
 		}

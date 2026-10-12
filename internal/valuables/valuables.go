@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
 )
 
@@ -72,6 +73,37 @@ type Item struct {
 	Currency    string
 	OwnerUserID *uuid.UUID
 	Note        string
+	// SoldOn and SoldMinor, in roubles, once sold; SaleOperationID the
+	// journal's row of the money, when it was written to an account.
+	SoldOn          *time.Time
+	SoldMinor       *int64
+	SaleOperationID *uuid.UUID
+}
+
+// Held is whether the piece was on hand at the end of day: bought by then,
+// not sold by then.
+func (it Item) Held(day time.Time) bool {
+	return !it.BoughtOn.After(day) && (it.SoldOn == nil || day.Before(*it.SoldOn))
+}
+
+// SaleTax is a sold piece's gain over what it cost, whether it sold free of
+// tax — held long enough — and the tax it brings on its own: the first rate
+// on the gain, or on the price less the year's deduction when that is
+// smaller. The deduction is a year's for all such sales, so the year's
+// estimate (internal/taxyear) takes it once.
+func SaleTax(it Item, rules family.TaxRules) (gain int64, free bool, tax int64) {
+	if it.SoldMinor == nil || it.SoldOn == nil {
+		return 0, false, 0
+	}
+	gain = *it.SoldMinor - it.CostMinor
+	if rules.PropertyFreeYears > 0 && !it.SoldOn.Before(it.BoughtOn.AddDate(rules.PropertyFreeYears, 0, 0)) {
+		return gain, true, 0
+	}
+	base := min(gain, *it.SoldMinor-rules.PropertyDeductionMinor)
+	if rules.TaxCurrency == "" || base <= 0 {
+		return gain, false, 0
+	}
+	return gain, false, family.Banded([]family.TaxBand{{BP: rules.InvestmentBands[0].BP}}, base, rules.TaxUnitMinor)
 }
 
 // Pure is the grams of metal in the piece.

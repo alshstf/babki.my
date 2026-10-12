@@ -41,6 +41,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/accounts/{accountId}/valuables/items/{itemId}", edit(h.handleUpdate))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}/valuables/items/{itemId}", edit(h.handleDelete))
 	srv.Mount("PUT /api/v1/accounts/{accountId}/valuables/bank-prices", edit(h.handleBankPrice))
+	srv.Mount("POST /api/v1/accounts/{accountId}/valuables/items/{itemId}/sale", edit(h.handleSell))
+	srv.Mount("DELETE /api/v1/accounts/{accountId}/valuables/items/{itemId}/sale", edit(h.handleUnsell))
 }
 
 func pathID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
@@ -222,6 +224,48 @@ func (h *Handler) handleBankPrice(w http.ResponseWriter, r *http.Request) {
 	write(w, got, err)
 }
 
+func (h *Handler) handleSell(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathID(w, r, "accountId")
+	if !ok {
+		return
+	}
+	itemID, ok := pathID(w, r, "itemId")
+	if !ok {
+		return
+	}
+	var req apitypes.ValuablesSale
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	on, err := time.Parse(time.DateOnly, req.SoldOn)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "sold_on must be YYYY-MM-DD")
+		return
+	}
+	sale := Sale{On: on, Minor: req.AmountMinor}
+	if req.ToAccountId.IsSpecified() && !req.ToAccountId.IsNull() {
+		v := req.ToAccountId.MustGet()
+		sale.ToAccountID = &v
+	}
+	got, err := h.svc.Sell(r.Context(), p.SpaceID, id, itemID, sale)
+	write(w, got, err)
+}
+
+func (h *Handler) handleUnsell(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathID(w, r, "accountId")
+	if !ok {
+		return
+	}
+	itemID, ok := pathID(w, r, "itemId")
+	if !ok {
+		return
+	}
+	got, err := h.svc.Unsell(r.Context(), p.SpaceID, id, itemID)
+	write(w, got, err)
+}
+
 func dateOf(t *time.Time) nullable.Nullable[string] {
 	if t == nil {
 		return nullable.NewNullNullable[string]()
@@ -251,6 +295,7 @@ func HoldingAPI(h Holding) apitypes.Valuables {
 	}
 	out := apitypes.Valuables{
 		Storage: st, Items: make([]apitypes.ValuablesItem, 0, len(h.Items)), BankPrices: make([]apitypes.ValuablesBankPrice, 0, len(h.BankPrices)),
+		Sold:        make([]apitypes.ValuablesSold, 0, len(h.Sold)),
 		MarketMinor: minorOf(h.Market), SellMinor: minorOf(h.Sell), Currency: "RUB",
 	}
 	for _, b := range h.BankPrices {
@@ -277,6 +322,23 @@ func HoldingAPI(h Holding) apitypes.Valuables {
 			it.HardToSell = append(it.HardToSell, apitypes.ValuablesItemHardToSell(hard))
 		}
 		out.Items = append(out.Items, it)
+	}
+	for _, v := range h.Sold {
+		sold := apitypes.ValuablesSold{
+			Id: v.ID, Kind: apitypes.ValuablesSoldKind(v.Kind), Metal: apitypes.Metal(v.Metal), Weight: v.Weight.String(),
+			Fineness: v.Fineness.StringFixed(1), Maker: v.Maker, ForeignMade: v.ForeignMade, Serial: v.Serial,
+			Certificate: v.Certificate, Sealed: v.Sealed, BoughtOn: v.BoughtOn.Format(time.DateOnly), CostMinor: v.CostMinor,
+			Currency: v.Currency, OwnerUserId: nullable.NewNullNullable[uuid.UUID](), Note: v.Note,
+			SoldOn: v.SoldOn.Format(time.DateOnly), SoldMinor: *v.SoldMinor, GainMinor: v.Gain, TaxFree: v.Free, TaxMinor: v.Tax,
+			SaleOperationId: nullable.NewNullNullable[uuid.UUID](),
+		}
+		if v.OwnerUserID != nil {
+			sold.OwnerUserId = nullable.NewNullableWithValue(*v.OwnerUserID)
+		}
+		if v.SaleOperationID != nil {
+			sold.SaleOperationId = nullable.NewNullableWithValue(*v.SaleOperationID)
+		}
+		out.Sold = append(out.Sold, sold)
 	}
 	return out
 }

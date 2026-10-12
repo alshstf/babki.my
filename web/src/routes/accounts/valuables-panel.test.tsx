@@ -44,6 +44,7 @@ const stored: Valuables = {
     }),
   ],
   bank_prices: [],
+  sold: [],
   market_minor: 1_154_885_00,
   sell_minor: 1_091_893_25,
   currency: "RUB",
@@ -53,6 +54,7 @@ function answer(v: Valuables) {
   fetchMock.mockImplementation((input: Request) => {
     const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     if (input.url.endsWith("/members")) return json([{ id: "u-1", username: "a", display_name: "Александр", role: "owner" }]);
+    if (input.url.endsWith("/accounts")) return json([{ ...box, id: "card-1", name: "Карта", type: "checking" }, box]);
     return json(v);
   });
 }
@@ -123,5 +125,35 @@ describe("ValuablesPanel", () => {
       kind: "bar", metal: "gold", weight: "50", fineness: "999.9", maker: "Приокский", bought_on: "2024-11-05", cost_minor: 410_000_00,
       currency: "RUB", certificate: true, sealed: true, foreign_made: false, owner_user_id: null,
     });
+  });
+
+  it("shows a sold piece with its gain and tax, and sells one to an account", async () => {
+    answer({
+      ...stored,
+      sold: [
+        {
+          ...piece({ id: "i-9", weight: "50", maker: "Приокский", serial: "654321", bought_on: "2024-11-05", cost_minor: 410_000_00 }),
+          sold_on: "2026-10-01", sold_minor: 525_000_00, gain_minor: 115_000_00, tax_free: false, tax_minor: 14_950_00, sale_operation_id: "op-1",
+        } as unknown as Valuables["sold"][number],
+      ],
+    });
+    show();
+    const sold = await screen.findByTestId("valuables-sold-item");
+    expect(norm(sold.textContent)).toMatch(/Продан 01\.10\.2026 за 525 000,00 ₽, прибыль \+115 000,00 ₽/);
+    expect(norm(sold.textContent)).toMatch(/Налог ≈ 14 950,00 ₽ — декларация 3-НДФЛ до 30 апреля 2027 года/);
+
+    fireEvent.click(within(screen.getAllByTestId("valuables-item")[0]).getByRole("button", { name: "Продан" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Когда продан"), { target: { value: "2026-10-10" } });
+    fireEvent.change(within(dialog).getByLabelText("За сколько, ₽"), { target: { value: "1 100 000" } });
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Куда пришли деньги" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Карта" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Записать продажу" }));
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
+      expect(post?.url).toMatch(/\/valuables\/items\/i-1\/sale$/);
+    });
+    const post = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
+    expect(await post.json()).toEqual({ sold_on: "2026-10-10", amount_minor: 1_100_000_00, to_account_id: "card-1" });
   });
 });

@@ -106,7 +106,7 @@ func worthOn(ctx context.Context, h stored, prices []marketdata.MetalPrice, base
 	}
 	var sell, market int64
 	for _, it := range h.Items {
-		if it.BoughtOn.After(day) {
+		if !it.Held(day) {
 			continue
 		}
 		v.Operations++

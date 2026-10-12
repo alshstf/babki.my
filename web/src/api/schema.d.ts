@@ -124,6 +124,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/valuables/items/{itemId}/sale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records a piece sold (physical metals, plan step 4): the day and what it sold for in roubles; with to_account_id, the money as an earning on that active rouble account, under «Продажа вещей» when the family has it. The piece leaves the storage's worth from that day. 400 when it is sold already, the day is before its purchase or ahead, or the account does not take roubles. */
+        post: operations["sellValuablesItem"];
+        /** @description Takes a sale recorded by mistake back, and the money's row with it. 400 when the piece is not sold. */
+        delete: operations["unsellValuablesItem"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/valuables/bank-prices": {
         parameters: {
             query?: never;
@@ -2440,6 +2458,13 @@ export interface components {
             /** @description The member it is personal to; null for the family's */
             owner_username: string | null;
             note: string;
+            /** @description Date YYYY-MM-DD it was sold; null while kept */
+            sold_on: string | null;
+            /**
+             * Format: int64
+             * @description What it sold for in roubles' minor units; null while kept
+             */
+            sold_minor: number | null;
         };
         ExportOperation: {
             /** Format: uuid */
@@ -2950,6 +2975,48 @@ export interface components {
             /** @description Why a bank may not take it back at its price without an assay; empty when none */
             hard_to_sell: ("foreign_made" | "no_certificate" | "opened")[];
         };
+        ValuablesSale: {
+            /** @description Date YYYY-MM-DD */
+            sold_on: string;
+            /**
+             * Format: int64
+             * @description What it sold for, in roubles' minor units
+             */
+            amount_minor: number;
+            /**
+             * Format: uuid
+             * @description The account the money went to; null: the family writes it itself
+             */
+            to_account_id: string | null;
+        };
+        ValuablesSold: components["schemas"]["ValuablesItemInput"] & {
+            /** Format: uuid */
+            id: string;
+            /** @description Date YYYY-MM-DD */
+            sold_on: string;
+            /**
+             * Format: int64
+             * @description What it sold for, in roubles' minor units
+             */
+            sold_minor: number;
+            /**
+             * Format: int64
+             * @description What it sold for less what it cost, signed
+             */
+            gain_minor: number;
+            /** @description Held three years and more: it sold free of tax */
+            tax_free: boolean;
+            /**
+             * Format: int64
+             * @description The tax it brings on its own: 13 % on the gain, or on the price less 250 000 when smaller; 0 when free or at a loss. The return's; the year's estimate takes the 250 000 once for all such sales
+             */
+            tax_minor: number;
+            /**
+             * Format: uuid
+             * @description The journal's row of the money, when written to an account
+             */
+            sale_operation_id: string | null;
+        };
         ValuablesBankPrice: {
             metal: components["schemas"]["Metal"];
             /** @description Decimal: roubles the bank pays for a gram of the metal */
@@ -2959,6 +3026,8 @@ export interface components {
         };
         Valuables: {
             storage: components["schemas"]["ValuablesStorage"];
+            /** @description The pieces sold, earliest bought first */
+            sold: components["schemas"]["ValuablesSold"][];
             /** @description Earliest bought first */
             items: components["schemas"]["ValuablesItem"][];
             bank_prices: components["schemas"]["ValuablesBankPrice"][];
@@ -3085,6 +3154,23 @@ export interface components {
             wages_to_pay_minor: number;
             /** @description In the order they first paid */
             employers: components["schemas"]["TaxYearEmployer"][];
+            /**
+             * Format: int64
+             * @description What the bars and coins sold in the year brought, those held three years and more left out
+             */
+            property_sold_minor: number;
+            /**
+             * Format: int64
+             * @description What they gained over what they cost, signed
+             */
+            property_gain_minor: number;
+            /**
+             * Format: int64
+             * @description What of it is taxed: the gain, or the proceeds less the year's 250 000 deduction when smaller, not below zero; in base_minor, its tax paid by return
+             */
+            property_base_minor: number;
+            /** @description Bars and coins sold in the year free of tax: held three years and more */
+            property_free: number;
             /** @description Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them */
             unvalued: number;
             accounts: components["schemas"]["TaxYearAccount"][];
@@ -5537,6 +5623,64 @@ export interface operations {
                     "application/json": components["schemas"]["Valuables"];
                 };
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    sellValuablesItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValuablesSale"];
+            };
+        };
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    unsellValuablesItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

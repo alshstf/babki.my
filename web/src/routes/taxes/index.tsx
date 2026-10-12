@@ -125,6 +125,17 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
             )}
           </div>
         )}
+        {(p.property_sold_minor > 0 || p.property_free > 0) && (
+          <p className="text-sm" data-testid="tax-property">
+            {p.property_sold_minor > 0 &&
+              t("taxes.property", {
+                sold: formatMinor(p.property_sold_minor, c),
+                gain: `${p.property_gain_minor >= 0 ? "" : "−"}${formatMinor(Math.abs(p.property_gain_minor), c)}`,
+                base: formatMinor(p.property_base_minor, c),
+              })}
+            {p.property_free > 0 && ` ${t("taxes.propertyFree", { count: p.property_free })}`}
+          </p>
+        )}
         {p.interest_minor > 0 && (
           <p className="text-sm" data-testid="tax-interest">
             {p.interest_free_minor === null || year.key_rate === null

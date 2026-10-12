@@ -144,7 +144,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		srv.Mount("GET /metrics", metrics.Handler())
 	}
 	// Bars and coins of precious metal on valuables accounts (decisions Р-39, Р-40).
-	valuablesSvc := valuables.NewService(r.pool, accStore, mdStore).WithWorth(famStore, mdStore, converter)
+	valuablesSvc := valuables.NewService(r.pool, accStore, mdStore).WithWorth(famStore, mdStore, converter).
+		WithJournal(opSvc, category.NewStore(r.pool))
 	valuables.NewHandler(valuablesSvc, famAuth, famSM).Mount(srv)
 	worths := journalValues{positions: positions, valuables: valuablesSvc}
 	accHandler := account.NewHandler(accStore, famStore, converter, worths, famAuth, famSM)
@@ -156,7 +157,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore)
 	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
 	// The family's income tax for a year, an estimate (decisions Р-41, Р-42).
-	taxyear.NewHandler(taxyear.NewService(accStore, positions, famStore, mdStore).WithEarnings(opStore, category.NewStore(r.pool)), famAuth, famSM).Mount(srv)
+	taxyear.NewHandler(taxyear.NewService(accStore, positions, famStore, mdStore).WithEarnings(opStore, category.NewStore(r.pool)).WithProperty(valuablesSvc), famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)

@@ -9,6 +9,8 @@ export type ValuablesItemInput = components["schemas"]["ValuablesItemInput"];
 export type ValuablesStorage = components["schemas"]["ValuablesStorage"];
 export type ValuablesBankPrice = components["schemas"]["ValuablesBankPrice"];
 export type Metal = components["schemas"]["Metal"];
+export type ValuablesSold = components["schemas"]["ValuablesSold"];
+export type ValuablesSale = components["schemas"]["ValuablesSale"];
 
 // A valuables account's storage, bars and coins (GET /api/v1/accounts/{id}/
 // valuables, decisions Р-39, Р-40).
@@ -32,7 +34,7 @@ function useAfterChange(accountId: string) {
   const queryClient = useQueryClient();
   return (data: Valuables) => {
     queryClient.setQueryData(["valuables", accountId], data);
-    for (const key of ["accounts", "summary", "capital", "structure", "allocation"]) {
+    for (const key of ["accounts", "summary", "capital", "structure", "allocation", "operations", "cashflow", "tax-year"]) {
       void queryClient.invalidateQueries({ queryKey: [key] });
     }
   };
@@ -90,6 +92,22 @@ export function useSetBankPrice(accountId: string) {
         params: { path: { accountId } },
         body,
       });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: after,
+  });
+}
+
+// Records a piece sold, the money to an account when one is named; or takes
+// a sale back.
+export function useSellItem(accountId: string) {
+  const after = useAfterChange(accountId);
+  return useMutation({
+    mutationFn: async ({ itemId, body }: { itemId: string; body: ValuablesSale | null }): Promise<Valuables> => {
+      const { data, error, response } = body
+        ? await api.POST("/api/v1/accounts/{accountId}/valuables/items/{itemId}/sale", { params: { path: { accountId, itemId } }, body })
+        : await api.DELETE("/api/v1/accounts/{accountId}/valuables/items/{itemId}/sale", { params: { path: { accountId, itemId } } });
       if (!data) throw apiError(response, error);
       return data;
     },

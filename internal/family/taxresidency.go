@@ -95,6 +95,11 @@ type TaxRules struct {
 	// TaxUnitMinor is what a tax is rounded to, in minor units: a whole
 	// rouble for Russia's.
 	TaxUnitMinor int64
+	// PropertyFreeYears frees from tax the sale of property — a bar, a coin —
+	// held this many years and more; PropertyDeductionMinor is what a person
+	// may take off such sales of a year instead of what the things cost.
+	PropertyFreeYears      int
+	PropertyDeductionMinor int64
 }
 
 // TaxBand is a rate in hundredths of a percent on the part of a year's sum
@@ -132,7 +137,11 @@ var taxRules = map[string]TaxRules{
 		Country: "RU", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, SaleTaxBP: 1300, LongHoldingYears: 3,
 		TaxCurrency: "RUB",
 		// Tax is in whole roubles, half up (ст. 52 п. 6).
-		TaxUnitMinor:    100,
+		TaxUnitMinor: 100,
+		// Property held three years and more sells free of tax (ст. 217.1 п. 2,
+		// 17.1 ст. 217); otherwise 250 000 a year may be taken off instead of the
+		// cost (ст. 220 п. 2 пп. 1).
+		PropertyFreeYears: 3, PropertyDeductionMinor: 250_000_00,
 		InvestmentBands: [2]TaxBand{{UpToMinor: 2_400_000_00, BP: 1300}, {BP: 1500}},
 		MainBands: [5]TaxBand{
 			{UpToMinor: 2_400_000_00, BP: 1300},

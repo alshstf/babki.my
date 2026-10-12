@@ -23,6 +23,7 @@ import (
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/valuables"
 )
 
 type accounts interface {
@@ -52,6 +53,19 @@ type Service struct {
 	// For the earnings under marked categories (WithEarnings).
 	flows      flows
 	categories categories
+	// For the bars and coins sold (WithProperty).
+	property soldPieces
+}
+
+type soldPieces interface {
+	SoldIn(ctx context.Context, spaceID uuid.UUID, year int) ([]valuables.SoldPiece, error)
+}
+
+// WithProperty lets the estimate count the bars and coins sold in the year
+// (decision Р-41: the sale of property).
+func (s *Service) WithProperty(p soldPieces) *Service {
+	s.property = p
+	return s
 }
 
 func NewService(a accounts, f facts, s spaces, k keyRates) *Service {
@@ -112,7 +126,14 @@ type Person struct {
 	// a band the sum crosses.
 	Employers                                            []Employer
 	WagesNet, Wages, WagesTax, WagesWithheld, WagesToPay int64
-	Unvalued                                             int
+	// PropertySold and PropertyGain are what the bars and coins sold in the
+	// year brought and gained, those held long enough left out; PropertyBase
+	// what of it is taxed — the gain, or the proceeds less the year's
+	// deduction when smaller; PropertyFree how many sold free of tax. The
+	// base is in Base, its tax paid by return.
+	PropertySold, PropertyGain, PropertyBase int64
+	PropertyFree                             int
+	Unvalued                                 int
 }
 
 // Year is the family's year.
@@ -221,6 +242,30 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	if err != nil {
 		return Year{}, err
 	}
+	// Bars and coins sold: the owner of the piece, else the account's person.
+	if s.property != nil {
+		sold, err := s.property.SoldIn(ctx, spaceID, year)
+		if err != nil {
+			return Year{}, err
+		}
+		for _, it := range sold {
+			who := owner
+			switch {
+			case it.OwnerUserID != nil:
+				who = *it.OwnerUserID
+			case it.AccountOwner != nil:
+				who = *it.AccountOwner
+			}
+			p := personByID(who)
+			gain, free, _ := valuables.SaleTax(it.Item, rules)
+			if free {
+				p.PropertyFree++
+				continue
+			}
+			p.PropertySold += *it.SoldMinor
+			p.PropertyGain += gain
+		}
+	}
 	wages := map[uuid.UUID][]earning{}
 	for _, r := range rows {
 		p := personByID(r.person)
@@ -265,6 +310,8 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			p.InterestFree = &free
 			taxable = max(p.Interest-free, 0)
 		}
+		p.PropertyBase = max(min(p.PropertyGain, p.PropertySold-rules.PropertyDeductionMinor), 0)
+		invested += p.PropertyBase
 		p.Base = invested + taxable
 		p.Tax = family.Banded(rules.InvestmentBands[:], p.Base, rules.TaxUnitMinor)
 		// The interest's tax is what it adds on top of the rest.

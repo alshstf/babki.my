@@ -7,6 +7,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
 )
 
@@ -119,5 +120,35 @@ func TestNoPriceYet(t *testing.T) {
 	bank := []BankPrice{{Metal: marketdata.Gold, Price: dec("10100"), On: today}}
 	if v := Valuing(noteBar(), nil, Storage{}, bank, today); v.Market != nil || *v.Sell != 1_009_899_00 {
 		t.Errorf("only the bank's price: %+v", v)
+	}
+}
+
+// A sale's tax: the 100 g bar of 2023 sold in March 2026 is three years held —
+// free; the 50 g of November 2024 sold for 525 000 against 410 000 gains
+// 115 000, smaller than the price less 250 000 — 14 950; a 10 g bar sold for
+// 95 000 is under the 250 000 a year may take off — nothing; a loss — nothing.
+func TestTheSalesTax(t *testing.T) {
+	ru := family.TaxRulesFor("RU")
+	sold := func(it Item, on string, minor int64) Item {
+		d := day(on)
+		it.SoldOn, it.SoldMinor = &d, &minor
+		return it
+	}
+	if g, free, tax := SaleTax(sold(noteBar(), "2026-03-15", 1_100_000_00), ru); !free || tax != 0 || g != 580_000_00 {
+		t.Errorf("held three years to the day: %d, %v, %d", g, free, tax)
+	}
+	fifty := Item{Weight: dec("50"), BoughtOn: day("2024-11-05"), CostMinor: 410_000_00}
+	if g, free, tax := SaleTax(sold(fifty, "2026-10-01", 525_000_00), ru); free || g != 115_000_00 || tax != 14_950_00 {
+		t.Errorf("the 50 g: %d, %v, %d", g, free, tax)
+	}
+	ten := Item{Weight: dec("10"), BoughtOn: day("2025-05-20"), CostMinor: 60_000_00}
+	if _, _, tax := SaleTax(sold(ten, "2026-10-01", 95_000_00), ru); tax != 0 {
+		t.Errorf("under the deduction: %d", tax)
+	}
+	if g, _, tax := SaleTax(sold(fifty, "2026-10-01", 400_000_00), ru); g != -10_000_00 || tax != 0 {
+		t.Errorf("a loss: %d, %d", g, tax)
+	}
+	if _, _, tax := SaleTax(fifty, ru); tax != 0 {
+		t.Error("a piece not sold has a tax")
 	}
 }
