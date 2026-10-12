@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -58,7 +58,10 @@ fetchMock.mockImplementation(async (input: Request) => {
   return new Response("null", { status: 404 });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 function renderPage() {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -77,6 +80,7 @@ function renderPage() {
 
 describe("PayoutsPage", () => {
   it("lists the payouts by month, with what is not known yet said so", async () => {
+    localStorage.setItem("babki.payoutView", "gross");
     renderPage();
     expect(await screen.findByTestId("payouts-total")).toHaveTextContent(/1\s272/);
     const months = await screen.findAllByTestId("payouts-month");
@@ -90,5 +94,22 @@ describe("PayoutsPage", () => {
     expect(rows[2]).toHaveTextContent("Coca-Cola");
     expect(rows[2]).toHaveTextContent(/≈\s918/);
     expect(within(rows[3]).getByText("сумма ещё не объявлена")).toBeTruthy();
+    expect(screen.queryByTestId("payout-net-by")).toBeNull();
+  });
+
+  it("shows what reaches the accounts unless picked otherwise, saying where it comes from", async () => {
+    renderPage();
+    expect(await screen.findByTestId("payouts-total")).toHaveTextContent(/1\s226/);
+    const rows = await screen.findAllByTestId("payout-row");
+    expect(rows[0].textContent?.replace(/\s/g, " ")).toMatch(/307,98 ₽−13 % по правилу · до налога 354,00 ₽/);
+    // A payout in another currency: no tax known, the amount before tax.
+    expect(within(rows[2]).getByTestId("payout-net-by").textContent).toBe("до налога: налог зависит от страны");
+    expect(within(rows[1]).getByText("можно предъявить к выкупу")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Суммы" }));
+    fireEvent.click(screen.getByRole("option", { name: "До налога" }));
+    expect(screen.getByTestId("payouts-total")).toHaveTextContent(/1\s272/);
+    expect(screen.queryByTestId("payout-net-by")).toBeNull();
+    expect(localStorage.getItem("babki.payoutView")).toBe("gross");
   });
 });

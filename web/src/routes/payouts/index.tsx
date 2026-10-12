@@ -21,11 +21,13 @@ import {
 } from "@/components/ui/table";
 import { usePayouts, type Payout } from "@/api/payouts";
 import { PayoutsReceived } from "./received";
+import { PayoutAmount, PayoutViewSelect } from "./view";
+import { usePayoutView } from "@/lib/payout-view";
 import { useAccounts } from "@/api/accounts";
 import { useInstrumentIndex } from "@/api/instruments";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
-import { formatMinor, formatMinorCompact } from "@/lib/money";
+import { formatMinorCompact } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 
@@ -39,11 +41,13 @@ function monthTitle(m: string): string {
 }
 
 // PayoutsPage is what the papers the family holds today will pay: coupons,
-// repayments, redemptions and declared dividends, month by month, before tax.
+// repayments, redemptions and declared dividends, month by month — what
+// reaches the accounts or before tax, as picked.
 export function PayoutsPage() {
   const { t } = useTranslation();
   const [months, setMonths] = useState<number>(12);
   const [accountId, setAccountId] = useState(EVERY);
+  const [view, setView] = usePayoutView();
   const forecast = usePayouts(months, accountId === EVERY ? undefined : accountId);
   const accounts = useAccounts();
   const instruments = useInstrumentIndex();
@@ -58,7 +62,8 @@ export function PayoutsPage() {
     const key = p.on.slice(0, 7);
     byMonth.set(key, [...(byMonth.get(key) ?? []), p]);
   }
-  const peak = Math.max(1, ...(data?.by_month ?? [0]));
+  const perMonth = (view === "net" ? data?.net_by_month : data?.by_month) ?? [];
+  const peak = Math.max(1, ...perMonth);
 
   return (
     <div className="grid gap-6">
@@ -92,6 +97,7 @@ export function PayoutsPage() {
             ))}
           </SelectContent>
         </Select>
+        <PayoutViewSelect view={view} onChange={setView} />
       </div>
       <RefreshFailedNotice show={refreshFailed(forecast)} />
       <QueryGate state={state} />
@@ -105,7 +111,7 @@ export function PayoutsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-xl font-semibold tabular-nums sm:text-2xl">
-                {formatMinorCompact(data.total_minor, data.base_currency)}
+                {formatMinorCompact(view === "net" ? data.net_total_minor : data.total_minor, data.base_currency)}
               </CardContent>
             </Card>
             <Card data-testid="payouts-this-month">
@@ -113,7 +119,7 @@ export function PayoutsPage() {
                 <CardTitle className="text-sm font-normal text-muted-foreground">{t("payouts.thisMonth")}</CardTitle>
               </CardHeader>
               <CardContent className="text-xl font-semibold tabular-nums sm:text-2xl">
-                {formatMinorCompact(data.by_month[0] ?? 0, data.base_currency)}
+                {formatMinorCompact(perMonth[0] ?? 0, data.base_currency)}
               </CardContent>
             </Card>
           </div>
@@ -130,10 +136,10 @@ export function PayoutsPage() {
               <div key={m} className="flex items-center gap-3 text-sm">
                 <span className="w-32 shrink-0 text-muted-foreground">{monthTitle(m)}</span>
                 <div className="h-2 flex-1 overflow-hidden rounded bg-muted">
-                  <div className="h-full rounded bg-emerald-500" style={{ width: `${(data.by_month[i] / peak) * 100}%` }} />
+                  <div className="h-full rounded bg-bar" style={{ width: `${(perMonth[i] / peak) * 100}%` }} />
                 </div>
                 <span className="w-28 shrink-0 text-right tabular-nums">
-                  {data.by_month[i] ? formatMinorCompact(data.by_month[i], data.base_currency) : "—"}
+                  {perMonth[i] ? formatMinorCompact(perMonth[i], data.base_currency) : "—"}
                 </span>
               </div>
             ))}
@@ -157,7 +163,7 @@ export function PayoutsPage() {
                           <TableHead>{t("payouts.columns.date")}</TableHead>
                           <TableHead>{t("payouts.columns.paper")}</TableHead>
                           <TableHead className="hidden sm:table-cell">{t("payouts.columns.account")}</TableHead>
-                          <TableHead className="text-right">{t("payouts.columns.amount")}</TableHead>
+                          <TableHead className="text-right">{view === "net" ? t("payouts.columns.net") : t("payouts.columns.amount")}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -186,20 +192,7 @@ export function PayoutsPage() {
                             </TableCell>
                             <TableCell className="hidden sm:table-cell">{accountName(p.account_id)}</TableCell>
                             <TableCell className={cn("text-right tabular-nums", p.amount_minor == null && "text-muted-foreground")}>
-                              {p.amount_minor != null ? (
-                                <>
-                                  {formatMinor(p.amount_minor, p.currency)}
-                                  {p.currency !== data.base_currency && p.in_base_minor != null && (
-                                    <div className="text-xs text-muted-foreground">
-                                      ≈ {formatMinor(p.in_base_minor, data.base_currency)}
-                                    </div>
-                                  )}
-                                </>
-                              ) : p.kind === "offer" ? (
-                                t("payouts.offerNote")
-                              ) : (
-                                t("payouts.notSet")
-                              )}
+                              <PayoutAmount p={p} view={view} base={data.base_currency} />
                             </TableCell>
                           </TableRow>
                         ))}
