@@ -1459,6 +1459,24 @@ func (e WithheldAbroadUnknownReason) Valid() bool {
 	}
 }
 
+// Defines values for GetAllocationParamsValuation.
+const (
+	GetAllocationParamsValuationFull   GetAllocationParamsValuation = "full"
+	GetAllocationParamsValuationLiquid GetAllocationParamsValuation = "liquid"
+)
+
+// Valid indicates whether the value is a known member of the GetAllocationParamsValuation enum.
+func (e GetAllocationParamsValuation) Valid() bool {
+	switch e {
+	case GetAllocationParamsValuationFull:
+		return true
+	case GetAllocationParamsValuationLiquid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetCapitalParamsStep.
 const (
 	Month GetCapitalParamsStep = "month"
@@ -4900,6 +4918,15 @@ type GetAccountReturnParams struct {
 	// To Date YYYY-MM-DD, at most today
 	To string `form:"to" json:"to"`
 }
+
+// GetAllocationParams defines parameters for GetAllocation.
+type GetAllocationParams struct {
+	// Valuation Papers at the liquid (when absent) or the full valuation (decision Р-11)
+	Valuation *GetAllocationParamsValuation `form:"valuation,omitempty" json:"valuation,omitempty"`
+}
+
+// GetAllocationParamsValuation defines parameters for GetAllocation.
+type GetAllocationParamsValuation string
 
 // SetAllocationModeJSONBody defines parameters for SetAllocationMode.
 type SetAllocationModeJSONBody struct {

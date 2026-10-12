@@ -18,15 +18,22 @@ import (
 )
 
 // fakeStructures is a worth of 1 000 000: 600 000 in shares, 400 000 in
-// bonds, all in roubles, and 100 000 to live on.
+// bonds, all in roubles, and 100 000 to live on; at the full valuation a
+// frozen fund adds 500 000.
 type fakeStructures struct{}
 
-func (fakeStructures) Of(context.Context, uuid.UUID, structure.Valuation) (structure.Structure, error) {
-	return structure.Structure{
+func (fakeStructures) Of(_ context.Context, _ uuid.UUID, valuation structure.Valuation) (structure.Structure, error) {
+	s := structure.Structure{
 		BaseCurrency: "RUB", Targets: 1_000_000_00, Everyday: 100_000_00, MissingRates: []string{},
 		ByKind:           []structure.Slice{{Key: "shares", Minor: 600_000_00}, {Key: "bonds", Minor: 400_000_00}},
 		ByTargetCurrency: []structure.Slice{{Key: "RUB", Minor: 1_000_000_00}},
-	}, nil
+	}
+	if valuation == structure.Full {
+		s.Targets += 500_000_00
+		s.ByKind = append(s.ByKind, structure.Slice{Key: "funds", Minor: 500_000_00})
+		s.ByTargetCurrency[0].Minor += 500_000_00
+	}
+	return s, nil
 }
 
 // Targets are stated by kind and by currency and set against the worth;
@@ -81,6 +88,12 @@ func TestTheTargetsOverHTTP(t *testing.T) {
 	apitest.Decode(t, apitest.Do(t, c, "PUT", url+"/api/v1/allocation/mode", `{"mode":"rebalance"}`), &got)
 	if got.Mode != "rebalance" {
 		t.Errorf("mode = %s", got.Mode)
+	}
+
+	// At the full valuation, as «Структура» shows it: the frozen fund in.
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/allocation?valuation=full", ""), &got)
+	if got.WorthMinor != 1_500_000_00 || len(got.Kinds) != 4 || got.Kinds[2].Key != "funds" {
+		t.Errorf("full valuation: worth %d, kinds %+v", got.WorthMinor, got.Kinds)
 	}
 
 	// Taken back: no targets, the rows as held.

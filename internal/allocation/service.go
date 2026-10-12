@@ -64,14 +64,14 @@ func (s *Service) Settings(ctx context.Context, spaceID uuid.UUID) (Settings, er
 	return out, rows.Err()
 }
 
-// View is the space's worth today, at the liquid valuation (decision Р-11:
-// the one in «Итого»), against its targets.
-func (s *Service) View(ctx context.Context, spaceID uuid.UUID) (View, error) {
+// View is the space's worth today, papers at valuation (decision Р-11), against
+// its targets — as «Структура» shows it at the valuation picked there.
+func (s *Service) View(ctx context.Context, spaceID uuid.UUID, valuation structure.Valuation) (View, error) {
 	st, err := s.Settings(ctx, spaceID)
 	if err != nil {
 		return View{}, err
 	}
-	worth, err := s.structures.Of(ctx, spaceID, structure.Liquid)
+	worth, err := s.structures.Of(ctx, spaceID, valuation)
 	if err != nil {
 		return View{}, err
 	}

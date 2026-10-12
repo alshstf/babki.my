@@ -12,6 +12,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/structure"
 )
 
 // Handler serves /api/v1/allocation.
@@ -74,8 +75,14 @@ func (h *Handler) handleMode(w http.ResponseWriter, r *http.Request) {
 	h.writeView(w, r, p.SpaceID)
 }
 
+// writeView answers with the worth against the targets, papers at the
+// valuation asked (?valuation=liquid|full, liquid when absent).
 func (h *Handler) writeView(w http.ResponseWriter, r *http.Request, spaceID uuid.UUID) {
-	v, err := h.svc.View(r.Context(), spaceID)
+	valuation := structure.Liquid
+	if raw := r.URL.Query().Get("valuation"); raw != "" {
+		valuation = structure.Valuation(raw)
+	}
+	v, err := h.svc.View(r.Context(), spaceID, valuation)
 	if err != nil {
 		family.WriteError(w, err)
 		return
