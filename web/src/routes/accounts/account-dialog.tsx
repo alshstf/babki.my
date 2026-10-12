@@ -64,6 +64,7 @@ export function AccountDialog({
   const [institution, setInstitution] = useState("");
   const [personal, setPersonal] = useState(false);
   const [tradesAbroad, setTradesAbroad] = useState(false);
+  const [foreignBroker, setForeignBroker] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -74,6 +75,7 @@ export function AccountDialog({
       setInstitution(account?.institution ?? "");
       setPersonal(Boolean(account?.owner_user_id));
       setTradesAbroad(account?.trades_abroad ?? false);
+      setForeignBroker(account?.foreign_broker ?? false);
       create.reset();
       update.reset();
     }
@@ -101,7 +103,7 @@ export function AccountDialog({
             name,
             institution,
             owner_user_id: ownerUserId,
-            ...(account.type === "brokerage" ? { trades_abroad: tradesAbroad } : {}),
+            ...(account.type === "brokerage" ? { trades_abroad: tradesAbroad, foreign_broker: foreignBroker } : {}),
           },
         },
         { onSuccess: () => onOpenChange(false) },
@@ -115,7 +117,7 @@ export function AccountDialog({
           currency: type === "valuables" ? "RUB" : effectiveCurrency,
           institution,
           owner_user_id: ownerUserId,
-          ...(type === "brokerage" ? { trades_abroad: tradesAbroad } : {}),
+          ...(type === "brokerage" ? { trades_abroad: tradesAbroad, foreign_broker: foreignBroker } : {}),
         },
         { onSuccess: () => onOpenChange(false) },
       );
@@ -221,6 +223,20 @@ export function AccountDialog({
                 <Label htmlFor="acc-trades-abroad">{t("accounts.dialog.tradesAbroad")}</Label>
               </div>
               <p className="text-xs text-muted-foreground">{t("accounts.dialog.tradesAbroadHint")}</p>
+            </div>
+          )}
+          {/* A broker abroad withholds no Russian tax (decision Р-41). */}
+          {(isEdit ? account?.type : type) === "brokerage" && (
+            <div className="grid gap-1">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="acc-foreign-broker"
+                  checked={foreignBroker}
+                  onCheckedChange={(checked) => setForeignBroker(checked === true)}
+                />
+                <Label htmlFor="acc-foreign-broker">{t("accounts.dialog.foreignBroker")}</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">{t("accounts.dialog.foreignBrokerHint")}</p>
             </div>
           )}
           {/* Two sentences, because this dialog does two things and only one of

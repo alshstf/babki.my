@@ -157,6 +157,13 @@ func seedDemoTx(ctx context.Context, tx pgx.Tx) error {
 			return fmt.Errorf("seed account %q: %w", s.name, err)
 		}
 		accIDs[s.name] = a.ID
+		// Freedom Finance in Kazakhstan withholds no Russian tax (decision Р-41).
+		if s.name == "Freedom KZ" {
+			yes := true
+			if _, err := accStore.Update(ctx, owner.SpaceID, a.ID, account.Update{ForeignBroker: &yes}); err != nil {
+				return fmt.Errorf("seed account %q: %w", s.name, err)
+			}
+		}
 		for i, date := range dates {
 			if err := accStore.SetBalance(ctx, owner.SpaceID, a.ID, date, s.balances[i]); err != nil {
 				return fmt.Errorf("seed balance %q %s: %w", s.name, date.Format("2006-01-02"), err)

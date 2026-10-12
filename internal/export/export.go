@@ -357,8 +357,8 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 	out := apitypes.ExportAccount{
 		Id: a.ID, Name: a.Name, Type: string(a.Type), Currency: a.Currency, Institution: a.Institution,
 		Status: string(a.Status), OwnerUsername: nullable.NewNullNullable[string](), ValuedByBalance: a.ValuedByBalance, TradesAbroad: a.TradesAbroad,
-		KeptByOperations: a.KeptByOperations,
-		CreatedAt:        a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
+		KeptByOperations: a.KeptByOperations, ForeignBroker: a.ForeignBroker, TaxOwnerUsername: nullable.NewNullNullable[string](),
+		CreatedAt: a.CreatedAt, Balances: []apitypes.ExportBalance{}, Operations: []apitypes.ExportOperation{},
 		WithheldStated:         []apitypes.ExportWithheldStated{},
 		Loan:                   nullable.NewNullNullable[apitypes.LoanTerms](),
 		LoanPrepayments:        []apitypes.LoanPrepayment{},
@@ -373,6 +373,9 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 	}
 	if a.OwnerUserID != nil {
 		out.OwnerUsername = nullable.NewNullableWithValue(usernames[*a.OwnerUserID])
+	}
+	if a.TaxOwnerUserID != nil {
+		out.TaxOwnerUsername = nullable.NewNullableWithValue(usernames[*a.TaxOwnerUserID])
 	}
 	for _, m := range marks {
 		out.Balances = append(out.Balances, apitypes.ExportBalance{AsOf: m.AsOf.Format(time.DateOnly), AmountMinor: m.AmountMinor})

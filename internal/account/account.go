@@ -74,8 +74,14 @@ type Account struct {
 	// a brokerage one — by its journal rather than by balance marks (household
 	// stage 1; see Handler.valuations).
 	KeptByOperations bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// ForeignBroker is a broker abroad, who withholds no Russian tax: its
+	// client pays it by return (tax year, decision Р-41).
+	ForeignBroker bool
+	// TaxOwnerUserID is whose income the account's is for tax; nil: its
+	// personal owner, else the space's owner (decision Р-42).
+	TaxOwnerUserID *uuid.UUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type BalancePoint struct {
@@ -105,4 +111,8 @@ type Update struct {
 	ValuedByBalance  *bool
 	TradesAbroad     *bool
 	KeptByOperations *bool
+	ForeignBroker    *bool
+	// TaxOwnerUserID is a double pointer like OwnerUserID: a pointer to nil
+	// gives the account back to its default owner for tax.
+	TaxOwnerUserID **uuid.UUID
 }

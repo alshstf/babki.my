@@ -350,3 +350,53 @@ func TestAnAccountSaysWhetherItsBrokerTradesAbroad(t *testing.T) {
 		t.Error("an edit that does not name the switch changed it")
 	}
 }
+
+// An account's tax (decisions Р-41, Р-42): a foreign broker said so on
+// creation; whose it is for tax set apart and given back; a person who is no
+// user refused.
+func TestAnAccountSaysItsTax(t *testing.T) {
+	url, c := newAPI(t)
+	type tax struct {
+		ID             string  `json:"id"`
+		ForeignBroker  bool    `json:"foreign_broker"`
+		TaxOwnerUserID *string `json:"tax_owner_user_id"`
+	}
+	read := func(resp *http.Response) tax {
+		t.Helper()
+		defer func() { _ = resp.Body.Close() }()
+		var a tax
+		if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	if a := read(apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Т-Банк","type":"brokerage","currency":"RUB"}`)); a.ForeignBroker || a.TaxOwnerUserID != nil {
+		t.Errorf("a new account: %+v", a)
+	}
+	a := read(apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Freedom KZ","type":"brokerage","currency":"USD","foreign_broker":true}`))
+	if !a.ForeignBroker {
+		t.Error("an account created as a foreign broker's does not say so")
+	}
+	var me struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	resp := apitest.Do(t, c, "GET", url+"/api/v1/auth/me", "")
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got := read(apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+a.ID, `{"tax_owner_user_id":"`+me.User.ID+`"}`)); got.TaxOwnerUserID == nil || *got.TaxOwnerUserID != me.User.ID || !got.ForeignBroker {
+		t.Errorf("set apart for tax: %+v", got)
+	}
+	if got := read(apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+a.ID, `{"name":"Freedom"}`)); got.TaxOwnerUserID == nil {
+		t.Error("an edit that does not name whose it is for tax changed it")
+	}
+	if got := read(apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+a.ID, `{"tax_owner_user_id":null,"foreign_broker":false}`)); got.TaxOwnerUserID != nil || got.ForeignBroker {
+		t.Errorf("given back: %+v", got)
+	}
+	if r := apitest.Do(t, c, "PATCH", url+"/api/v1/accounts/"+a.ID, `{"tax_owner_user_id":"00000000-0000-0000-0000-000000000001"}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("no such user = %d, want 400", r.StatusCode)
+	}
+}

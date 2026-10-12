@@ -83,6 +83,25 @@ type TaxRules struct {
 	// LongHoldingYears frees from that tax the gain on a lot held longer than
 	// this many years; 0: no such rule in the estimate.
 	LongHoldingYears int
+	// TaxCurrency is what the year's tax is counted in (decision Р-41); empty:
+	// the application does not estimate the year's tax for the country.
+	TaxCurrency string
+	// InvestmentBands are the rates of the investment incomes — sales of
+	// papers, coupons, dividends, deposits' interest, sales of property — all
+	// one sum for the bands; MainBands the wages' scale. Each band runs up to
+	// its UpToMinor of the year's sum, 0 for no end.
+	InvestmentBands [2]TaxBand
+	MainBands       [5]TaxBand
+	// TaxUnitMinor is what a tax is rounded to, in minor units: a whole
+	// rouble for Russia's.
+	TaxUnitMinor int64
+}
+
+// TaxBand is a rate in hundredths of a percent on the part of a year's sum
+// up to UpToMinor (in TaxCurrency's minor units), 0 for no end.
+type TaxBand struct {
+	UpToMinor int64
+	BP        int
 }
 
 // DefaultTaxResidency is a space's residency unless set otherwise, and what
@@ -104,7 +123,25 @@ var taxRules = map[string]TaxRules{
 	// A sale's tax: 13 % up to 2,4 млн of the year's investment income, 15 %
 	// above (ст. 224 п. 1.1); a paper held over three years is free of it
 	// (инвестиционный вычет, ст. 219.1 п. 1 пп. 1, up to 3 млн a year held).
-	"RU": {Country: "RU", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, SaleTaxBP: 1300, LongHoldingYears: 3},
+	//
+	// The year's tax, from 2025: the investment incomes (ст. 210 п. 2.1) 13 % up
+	// to 2,4 млн, 15 % above (ст. 224 п. 1.1; ФНС on deposits' interest,
+	// 05.05.2026); wages on the scale of ст. 224 п. 1 — 13, 15, 18, 20, 22 % past
+	// 2,4, 5, 20 and 50 млн.
+	"RU": {
+		Country: "RU", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, SaleTaxBP: 1300, LongHoldingYears: 3,
+		TaxCurrency:     "RUB",
+		// Tax is in whole roubles, half up (ст. 52 п. 6).
+		TaxUnitMinor: 100,
+		InvestmentBands: [2]TaxBand{{UpToMinor: 2_400_000_00, BP: 1300}, {BP: 1500}},
+		MainBands: [5]TaxBand{
+			{UpToMinor: 2_400_000_00, BP: 1300},
+			{UpToMinor: 5_000_000_00, BP: 1500},
+			{UpToMinor: 20_000_000_00, BP: 1800},
+			{UpToMinor: 50_000_000_00, BP: 2000},
+			{BP: 2200},
+		},
+	},
 
 	// Germany. § 20 Abs. 4 S. 7 EStG: FIFO, mandatory; per depot (BMF letter of
 	// 2025-05-14).
@@ -212,4 +249,30 @@ func (r TaxRules) Notices() []CostBasisNotice {
 		out = append(out, NoticePerimeterMismatch)
 	}
 	return out
+}
+
+// Banded is the tax on sum by the bands, each band's rate on its own part,
+// rounded once, half up, to unit minor units (1 for none); nothing on a sum
+// not above zero.
+func Banded(bands []TaxBand, sum, unit int64) int64 {
+	if sum <= 0 {
+		return 0
+	}
+	var from, hundredths int64
+	for _, b := range bands {
+		upTo := b.UpToMinor
+		if upTo == 0 || upTo > sum {
+			upTo = sum
+		}
+		if upTo > from {
+			hundredths += (upTo - from) * int64(b.BP)
+			from = upTo
+		}
+		if from >= sum {
+			break
+		}
+	}
+	unit = max(unit, 1)
+	step := 10_000 * unit
+	return (hundredths + step/2) / step * unit
 }

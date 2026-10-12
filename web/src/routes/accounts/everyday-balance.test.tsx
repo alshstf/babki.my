@@ -18,7 +18,7 @@ function account(overrides: Partial<AccountWithBalance> = {}): AccountWithBalanc
     created_at: "2026-01-01T00:00:00Z",
     valued_by_balance: false,
     trades_abroad: false,
-    kept_by_operations: false,
+    kept_by_operations: false, foreign_broker: false, tax_owner_user_id: null,
     counted_by: "balance",
     balance: { as_of: "2026-10-01", amount_minor: 180_000_00 },
     ...overrides,
@@ -45,7 +45,7 @@ describe("EverydayBalance", () => {
         account={account({
           type: "credit_card",
           counted_by: "journal",
-          kept_by_operations: true,
+          kept_by_operations: true, foreign_broker: false, tax_owner_user_id: null,
           balance: { as_of: "2026-10-01", amount_minor: -61_500_00 },
           journal: {
             amount_minor: -61_500_00, full_amount_minor: -61_500_00, currency: "RUB", unpriced_positions: 0,
