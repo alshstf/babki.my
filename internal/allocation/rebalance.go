@@ -161,7 +161,7 @@ func Estimating(moves []Move, held []portfolio.SaleLots, rules family.TaxRules, 
 		out.Sales[m.Key] = sale
 		known = known && ok
 	}
-	if known && rules.SaleTaxBP > 0 && len(out.Sales) > 0 {
+	if known && rules.SaleTaxBP > 0 {
 		tax := decimal.Max(taxable, decimal.Zero).Mul(decimal.NewFromInt(int64(rules.SaleTaxBP))).Div(decimal.NewFromInt(10000)).Round(0).IntPart()
 		out.Tax = &tax
 	}

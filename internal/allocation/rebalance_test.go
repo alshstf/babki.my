@@ -220,7 +220,7 @@ func TestTheEstimateClaimsNothingItCannotStrike(t *testing.T) {
 	frozen := twoLots()
 	frozen.LiquidInBase = nil
 	est = Estimating([]Move{{Key: "broker_cash", Minor: -100}, {Key: "shares", Minor: -100}}, []portfolio.SaleLots{frozen}, russia, today)
-	if len(est.Sales) != 0 {
-		t.Errorf("estimated %+v", est.Sales)
+	if len(est.Sales) != 0 || est.Tax == nil || *est.Tax != 0 {
+		t.Errorf("estimated %+v, tax %v; want no sales and no tax", est.Sales, est.Tax)
 	}
 }

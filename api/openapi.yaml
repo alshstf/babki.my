@@ -3548,10 +3548,13 @@ components:
         share_after: { type: string, description: "Decimal: its share of the worth after, percent, to hundredths" }
     AllocationRebalance:
       type: object
-      required: [amount_minor, worth_after_minor, kinds, tax_minor, tax_rate, long_holding_years]
+      required: [amount_minor, worth_after_minor, sold_minor, from_brokers_minor, bought_minor, kinds, tax_minor, tax_rate, long_holding_years]
       properties:
         amount_minor: { type: integer, format: int64, description: "New money" }
         worth_after_minor: { type: integer, format: int64, description: "The worth with the new money in" }
+        sold_minor: { type: integer, format: int64, description: "What is sold now, every kind but the brokers' free money" }
+        from_brokers_minor: { type: integer, format: int64, description: "Of the brokers' free money (kind broker_cash), what goes into the kinds bought" }
+        bought_minor: { type: integer, format: int64, description: "What is bought: the new money, what is sold and the brokers' free money put in" }
         kinds: { type: array, items: { $ref: "#/components/schemas/AllocationMove" }, description: "Every kind of GET /allocation, in its order" }
         tax_minor:
           type: integer

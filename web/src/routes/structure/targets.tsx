@@ -7,7 +7,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAllocation, useSetTargets, useTopUp, type Allocation, type AllocationRow, type TopUpMoney } from "@/api/allocation";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  useAllocation,
+  useRebalance,
+  useSetAllocationMode,
+  useSetTargets,
+  useTopUp,
+  type Allocation,
+  type AllocationRow,
+  type AllocationSale,
+  type TopUpMoney,
+} from "@/api/allocation";
 import { useSession } from "@/api/session";
 import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -88,7 +99,13 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
       </CardHeader>
       <CardContent className="grid gap-4">
         {!kindTargets && <p className="text-sm text-muted-foreground">{t("allocation.empty")}</p>}
-        {kindTargets && <TopUp allocation={a} valuation={valuation} onPreview={setPreview} />}
+        {kindTargets && <ModePicker mode={a.mode} canEdit={canEdit} />}
+        {kindTargets &&
+          (a.mode === "rebalance" ? (
+            <Rebalance allocation={a} valuation={valuation} onPreview={setPreview} />
+          ) : (
+            <TopUp allocation={a} valuation={valuation} onPreview={setPreview} />
+          ))}
         <Rows rows={a.kinds} currency={c} name={(k) => kindName(t, k, c)} testId="allocation-kinds" preview={kindTargets ? preview : null} />
         {(a.everyday_minor > 0 || a.unsplit_minor > 0) && (
           <p className="text-xs text-muted-foreground" data-testid="allocation-outside">
@@ -127,13 +144,19 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
   );
 }
 
-// Moved is what a top-up moves into a kind (or out of the brokers' free
-// money), the same as a share of the worth after the top-up, and the kind's
-// share after it.
+// Moved is what a top-up or a rebalance moves into or out of a kind, the
+// same as a share of the worth after it, and the kind's share after it; a
+// rebalance also says what of the deposits to take later, what cannot be
+// sold now, and what the sale is estimated to gain.
 interface Moved {
   change: number;
   part: number;
   shareAfter: number;
+  later?: number;
+  kept?: number;
+  sale?: AllocationSale | null;
+  // longYears: a lot held longer is free of the sale's tax; 0 none.
+  longYears?: number;
 }
 
 // HELD is what a kind holds on a bar, in the page's calm bar colour, green
@@ -227,7 +250,7 @@ function Rows({
               {formatMinorCompact(r.minor, currency)} <span className="text-muted-foreground">{percent(r.share)}</span>
             </span>
             {moved ? (
-              <MovedLine moved={moved} before={before} target={target} currency={currency} />
+              <MovedLine kind={r.key} moved={moved} before={before} target={target} currency={currency} />
             ) : (
               r.target !== null &&
               gap !== null &&
@@ -248,15 +271,21 @@ function Rows({
   );
 }
 
-// MovedLine says what a top-up does to a kind: what goes in or out, the
-// share it comes to against the one before, and whether that is closer to
-// the target.
-function MovedLine({ moved, before, target, currency }: { moved: Moved; before: number; target: number | null; currency: string }) {
+// MovedLine says what a top-up or a rebalance does to a kind: what goes in
+// or out, the share it comes to against the one before, and whether that is
+// closer to the target; under it, a rebalance's notes.
+function MovedLine({ kind, moved, before, target, currency }: { kind: string; moved: Moved; before: number; target: number | null; currency: string }) {
   const { t } = useTranslation();
   const shares = { after: percent(String(moved.shareAfter)), before: percent(String(before)) };
   const head = moved.change !== 0 ? `${signed(moved.change, currency)} → ` : "→ ";
+  const notes = movedNotes(t, kind, moved, currency);
   if (target === null) {
-    return <div className={cn(LINE, "text-muted-foreground")}>{head + t("allocation.movedNoTarget", shares)}</div>;
+    return (
+      <div className={cn(LINE, "text-muted-foreground")}>
+        {head + t("allocation.movedNoTarget", shares)}
+        <Notes notes={notes} />
+      </div>
+    );
   }
   const was = Math.abs(before - target);
   const now = Math.abs(moved.shareAfter - target);
@@ -273,12 +302,213 @@ function MovedLine({ moved, before, target, currency }: { moved: Moved; before: 
     <div
       className={cn(
         LINE,
-        now <= was ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400",
+        now < was || now < 0.005
+          ? "text-emerald-700 dark:text-emerald-400"
+          : now > was
+            ? "text-amber-700 dark:text-amber-400"
+            : "text-muted-foreground",
       )}
       data-testid="allocation-moved"
     >
       {head + t("allocation.moved", { ...shares, target: percent(String(target)), verdict })}
+      <Notes notes={notes} />
     </div>
+  );
+}
+
+function Notes({ notes }: { notes: string[] }) {
+  return notes.map((n) => (
+    <div key={n} className="text-muted-foreground" data-testid="allocation-note">
+      {n}
+    </div>
+  ));
+}
+
+// movedNotes are a rebalance's words under a kind: what a sale of its papers
+// is estimated to gain, what of the deposits to take as they end, what
+// cannot be sold now.
+function movedNotes(t: (key: string, v?: Record<string, unknown>) => string, key: string, moved: Moved, currency: string): string[] {
+  const out: string[] = [];
+  const s = moved.sale;
+  if (moved.longYears !== undefined && moved.change < 0 && !s && key !== "broker_cash") out.push(t("allocation.saleNotEstimated"));
+  if (s && !s.known) out.push(t("allocation.saleUnknown"));
+  if (s && s.known) {
+    const gain = formatMinorCompact(Math.abs(s.gain_minor), currency);
+    out.push(
+      s.gain_minor < 0
+        ? t("allocation.saleLoss", { amount: gain })
+        : s.free_minor > 0
+          ? t("allocation.saleGainFree", { amount: gain, free: formatMinorCompact(s.free_minor, currency), years: moved.longYears ?? 0 })
+          : t("allocation.saleGain", { amount: gain }),
+    );
+  }
+  if (moved.later) out.push(t("allocation.later", { amount: formatMinorCompact(moved.later, currency) }));
+  if (moved.kept) out.push(t("allocation.kept", { amount: formatMinorCompact(moved.kept, currency) }));
+  return out;
+}
+
+// ModePicker is how the family brings its worth to the targets (Р-37): by
+// top-ups only, or by buying and selling; who may not change it reads it.
+function ModePicker({ mode, canEdit }: { mode: Allocation["mode"]; canEdit: boolean }) {
+  const { t } = useTranslation();
+  const set = useSetAllocationMode();
+  if (!canEdit) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {mode === "rebalance" ? t("allocation.modeIsRebalance") : t("allocation.modeIsTopUp")}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <Label htmlFor="allocation-mode" className="font-normal">
+        {t("allocation.mode")}
+      </Label>
+      <Select value={mode} onValueChange={(v) => set.mutate(v === "rebalance" ? "rebalance" : "topup")}>
+        <SelectTrigger id="allocation-mode" className="w-60">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="topup">{t("allocation.modes.topup")}</SelectItem>
+          <SelectItem value="rebalance">{t("allocation.modes.rebalance")}</SelectItem>
+        </SelectContent>
+      </Select>
+      {set.isError && <span className="text-xs text-red-700 dark:text-red-400">{t("allocation.modeFailed")}</span>}
+    </div>
+  );
+}
+
+// Legend is what the marks on the bars mean while a top-up or a rebalance
+// is counted.
+function Legend({ items }: { items: { swatch: "held" | "in" | "out" | "still" | "target"; label: string }[] }) {
+  return (
+    <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="allocation-topup-legend">
+      {items.map(({ swatch, label }) => (
+        <span key={swatch} className="flex items-center gap-1.5">
+          {swatch === "held" && <span className={cn("inline-block h-2 w-4 rounded-sm", HELD)} />}
+          {swatch === "in" && <span className={cn("inline-block h-3 w-4 rounded-sm", ADDED)} />}
+          {swatch === "out" && <span className="inline-block h-3 w-4 rounded-sm border border-muted-foreground/60" style={{ backgroundImage: HATCH }} />}
+          {swatch === "still" && <span className={cn("inline-block h-2 w-4 rounded-sm", STILL)} />}
+          {swatch === "target" && <span className="inline-block h-3 w-0.5 bg-foreground" />}
+          {label}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+// Rebalance asks what to sell and buy to bring the worth to the targets
+// (variant В of Р-37), with new money or none: the kinds above sell down,
+// the money buys the kinds below, deposits wait for their end, frozen papers
+// stay. What it moves shows on the kinds' bars, the sales' tax under them.
+function Rebalance({
+  allocation,
+  valuation,
+  onPreview,
+}: {
+  allocation: Allocation;
+  valuation: "liquid" | "full";
+  onPreview: (moved: Map<string, Moved> | null) => void;
+}) {
+  const { t } = useTranslation();
+  const c = allocation.base_currency;
+  const [fresh, setFresh] = useState("");
+  const freshMinor = parseToMinor(fresh.trim() === "" ? "0" : fresh);
+  const valid = freshMinor !== null && freshMinor >= 0;
+  // Asked once the typing stops; with nothing typed, without new money.
+  const [asked, setAsked] = useState<number | null>(null);
+  useEffect(() => {
+    const id = setTimeout(() => setAsked(valid ? (freshMinor ?? 0) : null), 300);
+    return () => clearTimeout(id);
+  }, [valid, freshMinor]);
+  const q = useRebalance(asked, valuation);
+  const data = asked !== null ? q.data : undefined;
+  useEffect(() => {
+    const worth = data?.worth_after_minor ?? 0;
+    onPreview(
+      data
+        ? new Map(
+            data.kinds.map((k) => [
+              k.key,
+              {
+                change: k.change_minor,
+                part: worth > 0 ? (k.change_minor / worth) * 100 : 0,
+                shareAfter: Number(k.share_after),
+                later: k.later_minor,
+                kept: k.kept_minor,
+                sale: k.sale,
+                longYears: data.long_holding_years,
+              },
+            ]),
+          )
+        : null,
+    );
+  }, [data, onPreview]);
+  useEffect(() => () => onPreview(null), [onPreview]);
+  const counted = data && !q.isPlaceholderData ? data : null;
+  return (
+    <div className="grid gap-2 rounded-md border bg-muted/30 p-3" data-testid="allocation-rebalance">
+      <p className="text-sm font-medium">{t("allocation.rebalanceTitle")}</p>
+      <p className="text-xs text-muted-foreground">{t("allocation.rebalanceHint")}</p>
+      <div className="grid gap-1">
+        <Label htmlFor="allocation-rebalance-fresh">{t("allocation.rebalanceAmount", { currency: c })}</Label>
+        <Input
+          id="allocation-rebalance-fresh"
+          inputMode="decimal"
+          className="w-40"
+          value={fresh}
+          onChange={(e) => setFresh(e.target.value)}
+          aria-invalid={!valid}
+        />
+      </div>
+      {counted && (
+        <Legend
+          items={[
+            { swatch: "held", label: t("allocation.legendHeld") },
+            { swatch: "in", label: t("allocation.legendBuy") },
+            { swatch: "out", label: t("allocation.legendSell") },
+            { swatch: "still", label: t("allocation.legendUntouched") },
+            { swatch: "target", label: t("allocation.legendTarget") },
+          ]}
+        />
+      )}
+      {counted && (
+        <p className="text-sm" data-testid="allocation-rebalance-total">
+          {counted.bought_minor === 0
+            ? t("allocation.rebalanceNothing")
+            : t("allocation.rebalanceTotal", {
+                sold: formatMinorCompact(counted.sold_minor, c),
+                bought: formatMinorCompact(counted.bought_minor, c),
+              })}
+          {counted.from_brokers_minor > 0 && ` ${t("allocation.rebalanceFromBrokers", { amount: formatMinorCompact(counted.from_brokers_minor, c) })}`}
+          {counted.amount_minor > 0 && ` ${t("allocation.rebalanceFresh", { amount: formatMinorCompact(counted.amount_minor, c) })}`}
+        </p>
+      )}
+      {counted && counted.sold_minor > 0 && <TaxLine r={counted} currency={c} />}
+      {q.isError && <p className="text-xs text-red-700 dark:text-red-400">{t("allocation.topUpFailed")}</p>}
+    </div>
+  );
+}
+
+// TaxLine is the estimate of the tax a rebalance's sales would bring, and
+// what it leaves out — or why there is none.
+function TaxLine({ r, currency }: { r: { tax_minor: number | null; tax_rate: string | null; long_holding_years: number; kinds: { sale: AllocationSale | null }[] }; currency: string }) {
+  const { t } = useTranslation();
+  if (!r.kinds.some((k) => k.sale !== null)) return null;
+  let text: string;
+  if (r.tax_rate === null) text = t("allocation.taxNoRules");
+  else if (r.tax_minor === null) text = t("allocation.taxUnknown");
+  else {
+    const rate = percent(r.tax_rate);
+    text =
+      r.long_holding_years > 0
+        ? t("allocation.taxLong", { tax: formatMinorCompact(r.tax_minor, currency), rate, years: r.long_holding_years })
+        : t("allocation.tax", { tax: formatMinorCompact(r.tax_minor, currency), rate });
+  }
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="allocation-tax">
+      {text}
+    </p>
   );
 }
 
@@ -324,6 +554,7 @@ function TopUp({
         : null,
     );
   }, [data, onPreview]);
+  useEffect(() => () => onPreview(null), [onPreview]);
   // The words say what was counted, not what is being typed.
   const counted = data && asked && !topUp.isPlaceholderData ? asked : null;
   return (
@@ -356,30 +587,15 @@ function TopUp({
       </div>
       {useFree && !brokersOk && <p className="text-xs text-red-700 dark:text-red-400">{t("allocation.topUpTooMuch", { amount: formatMinorCompact(free, c) })}</p>}
       {counted && (
-        <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="allocation-topup-legend">
-          <span className="flex items-center gap-1.5">
-            <span className={cn("inline-block h-2 w-4 rounded-sm", HELD)} />
-            {t("allocation.legendHeld")}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className={cn("inline-block h-3 w-4 rounded-sm", ADDED)} />
-            {t("allocation.legendIn")}
-          </span>
-          {counted.fromBrokers > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-4 rounded-sm border border-muted-foreground/60" style={{ backgroundImage: HATCH }} />
-              {t("allocation.legendOut")}
-            </span>
-          )}
-          <span className="flex items-center gap-1.5">
-            <span className={cn("inline-block h-2 w-4 rounded-sm", STILL)} />
-            {t("allocation.legendStill")}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-3 w-0.5 bg-foreground" />
-            {t("allocation.legendTarget")}
-          </span>
-        </p>
+        <Legend
+          items={[
+            { swatch: "held", label: t("allocation.legendHeld") },
+            { swatch: "in", label: t("allocation.legendIn") },
+            ...(counted.fromBrokers > 0 ? [{ swatch: "out" as const, label: t("allocation.legendOut") }] : []),
+            { swatch: "still", label: t("allocation.legendStill") },
+            { swatch: "target", label: t("allocation.legendTarget") },
+          ]}
+        />
       )}
       {counted && (
         <p className="text-sm" data-testid="allocation-topup-total">

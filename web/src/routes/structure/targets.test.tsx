@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { TargetsCard } from "./targets";
-import type { Allocation, AllocationRow } from "@/api/allocation";
+import type { Allocation, AllocationRebalance, AllocationRow } from "@/api/allocation";
 
 // openapi-fetch captures globalThis.fetch at import time, so the double is
 // installed with vi.hoisted, ahead of the imports.
@@ -12,6 +12,11 @@ const fetchMock = vi.hoisted(() => {
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
+
+// Radix Select scrolls its options into view, which jsdom lacks.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
 
 const row = (key: string, minor: number, share: string, target?: string, gap?: string, off?: number): AllocationRow => ({
   key, minor, share, target: target ?? null, gap: gap ?? null, off_minor: off ?? null,
@@ -32,11 +37,33 @@ const allocation: Allocation = {
   unpriced: 0, missing_rates: [],
 };
 
+// The note's family brought to 30/30/15/10/15/0 by buying and selling: shares
+// sell 150 000 out of a lot held long, the brokers' money goes in, deposits
+// wait for their end, bonds and metals buy.
+let rebalance: AllocationRebalance;
+const sale = (gain: number, free: number, known = true) => ({ known, gain_minor: gain, free_minor: free });
+function rebalanceOf(taxMinor: number | null, sharesSale = sale(92_857_14, 92_857_14)): AllocationRebalance {
+  return {
+    amount_minor: 0, worth_after_minor: 3_000_000_00, sold_minor: 150_000_00, from_brokers_minor: 300_000_00, bought_minor: 450_000_00,
+    tax_minor: taxMinor, tax_rate: "13", long_holding_years: 3,
+    kinds: [
+      { key: "shares", change_minor: -150_000_00, later_minor: 0, kept_minor: 0, share_after: "30.00", sale: sharesSale },
+      { key: "bonds", change_minor: 225_000_00, later_minor: 0, kept_minor: 0, share_after: "27.50", sale: null },
+      { key: "funds", change_minor: 0, later_minor: 0, kept_minor: 0, share_after: "15.00", sale: null },
+      { key: "metals", change_minor: 225_000_00, later_minor: 0, kept_minor: 0, share_after: "7.50", sale: null },
+      { key: "deposits", change_minor: 0, later_minor: 150_000_00, kept_minor: 0, share_after: "20.00", sale: null },
+      { key: "broker_cash", change_minor: -300_000_00, later_minor: 0, kept_minor: 0, share_after: "0.00", sale: null },
+    ],
+  };
+}
+
 function answer(role: string, a: Allocation) {
   fetchMock.mockImplementation((input: Request) => {
     const url = new URL(input.url);
     const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     if (url.pathname.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space: { id: "s", name: "S", base_currency: "RUB" } });
+    if (url.pathname.endsWith("/allocation/rebalance")) return json(rebalance);
+    if (url.pathname.endsWith("/allocation/mode")) return input.json().then((b: { mode: string }) => json({ ...a, mode: b.mode }));
     if (url.pathname.endsWith("/allocation/topup")) {
       const fromBrokers = Number(url.searchParams.get("from_brokers_minor") ?? 0);
       const free = fromBrokers > 0;
@@ -130,6 +157,61 @@ describe("TargetsCard", () => {
 
     fireEvent.change(screen.getByLabelText("Сколько взять у брокеров, RUB"), { target: { value: "500 000" } });
     expect(screen.getByText("У брокеров свободно только 300 000 ₽.")).toBeTruthy();
+  });
+
+  it("says what to sell and buy to the targets, and the sales' tax", async () => {
+    rebalance = rebalanceOf(0);
+    answer("viewer", { ...allocation, mode: "rebalance" });
+    show();
+    expect(norm((await screen.findByTestId("allocation-rebalance-total")).textContent)).toBe(
+      "Продать на 150 000 ₽, купить на 450 000 ₽. Из них 300 000 ₽ — свободные деньги у брокеров.",
+    );
+    expect(screen.queryByTestId("allocation-topup")).toBeNull();
+    expect(screen.getByText("Семья приходит к целям покупками и продажами.")).toBeTruthy();
+    const rows = within(screen.getByTestId("allocation-kinds")).getAllByTestId("allocation-row");
+    expect(norm(rows[0].textContent)).toMatch(
+      /−150 000 ₽ → 30 % \(было 35 %, цель 30 %\) — в целиПрибыль от продажи ≈ 92 857 ₽, из неё 92 857 ₽ — по бумагам дольше 3 лет, без налога\./,
+    );
+    expect(within(rows[0]).getByTestId("allocation-removed")).toBeTruthy();
+    expect(within(rows[1]).getByTestId("allocation-added")).toBeTruthy();
+    expect(norm(rows[4].textContent)).toMatch(/Выше цели на 150 000 ₽ — взять, когда вклады закончатся: досрочно теряются проценты\./);
+    expect(within(rows[4]).getByTestId("allocation-still")).toBeTruthy();
+    expect(norm(screen.getByTestId("allocation-tax").textContent)).toMatch(/^Налог с продаж ≈ 0 ₽ — оценка по ставке 13 %, бумаги дольше 3 лет — без налога\./);
+    const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/rebalance")).at(-1)!;
+    expect(asked.searchParams.get("amount_minor")).toBe("0");
+  });
+
+  it("claims no tax when a sold paper's cost is unknown", async () => {
+    rebalance = rebalanceOf(null, sale(0, 0, false));
+    answer("viewer", { ...allocation, mode: "rebalance" });
+    show();
+    expect(norm((await screen.findByTestId("allocation-tax")).textContent)).toBe("Налог с продаж не оценить: у части проданных бумаг нет цены покупки в рублях.");
+    const rows = within(screen.getByTestId("allocation-kinds")).getAllByTestId("allocation-row");
+    expect(norm(rows[0].textContent)).toMatch(/Прибыль от продажи не оценить/);
+  });
+
+  it("says a sale of metals or currency is not estimated, the brokers' money being no sale", async () => {
+    rebalance = rebalanceOf(0);
+    rebalance.kinds[3] = { ...rebalance.kinds[3], change_minor: -10_000_00, share_after: "0.00" };
+    answer("viewer", { ...allocation, mode: "rebalance" });
+    show();
+    await screen.findByTestId("allocation-rebalance-total");
+    const rows = within(screen.getByTestId("allocation-kinds")).getAllByTestId("allocation-row");
+    expect(within(rows[3]).getByTestId("allocation-note").textContent).toBe("Налог с этой продажи не оценивается: у валюты и металлов свои правила.");
+    expect(within(rows[5]).queryByTestId("allocation-note")).toBeNull();
+  });
+
+  it("lets an editor switch to buying and selling", async () => {
+    rebalance = rebalanceOf(0);
+    answer("editor", allocation);
+    show();
+    await screen.findByTestId("allocation-topup");
+    fireEvent.click(screen.getByRole("combobox", { name: "Как приходить к целям" }));
+    fireEvent.click(screen.getByRole("option", { name: "Покупками и продажами" }));
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT" && r.url.endsWith("/allocation/mode"));
+      expect(put).toBeTruthy();
+    });
   });
 
   it("states targets that add up to 100", async () => {

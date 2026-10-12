@@ -2645,6 +2645,21 @@ export interface components {
              * @description The worth with the new money in
              */
             worth_after_minor: number;
+            /**
+             * Format: int64
+             * @description What is sold now, every kind but the brokers' free money
+             */
+            sold_minor: number;
+            /**
+             * Format: int64
+             * @description Of the brokers' free money (kind broker_cash), what goes into the kinds bought
+             */
+            from_brokers_minor: number;
+            /**
+             * Format: int64
+             * @description What is bought: the new money, what is sold and the brokers' free money put in
+             */
+            bought_minor: number;
             /** @description Every kind of GET /allocation, in its order */
             kinds: components["schemas"]["AllocationMove"][];
             /**
