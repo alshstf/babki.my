@@ -19,6 +19,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/allocation"
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
@@ -80,6 +81,10 @@ type receipts interface {
 	All(ctx context.Context, spaceID uuid.UUID) ([]receipt.Receipt, error)
 }
 
+type allocations interface {
+	Settings(ctx context.Context, spaceID uuid.UUID) (allocation.Settings, error)
+}
+
 type budgets interface {
 	Limits(ctx context.Context, spaceID uuid.UUID) ([]budget.Limit, error)
 }
@@ -101,17 +106,18 @@ type Handler struct {
 	cards       cards
 	budgets     budgets
 	receipts    receipts
+	allocations allocations
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
 }
 
 func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events, pr prices, cats categories,
-	l loans, cc cards, b budgets, rc receipts, auth *family.Auth, sm *scs.SessionManager,
+	l loans, cc cards, b budgets, rc receipts, al allocations, auth *family.Auth, sm *scs.SessionManager,
 ) *Handler {
 	return &Handler{
 		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
-		loans: l, cards: cc, budgets: b, receipts: rc, auth: auth, sm: sm, now: time.Now,
+		loans: l, cards: cc, budgets: b, receipts: rc, allocations: al, auth: auth, sm: sm, now: time.Now,
 	}
 }
 
@@ -268,6 +274,12 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	for _, r := range receipts {
 		doc.Receipts = append(doc.Receipts, receipt.API(r))
 	}
+	targets, err := h.allocations.Settings(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	doc.Allocation.Mode = apitypes.AllocationMode(targets.Mode)
+	doc.Allocation.Kinds, doc.Allocation.Currencies = allocation.TargetsAPI(targets.Kinds), allocation.TargetsAPI(targets.Currencies)
 	return doc, nil
 }
 

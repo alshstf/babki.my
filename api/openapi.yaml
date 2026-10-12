@@ -18,6 +18,7 @@ tags:
   - { name: payouts, description: "What the family's papers will pay: coupons, repayments, redemptions, dividends (internal/payouts)." }
   - { name: recurring, description: "The family's regular payments found in the journal (internal/recurring)." }
   - { name: budget, description: "The family's budget: a spending category's limit a month, with a «копилка» by choice (internal/budget)." }
+  - { name: allocation, description: "The family's target shares of its worth, by kind of asset and by currency (decision Р-37, internal/allocation)." }
   - { name: receipts, description: "Cash receipts: the shop's document completing a row of the journal (internal/receipt)." }
   - { name: forecast, description: "The family's everyday money over the coming months (internal/forecast)." }
   - { name: credit-cards, description: "A credit card's terms and what is due on it (internal/creditcard)." }
@@ -45,6 +46,69 @@ paths:
               schema: { $ref: "#/components/schemas/Structure" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/allocation:
+    get:
+      tags: [allocation]
+      operationId: getAllocation
+      description: >-
+        The family's worth today against its targets (decision Р-37), at the liquid valuation (the one
+        in «Итого»). The worth the targets share out is GET /structure's assets less the base currency
+        on cards, current accounts and in cash (money to live on) and the brokers' accounts known only by
+        their balance (their kinds are not known); debts are not in it. By kind of asset — foreign
+        currency held as money (at a broker, in cash, on a current account) is foreign currency, metals
+        held as money are metals, deposits in any currency are deposits, the base currency at brokers is
+        money waiting to be put in — and by the currency each part is valued in, for the record only.
+      responses:
+        "200":
+          description: The worth against the targets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Allocation" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/allocation/targets:
+    put:
+      tags: [allocation]
+      operationId: setAllocationTargets
+      description: >-
+        States the targets of one dimension anew: none, or percents to hundredths that add up to 100,
+        each key once — a kind of `kinds`, or a currency of three capital letters. 400 otherwise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AllocationTargets" }
+      responses:
+        "200":
+          description: The worth against the targets as stated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Allocation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/allocation/mode:
+    put:
+      tags: [allocation]
+      operationId: setAllocationMode
+      description: How the family brings its worth to the targets — by top-ups only, or by buying and selling.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { $ref: "#/components/schemas/AllocationMode" }
+      responses:
+        "200":
+          description: The worth against the targets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Allocation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/loan:
     get:
       tags: [loans]
@@ -3088,7 +3152,7 @@ components:
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     SpaceExport:
       type: object
-      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts]
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts, allocation]
       properties:
         format: { type: string, enum: [babki.my/space-export] }
         version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
@@ -3121,6 +3185,14 @@ components:
           type: array
           description: "The budget's limits, by category and the month each runs from (GET /budget/limits)"
           items: { $ref: "#/components/schemas/BudgetLimit" }
+        allocation:
+          description: "The target shares of the worth and how the family comes to them (decision Р-37)"
+          type: object
+          required: [mode, kinds, currencies]
+          properties:
+            mode: { $ref: "#/components/schemas/AllocationMode" }
+            kinds: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
+            currencies: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
         receipts:
           type: array
           description: "The cash receipts, by their time; operation_id names the row each completes"
@@ -3376,6 +3448,45 @@ components:
       properties:
         key: { type: string, description: "The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN" }
         minor: { type: integer, format: int64, description: "In minor units of the base currency" }
+    AllocationMode:
+      type: string
+      enum: [topup, rebalance]
+      description: "topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets"
+    AllocationRow:
+      type: object
+      required: [key, minor, share, target, gap, off_minor]
+      properties:
+        key: { type: string, description: "A kind of asset (shares, bonds, funds, foreign_currency, metals, deposits, crypto, other, broker_cash) or a currency" }
+        minor: { type: integer, format: int64, description: "Its part of the worth, in the base currency" }
+        share: { type: string, description: "Decimal: its share of the worth, percent, to hundredths" }
+        target: { type: string, nullable: true, description: "Decimal: its target, percent; null when none is set" }
+        gap: { type: string, nullable: true, description: "Decimal: share less target, in points; null without a target" }
+        off_minor: { type: integer, format: int64, nullable: true, description: "What its part is above (positive) or below its target, in the base currency; null without a target" }
+    Allocation:
+      type: object
+      required: [base_currency, mode, worth_minor, everyday_minor, unsplit_minor, kinds, currencies, unpriced, missing_rates]
+      properties:
+        base_currency: { type: string }
+        mode: { $ref: "#/components/schemas/AllocationMode" }
+        worth_minor: { type: integer, format: int64, description: "What the targets share out" }
+        everyday_minor: { type: integer, format: int64, description: "The base currency on cards, current accounts and in cash: left out of the targets" }
+        unsplit_minor: { type: integer, format: int64, description: "Brokers' accounts known only by their balance: left out, their kinds not known" }
+        kinds: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "Every kind held or targeted, in the kinds' order" }
+        currencies: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "Every currency held or targeted, the base currency first, then largest first" }
+        unpriced: { type: integer, description: "Papers left out for want of a price" }
+        missing_rates: { type: array, items: { type: string } }
+    AllocationTarget:
+      type: object
+      required: [key, percent]
+      properties:
+        key: { type: string }
+        percent: { type: string, description: "Decimal, 0 to 100, to hundredths" }
+    AllocationTargets:
+      type: object
+      required: [dimension, targets]
+      properties:
+        dimension: { type: string, enum: [kind, currency] }
+        targets: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
     Structure:
       type: object
       required: [base_currency, valuation, assets_minor, debts_minor, by_class, by_currency, by_account, by_country, unpriced, missing_rates]

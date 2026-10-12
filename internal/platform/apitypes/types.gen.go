@@ -103,6 +103,42 @@ func (e AccountWithBalanceCountedBy) Valid() bool {
 	}
 }
 
+// Defines values for AllocationMode.
+const (
+	Rebalance AllocationMode = "rebalance"
+	Topup     AllocationMode = "topup"
+)
+
+// Valid indicates whether the value is a known member of the AllocationMode enum.
+func (e AllocationMode) Valid() bool {
+	switch e {
+	case Rebalance:
+		return true
+	case Topup:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AllocationTargetsDimension.
+const (
+	AllocationTargetsDimensionCurrency AllocationTargetsDimension = "currency"
+	AllocationTargetsDimensionKind     AllocationTargetsDimension = "kind"
+)
+
+// Valid indicates whether the value is a known member of the AllocationTargetsDimension enum.
+func (e AllocationTargetsDimension) Valid() bool {
+	switch e {
+	case AllocationTargetsDimensionCurrency:
+		return true
+	case AllocationTargetsDimensionKind:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BenchmarkCode.
 const (
 	MCFTR   BenchmarkCode = "MCFTR"
@@ -1583,6 +1619,74 @@ type AccountWithBalance struct {
 
 // AccountWithBalanceCountedBy Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
 type AccountWithBalanceCountedBy string
+
+// Allocation defines model for Allocation.
+type Allocation struct {
+	BaseCurrency string `json:"base_currency"`
+
+	// Currencies Every currency held or targeted, the base currency first, then largest first
+	Currencies []AllocationRow `json:"currencies"`
+
+	// EverydayMinor The base currency on cards, current accounts and in cash: left out of the targets
+	EverydayMinor int64 `json:"everyday_minor"`
+
+	// Kinds Every kind held or targeted, in the kinds' order
+	Kinds        []AllocationRow `json:"kinds"`
+	MissingRates []string        `json:"missing_rates"`
+
+	// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
+	Mode AllocationMode `json:"mode"`
+
+	// Unpriced Papers left out for want of a price
+	Unpriced int `json:"unpriced"`
+
+	// UnsplitMinor Brokers' accounts known only by their balance: left out, their kinds not known
+	UnsplitMinor int64 `json:"unsplit_minor"`
+
+	// WorthMinor What the targets share out
+	WorthMinor int64 `json:"worth_minor"`
+}
+
+// AllocationMode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
+type AllocationMode string
+
+// AllocationRow defines model for AllocationRow.
+type AllocationRow struct {
+	// Gap Decimal: share less target, in points; null without a target
+	Gap nullable.Nullable[string] `json:"gap"`
+
+	// Key A kind of asset (shares, bonds, funds, foreign_currency, metals, deposits, crypto, other, broker_cash) or a currency
+	Key string `json:"key"`
+
+	// Minor Its part of the worth, in the base currency
+	Minor int64 `json:"minor"`
+
+	// OffMinor What its part is above (positive) or below its target, in the base currency; null without a target
+	OffMinor nullable.Nullable[int64] `json:"off_minor"`
+
+	// Share Decimal: its share of the worth, percent, to hundredths
+	Share string `json:"share"`
+
+	// Target Decimal: its target, percent; null when none is set
+	Target nullable.Nullable[string] `json:"target"`
+}
+
+// AllocationTarget defines model for AllocationTarget.
+type AllocationTarget struct {
+	Key string `json:"key"`
+
+	// Percent Decimal, 0 to 100, to hundredths
+	Percent string `json:"percent"`
+}
+
+// AllocationTargets defines model for AllocationTargets.
+type AllocationTargets struct {
+	Dimension AllocationTargetsDimension `json:"dimension"`
+	Targets   []AllocationTarget         `json:"targets"`
+}
+
+// AllocationTargetsDimension defines model for AllocationTargets.Dimension.
+type AllocationTargetsDimension string
 
 // Arrival defines model for Arrival.
 type Arrival struct {
@@ -4093,6 +4197,15 @@ type SetupStatus struct {
 type SpaceExport struct {
 	Accounts []ExportAccount `json:"accounts"`
 
+	// Allocation The target shares of the worth and how the family comes to them (decision Р-37)
+	Allocation struct {
+		Currencies []AllocationTarget `json:"currencies"`
+		Kinds      []AllocationTarget `json:"kinds"`
+
+		// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
+		Mode AllocationMode `json:"mode"`
+	} `json:"allocation"`
+
 	// BudgetLimits The budget's limits, by category and the month each runs from (GET /budget/limits)
 	BudgetLimits []BudgetLimit `json:"budget_limits"`
 
@@ -4748,6 +4861,12 @@ type GetAccountReturnParams struct {
 	To string `form:"to" json:"to"`
 }
 
+// SetAllocationModeJSONBody defines parameters for SetAllocationMode.
+type SetAllocationModeJSONBody struct {
+	// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
+	Mode AllocationMode `json:"mode"`
+}
+
 // GetBudgetParams defines parameters for GetBudget.
 type GetBudgetParams struct {
 	// Month The month, YYYY-MM
@@ -4947,6 +5066,12 @@ type RecordLoanPaymentJSONRequestBody = LoanPaymentRequest
 
 // RecordLoanPrepaymentJSONRequestBody defines body for RecordLoanPrepayment for application/json ContentType.
 type RecordLoanPrepaymentJSONRequestBody = LoanPrepaymentRequest
+
+// SetAllocationModeJSONRequestBody defines body for SetAllocationMode for application/json ContentType.
+type SetAllocationModeJSONRequestBody SetAllocationModeJSONBody
+
+// SetAllocationTargetsJSONRequestBody defines body for SetAllocationTargets for application/json ContentType.
+type SetAllocationTargetsJSONRequestBody = AllocationTargets
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
