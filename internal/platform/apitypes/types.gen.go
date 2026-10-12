@@ -1477,6 +1477,24 @@ func (e GetAllocationParamsValuation) Valid() bool {
 	}
 }
 
+// Defines values for GetAllocationRebalanceParamsValuation.
+const (
+	GetAllocationRebalanceParamsValuationFull   GetAllocationRebalanceParamsValuation = "full"
+	GetAllocationRebalanceParamsValuationLiquid GetAllocationRebalanceParamsValuation = "liquid"
+)
+
+// Valid indicates whether the value is a known member of the GetAllocationRebalanceParamsValuation enum.
+func (e GetAllocationRebalanceParamsValuation) Valid() bool {
+	switch e {
+	case GetAllocationRebalanceParamsValuationFull:
+		return true
+	case GetAllocationRebalanceParamsValuationLiquid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetAllocationTopUpParamsValuation.
 const (
 	GetAllocationTopUpParamsValuationFull   GetAllocationTopUpParamsValuation = "full"
@@ -1717,6 +1735,46 @@ type AllocationChange struct {
 // AllocationMode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 type AllocationMode string
 
+// AllocationMove defines model for AllocationMove.
+type AllocationMove struct {
+	// ChangeMinor Bought now (above zero) or sold now (below zero); 0 for a kind at its target, without one, or that cannot be sold now
+	ChangeMinor int64 `json:"change_minor"`
+
+	// KeptMinor Above the target, yet cannot be sold now: frozen papers valued in full; 0 otherwise
+	KeptMinor int64  `json:"kept_minor"`
+	Key       string `json:"key"`
+
+	// LaterMinor Deposits above their target: what to take out as they end; 0 otherwise
+	LaterMinor int64 `json:"later_minor"`
+
+	// Sale A kind of papers (shares, bonds, funds) sold: what selling is estimated to gain; null otherwise — money, currency and metals held as money are not estimated
+	Sale nullable.Nullable[AllocationSale] `json:"sale"`
+
+	// ShareAfter Decimal: its share of the worth once done, percent, to hundredths
+	ShareAfter string `json:"share_after"`
+}
+
+// AllocationRebalance defines model for AllocationRebalance.
+type AllocationRebalance struct {
+	// AmountMinor New money
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Kinds Every kind of GET /allocation, in its order
+	Kinds []AllocationMove `json:"kinds"`
+
+	// LongHoldingYears A lot held longer than this many years gains free of the tax; 0: no such rule
+	LongHoldingYears int `json:"long_holding_years"`
+
+	// TaxMinor Estimate of the tax the sales of papers would bring, in the base currency: tax_rate on the gain not freed by long holding, gains and losses of all kinds offset. An estimate, not a broker's figure: which lots a broker sells depends on the order; the year's other sales, the higher band and commissions are left out. Null when a sold lot's cost cannot be struck in the base currency (see a kind's sale.known) or the residency's rules give no estimate (tax_rate null); 0 when nothing gains or nothing is sold.
+	TaxMinor nullable.Nullable[int64] `json:"tax_minor"`
+
+	// TaxRate Decimal, percent: the rate the estimate takes; null when the space's tax residency has no estimate
+	TaxRate nullable.Nullable[string] `json:"tax_rate"`
+
+	// WorthAfterMinor The worth with the new money in
+	WorthAfterMinor int64 `json:"worth_after_minor"`
+}
+
 // AllocationRow defines model for AllocationRow.
 type AllocationRow struct {
 	// Gap Decimal: share less target, in points; null without a target
@@ -1736,6 +1794,18 @@ type AllocationRow struct {
 
 	// Target Decimal: its target, percent; null when none is set
 	Target nullable.Nullable[string] `json:"target"`
+}
+
+// AllocationSale defines model for AllocationSale.
+type AllocationSale struct {
+	// FreeMinor Of the gain, what lots held longer than long_holding_years gain — free of the tax
+	FreeMinor int64 `json:"free_minor"`
+
+	// GainMinor What the sold papers gain over their cost, signed, in the base currency: each lot's cost at its purchase's rate, the earliest lots first
+	GainMinor int64 `json:"gain_minor"`
+
+	// Known False when a sold lot's cost cannot be struck in the base currency (no date to take the rate of, no rate); the figures are then 0 and claim nothing
+	Known bool `json:"known"`
 }
 
 // AllocationTarget defines model for AllocationTarget.
@@ -4976,6 +5046,18 @@ type SetAllocationModeJSONBody struct {
 	// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 	Mode AllocationMode `json:"mode"`
 }
+
+// GetAllocationRebalanceParams defines parameters for GetAllocationRebalance.
+type GetAllocationRebalanceParams struct {
+	// AmountMinor New money to put in too, in the base currency; 0 when absent
+	AmountMinor *int64 `form:"amount_minor,omitempty" json:"amount_minor,omitempty"`
+
+	// Valuation Papers at the liquid (when absent) or the full valuation (decision Р-11)
+	Valuation *GetAllocationRebalanceParamsValuation `form:"valuation,omitempty" json:"valuation,omitempty"`
+}
+
+// GetAllocationRebalanceParamsValuation defines parameters for GetAllocationRebalance.
+type GetAllocationRebalanceParamsValuation string
 
 // GetAllocationTopUpParams defines parameters for GetAllocationTopUp.
 type GetAllocationTopUpParams struct {

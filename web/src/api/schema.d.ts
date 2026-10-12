@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/allocation/rebalance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What bringing the worth to the targets by buying and selling does (variant В of decision Р-37): each kind above its target sells down to it as far as it can be sold now — deposits only as they end, a frozen paper valued in full not at all — and the money from the sales with the new money buys the kinds below their target, in proportion to what each lacks. A kind with no target is neither sold nor bought. With the estimate of the tax the sales of papers would bring. 400 without targets by kind or with new money below zero. */
+        get: operations["getAllocationRebalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/targets": {
         parameters: {
             query?: never;
@@ -2617,6 +2634,65 @@ export interface components {
             /** @description Decimal: its share of the worth after, percent, to hundredths */
             share_after: string;
         };
+        AllocationRebalance: {
+            /**
+             * Format: int64
+             * @description New money
+             */
+            amount_minor: number;
+            /**
+             * Format: int64
+             * @description The worth with the new money in
+             */
+            worth_after_minor: number;
+            /** @description Every kind of GET /allocation, in its order */
+            kinds: components["schemas"]["AllocationMove"][];
+            /**
+             * Format: int64
+             * @description Estimate of the tax the sales of papers would bring, in the base currency: tax_rate on the gain not freed by long holding, gains and losses of all kinds offset. An estimate, not a broker's figure: which lots a broker sells depends on the order; the year's other sales, the higher band and commissions are left out. Null when a sold lot's cost cannot be struck in the base currency (see a kind's sale.known) or the residency's rules give no estimate (tax_rate null); 0 when nothing gains or nothing is sold.
+             */
+            tax_minor: number | null;
+            /** @description Decimal, percent: the rate the estimate takes; null when the space's tax residency has no estimate */
+            tax_rate: string | null;
+            /** @description A lot held longer than this many years gains free of the tax; 0: no such rule */
+            long_holding_years: number;
+        };
+        AllocationMove: {
+            key: string;
+            /**
+             * Format: int64
+             * @description Bought now (above zero) or sold now (below zero); 0 for a kind at its target, without one, or that cannot be sold now
+             */
+            change_minor: number;
+            /**
+             * Format: int64
+             * @description Deposits above their target: what to take out as they end; 0 otherwise
+             */
+            later_minor: number;
+            /**
+             * Format: int64
+             * @description Above the target, yet cannot be sold now: frozen papers valued in full; 0 otherwise
+             */
+            kept_minor: number;
+            /** @description Decimal: its share of the worth once done, percent, to hundredths */
+            share_after: string;
+            /** @description A kind of papers (shares, bonds, funds) sold: what selling is estimated to gain; null otherwise — money, currency and metals held as money are not estimated */
+            sale: components["schemas"]["AllocationSale"] | null;
+        };
+        AllocationSale: {
+            /** @description False when a sold lot's cost cannot be struck in the base currency (no date to take the rate of, no rate); the figures are then 0 and claim nothing */
+            known: boolean;
+            /**
+             * Format: int64
+             * @description What the sold papers gain over their cost, signed, in the base currency: each lot's cost at its purchase's rate, the earliest lots first
+             */
+            gain_minor: number;
+            /**
+             * Format: int64
+             * @description Of the gain, what lots held longer than long_holding_years gain — free of the tax
+             */
+            free_minor: number;
+        };
         AllocationTarget: {
             key: string;
             /** @description Decimal, 0 to 100, to hundredths */
@@ -4853,6 +4929,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AllocationTopUp"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getAllocationRebalance: {
+        parameters: {
+            query?: {
+                /** @description New money to put in too, in the base currency; 0 when absent */
+                amount_minor?: number;
+                /** @description Papers at the liquid (when absent) or the full valuation (decision Р-11) */
+                valuation?: "liquid" | "full";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What to sell and buy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationRebalance"];
                 };
             };
             400: components["responses"]["Error"];

@@ -57,8 +57,10 @@ type View struct {
 	Worth             int64
 	Everyday, Unsplit int64
 	Kinds, Currencies []Row
-	Unpriced          int
-	MissingRates      []string
+	// Unsellable is, by kind, what cannot be sold now (structure.Unsellable).
+	Unsellable   map[string]int64
+	Unpriced     int
+	MissingRates []string
 }
 
 var hundred = decimal.NewFromInt(100)
@@ -118,10 +120,14 @@ func view(s structure.Structure, mode Mode, kinds, currencies []Target) View {
 	for _, k := range structure.Kinds {
 		order = append(order, string(k))
 	}
+	unsellable := map[string]int64{}
+	for _, u := range s.Unsellable {
+		unsellable[u.Key] = u.Minor
+	}
 	return View{
 		BaseCurrency: s.BaseCurrency, Mode: mode, Worth: s.Targets, Everyday: s.Everyday, Unsplit: s.Unsplit,
 		Kinds:      rows(s.Targets, s.ByKind, kinds, order),
 		Currencies: rows(s.Targets, s.ByTargetCurrency, currencies, []string{s.BaseCurrency}),
-		Unpriced:   s.Unpriced, MissingRates: s.MissingRates,
+		Unsellable: unsellable, Unpriced: s.Unpriced, MissingRates: s.MissingRates,
 	}
 }

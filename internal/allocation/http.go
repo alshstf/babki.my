@@ -32,6 +32,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleView)))))
 	srv.Mount("GET /api/v1/allocation/topup", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleTopUp)))))
+	srv.Mount("GET /api/v1/allocation/rebalance", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleRebalance)))))
 	srv.Mount("PUT /api/v1/allocation/targets", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleTargets)))))
 	srv.Mount("PUT /api/v1/allocation/mode", h.sm.LoadAndSave(h.auth.RequireAuth(
@@ -109,6 +111,45 @@ func (h *Handler) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range changes {
 		out.Kinds = append(out.Kinds, apitypes.AllocationChange{Key: c.Key, ChangeMinor: c.Minor, ShareAfter: c.ShareAfter.StringFixed(2)})
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleRebalance(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var amount int64
+	if raw := r.URL.Query().Get("amount_minor"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, "amount_minor must be a whole number")
+			return
+		}
+		amount = n
+	}
+	v, moves, est, rules, err := h.svc.Rebalancing(r.Context(), p.SpaceID, valuationOf(r), amount)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.AllocationRebalance{
+		AmountMinor: amount, WorthAfterMinor: v.Worth + amount, Kinds: make([]apitypes.AllocationMove, 0, len(moves)),
+		TaxMinor: nullable.NewNullNullable[int64](), TaxRate: nullable.NewNullNullable[string](), LongHoldingYears: rules.LongHoldingYears,
+	}
+	if est.Tax != nil {
+		out.TaxMinor = nullable.NewNullableWithValue(*est.Tax)
+	}
+	if rules.SaleTaxBP > 0 {
+		out.TaxRate = nullable.NewNullableWithValue(decimal.New(int64(rules.SaleTaxBP), -2).String())
+	}
+	for _, m := range moves {
+		move := apitypes.AllocationMove{
+			Key: m.Key, ChangeMinor: m.Minor, LaterMinor: m.Later, KeptMinor: m.Kept, ShareAfter: m.ShareAfter.StringFixed(2),
+			Sale: nullable.NewNullNullable[apitypes.AllocationSale](),
+		}
+		if sale, ok := est.Sales[m.Key]; ok {
+			move.Sale = nullable.NewNullableWithValue(apitypes.AllocationSale{Known: sale.Known, GainMinor: sale.Gain, FreeMinor: sale.Free})
+		}
+		out.Kinds = append(out.Kinds, move)
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }
