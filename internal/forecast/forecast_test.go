@@ -2,6 +2,7 @@ package forecast
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/recurring"
+	"babki.my/babki/internal/valuables"
 )
 
 func d(s string) time.Time {
@@ -287,5 +289,40 @@ func TestTheBudgetIsSpentWeekByWeek(t *testing.T) {
 	}
 	if without.Lowest.Balance-f.Lowest.Balance != 18_000_00 {
 		t.Errorf("lowest with the budget %d, without %d: want 18 000 apart", f.Lowest.Balance, without.Lowest.Balance)
+	}
+}
+
+// A safe box rented till 20.11 at 24 000 a year: the renewal on its day. A
+// custody whose term passed on 01.10 at 1 500 a month: expected today, then
+// on the 1st. No term, or the journal already repeating about the fee yearly:
+// nothing.
+func TestAStoragesFeeComesOnItsRenewal(t *testing.T) {
+	today, end := d("2026-10-13"), d("2027-01-11")
+	at := func(until string, fee int64, period valuables.FeePeriod) valuables.StorageAt {
+		st := valuables.StorageAt{AccountID: uuid.New(), Name: "Ячейка ВТБ", Currency: "RUB", Storage: valuables.Storage{Place: valuables.PlaceSafeBox, FeeMinor: &fee, FeePeriod: &period}}
+		if until != "" {
+			u := d(until)
+			st.Storage.Until = &u
+		}
+		return st
+	}
+	box := fees(at("2026-11-20", 24_000_00, valuables.FeeYear), nil, today, end)
+	if len(box) != 1 || !box[0].On.Equal(d("2026-11-20")) || box[0].Amount != -24_000_00 || box[0].Kind != KindStorage || box[0].Overdue {
+		t.Errorf("box = %+v", box)
+	}
+	custody := fees(at("2026-10-01", 1_500_00, valuables.FeeMonth), nil, today, end)
+	var days []string
+	for _, e := range custody {
+		days = append(days, e.On.Format(time.DateOnly))
+	}
+	if len(custody) != 4 || !custody[0].Overdue || fmt.Sprint(days) != "[2026-10-13 2026-11-01 2026-12-01 2027-01-01]" {
+		t.Errorf("custody = %v", days)
+	}
+	if got := fees(at("", 24_000_00, valuables.FeeYear), nil, today, end); got != nil {
+		t.Errorf("no term = %+v", got)
+	}
+	journal := []recurring.Payment{{Name: "ВТБ", Cadence: recurring.Yearly, Amount: -23_000_00, Currency: "RUB", Next: d("2026-11-19")}}
+	if got := fees(at("2026-11-20", 24_000_00, valuables.FeeYear), journal, today, end); got != nil {
+		t.Errorf("in the journal = %+v", got)
 	}
 }

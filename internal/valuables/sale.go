@@ -208,11 +208,12 @@ func (s *Service) SoldIn(ctx context.Context, spaceID uuid.UUID, year int) ([]So
 	return out, nil
 }
 
-// StorageAt is a valuables account's storage with the account's name and
-// personal owner, for reminders.
+// StorageAt is a valuables account's storage with the account's name,
+// currency — the fee's — and personal owner, for reminders and the forecast.
 type StorageAt struct {
 	AccountID uuid.UUID
 	Name      string
+	Currency  string
 	Owner     *uuid.UUID
 	Storage   Storage
 }
@@ -236,7 +237,7 @@ func (s *Service) Storages(ctx context.Context, spaceID uuid.UUID) ([]StorageAt,
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, StorageAt{AccountID: a.ID, Name: a.Name, Owner: a.OwnerUserID, Storage: st.Storage})
+		out = append(out, StorageAt{AccountID: a.ID, Name: a.Name, Currency: a.Currency, Owner: a.OwnerUserID, Storage: st.Storage})
 	}
 	return out, nil
 }

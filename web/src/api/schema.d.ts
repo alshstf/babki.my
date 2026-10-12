@@ -3918,10 +3918,10 @@ export interface components {
             /** @description The payee, or the loan account's name; empty for the budget's */
             name: string;
             /**
-             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days
+             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period
              * @enum {string}
              */
-            kind: "regular" | "loan" | "cashback" | "budget";
+            kind: "regular" | "loan" | "cashback" | "budget" | "storage";
             /**
              * Format: uuid
              * @description The account it moves; null for the budget's, which is no account's
