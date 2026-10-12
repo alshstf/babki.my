@@ -25,11 +25,11 @@ type Store struct{ db db.Executor }
 
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
-const cols = `id, space_id, parent_id, kind, name, archived, position, created_at, updated_at`
+const cols = `id, space_id, parent_id, kind, name, archived, position, tax_mark, created_at, updated_at`
 
 func scan(row pgx.Row) (Category, error) {
 	var c Category
-	err := row.Scan(&c.ID, &c.SpaceID, &c.ParentID, &c.Kind, &c.Name, &c.Archived, &c.Position, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.SpaceID, &c.ParentID, &c.Kind, &c.Name, &c.Archived, &c.Position, &c.TaxMark, &c.CreatedAt, &c.UpdatedAt)
 	return c, err
 }
 
@@ -69,8 +69,8 @@ func (s *Store) ensureDefaults(ctx context.Context, spaceID uuid.UUID) error {
 	for _, kind := range []Kind{KindExpense, KindIncome} {
 		for i, sd := range defaults[kind] {
 			var parent uuid.UUID
-			if err := tx.QueryRow(ctx, `INSERT INTO categories (space_id, kind, name, position)
-				VALUES ($1, $2, $3, $4) RETURNING id`, spaceID, kind, sd.name, i).Scan(&parent); err != nil {
+			if err := tx.QueryRow(ctx, `INSERT INTO categories (space_id, kind, name, position, tax_mark)
+				VALUES ($1, $2, $3, $4, NULLIF($5, '')) RETURNING id`, spaceID, kind, sd.name, i, string(sd.tax)).Scan(&parent); err != nil {
 				return fmt.Errorf("category: seed %q: %w", sd.name, err)
 			}
 			for j, child := range sd.children {
@@ -168,6 +168,8 @@ type Update struct {
 	ParentID **uuid.UUID
 	Archived *bool
 	Position *int
+	// TaxMark: nil leaves it, a pointer to nil takes it off.
+	TaxMark **TaxMark
 }
 
 // Update applies upd. A category with others under it cannot itself go under
@@ -202,6 +204,13 @@ func (s *Store) Update(ctx context.Context, spaceID, id uuid.UUID, upd Update) (
 			}
 		}
 	}
+	taxMark := cur.TaxMark
+	if upd.TaxMark != nil {
+		taxMark = *upd.TaxMark
+		if taxMark != nil && (cur.Kind != KindIncome || (*taxMark != TaxWages && *taxMark != TaxInterest)) {
+			return Category{}, fmt.Errorf("%w: an earning category is marked for tax as wages or interest", family.ErrValidation)
+		}
+	}
 	archived, position := cur.Archived, cur.Position
 	if upd.Archived != nil {
 		archived = *upd.Archived
@@ -216,8 +225,8 @@ func (s *Store) Update(ctx context.Context, spaceID, id uuid.UUID, upd Update) (
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	c, err := scan(tx.QueryRow(ctx, `
-		UPDATE categories SET name = $3, parent_id = $4, archived = $5, position = $6, updated_at = now()
-		WHERE space_id = $1 AND id = $2 RETURNING `+cols, spaceID, id, name, parentID, archived, position))
+		UPDATE categories SET name = $3, parent_id = $4, archived = $5, position = $6, tax_mark = $7, updated_at = now()
+		WHERE space_id = $1 AND id = $2 RETURNING `+cols, spaceID, id, name, parentID, archived, position, taxMark))
 	if err != nil {
 		return Category{}, mapWriteError("update", err)
 	}

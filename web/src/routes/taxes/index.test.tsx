@@ -24,6 +24,7 @@ const year: TaxYear = {
     {
       user_id: "u-alex", name: "Алекс", base_minor: 4_000_000_00, tax_minor: 552_000_00, by_agents_minor: 520_000_00, withheld_minor: 6_500_00,
       credit_minor: 0, to_pay_minor: 32_000_00, refund_minor: 0, unvalued: 2, interest_minor: 400_000_00, interest_free_minor: 210_000_00, by_notice_minor: 28_500_00,
+      wages_net_minor: 0, wages_minor: 0, wages_tax_minor: 0, wages_withheld_minor: 0, wages_to_pay_minor: 0, employers: [],
       accounts: [
         { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2 },
         { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 },
@@ -33,6 +34,8 @@ const year: TaxYear = {
     {
       user_id: "u-maria", name: "Мария", base_minor: 100_000_00, tax_minor: 13_000_00, by_agents_minor: 21_000_00, withheld_minor: 0,
       credit_minor: 0, to_pay_minor: 0, refund_minor: 8_000_00, unvalued: 0, accounts: [], interest_minor: 0, interest_free_minor: 210_000_00, by_notice_minor: 0,
+      wages_net_minor: 87_000_00, wages_minor: 100_000_00, wages_tax_minor: 13_000_00, wages_withheld_minor: 13_000_00, wages_to_pay_minor: 0,
+      employers: [{ name: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00 }],
     },
   ],
 };
@@ -93,6 +96,11 @@ describe("TaxesPage", () => {
     expect(rows).toHaveLength(2);
     expect(within(people[1]).queryByTestId("tax-interest")).toBeNull();
     expect(norm(screen.getByTestId("tax-by-balance").textContent)).toMatch(/ведутся остатком: 1 —/);
+    // Maria's wages, reckoned from what reached her account.
+    expect(norm(within(people[1]).getByTestId("tax-wages").textContent)).toBe(
+      "Зарплата: на руки 87 000,00 ₽, до налога ≈ 100 000,00 ₽ — расчёт программы по сумме на руки. Налог по шкале ≈ 13 000,00 ₽, работодатели удержали ≈ 13 000,00 ₽.",
+    );
+    expect(within(people[0]).queryByTestId("tax-wages")).toBeNull();
   });
 
   it("asks whose a shared broker's account is for tax", async () => {

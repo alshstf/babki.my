@@ -28,10 +28,10 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-const food: Category = { id: "c-food", kind: "expense", name: "Продукты", parent_id: null, archived: false, position: 1 };
-const transport: Category = { id: "c-tr", kind: "expense", name: "Транспорт", parent_id: null, archived: false, position: 2 };
-const taxi: Category = { id: "c-taxi", kind: "expense", name: "Такси", parent_id: "c-tr", archived: false, position: 1 };
-const salary: Category = { id: "c-salary", kind: "income", name: "Зарплата", parent_id: null, archived: false, position: 1 };
+const food: Category = { id: "c-food", kind: "expense", name: "Продукты", parent_id: null, archived: false, position: 1, tax_mark: null };
+const transport: Category = { id: "c-tr", kind: "expense", name: "Транспорт", parent_id: null, archived: false, position: 2, tax_mark: null };
+const taxi: Category = { id: "c-taxi", kind: "expense", name: "Такси", parent_id: "c-tr", archived: false, position: 1, tax_mark: null };
+const salary: Category = { id: "c-salary", kind: "income", name: "Зарплата", parent_id: null, archived: false, position: 1, tax_mark: null };
 const CATEGORIES = [food, transport, taxi, salary];
 
 const card: AccountWithBalance = {

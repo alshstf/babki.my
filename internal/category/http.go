@@ -46,9 +46,13 @@ func toAPI(c Category) apitypes.Category {
 	out := apitypes.Category{
 		Id: c.ID, Kind: apitypes.CategoryKind(c.Kind), Name: c.Name,
 		Archived: c.Archived, Position: c.Position, ParentId: nullable.NewNullNullable[uuid.UUID](),
+		TaxMark: nullable.NewNullNullable[apitypes.CategoryTaxMark](),
 	}
 	if c.ParentID != nil {
 		out.ParentId = nullable.NewNullableWithValue(*c.ParentID)
+	}
+	if c.TaxMark != nil {
+		out.TaxMark = nullable.NewNullableWithValue(apitypes.CategoryTaxMark(*c.TaxMark))
 	}
 	return out
 }
@@ -96,6 +100,14 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upd := Update{Name: req.Name, Archived: req.Archived, Position: req.Position}
+	if req.TaxMark.IsSpecified() {
+		var mark *TaxMark
+		if !req.TaxMark.IsNull() {
+			m := TaxMark(req.TaxMark.MustGet())
+			mark = &m
+		}
+		upd.TaxMark = &mark
+	}
 	if req.ParentId.IsSpecified() {
 		var parent *uuid.UUID
 		if !req.ParentId.IsNull() {

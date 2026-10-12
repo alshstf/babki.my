@@ -70,6 +70,7 @@ function cat(name: string, overrides: Partial<Category> = {}): Category {
     kind: "expense",
     name,
     parent_id: null,
+    tax_mark: null,
     archived: false,
     position: seq,
     ...overrides,
@@ -189,6 +190,29 @@ describe("CategoriesPage", () => {
     const dialog = await screen.findByTestId("category-dialog");
     expect(within(dialog).queryByRole("combobox", { name: "Где" })).toBeNull();
     expect(within(dialog).getByText(/остаётся на верхнем уровне/)).toBeInTheDocument();
+  });
+
+  it("marks an earning category for the year's tax; a spending one is not offered it", async () => {
+    Element.prototype.scrollIntoView = () => {};
+    serve([
+      { path: "/api/v1/categories", body: [home, rent, food, salary] },
+      { path: "/api/v1/categories/", method: "PATCH", body: { ...salary, tax_mark: "wages" } },
+    ]);
+    renderPage();
+
+    await openActions("Продукты");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Изменить" }));
+    expect(within(await screen.findByTestId("category-dialog")).queryByLabelText("Для налога за год")).toBeNull();
+    fireEvent.click(within(screen.getByTestId("category-dialog")).getByRole("button", { name: "Отмена" }));
+
+    await openActions("Зарплата");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Изменить" }));
+    const dialog = await screen.findByTestId("category-dialog");
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Для налога за год" }));
+    fireEvent.click(await screen.findByRole("option", { name: "зарплата" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+    await waitFor(async () => expect(await sent("PATCH")).toHaveLength(1));
+    expect((await sent("PATCH"))[0]).toEqual({ path: `/api/v1/categories/${salary.id}`, body: { name: "Зарплата", parent_id: null, tax_mark: "wages" } });
   });
 
   it("archives from the menu and explains a refused removal", async () => {

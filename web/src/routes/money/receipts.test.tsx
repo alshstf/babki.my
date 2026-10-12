@@ -120,7 +120,7 @@ describe("ReceiptLine", () => {
     Element.prototype.scrollIntoView ??= () => {};
     show(
       <ReceiptLine
-        categories={[{ id: "c-home", kind: "expense", name: "Дом", parent_id: null, archived: false, position: 1 }]}
+        categories={[{ id: "c-home", kind: "expense", name: "Дом", parent_id: null, archived: false, position: 1, tax_mark: null }]}
         canEdit
         receipt={{ ...waiting, id: "r-1", operation_id: "op-1", items: [{ name: "Порошок стиральный 3кг", quantity: "1", price_minor: 54999, sum_minor: 54999 }] }}
       />,

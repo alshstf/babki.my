@@ -95,3 +95,48 @@ func TestTheCategoriesOverHTTP(t *testing.T) {
 		t.Errorf("viewer create: %d, want 403", r.StatusCode)
 	}
 }
+
+// An earning category says what it is for tax (decision Р-41): the default
+// set's wages and interest come marked; a mark is set and taken off; a
+// spending category takes none.
+func TestACategoryIsMarkedForTax(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	category.NewHandler(category.NewStore(pool), auth, sm).Mount(srv)
+	base, owner := apitest.Serve(t, srv.Handler())
+
+	var list []apitypes.Category
+	apitest.Decode(t, apitest.Do(t, owner, http.MethodGet, base+"/api/v1/categories", ""), &list)
+	by := map[string]apitypes.Category{}
+	for _, c := range list {
+		by[c.Name] = c
+	}
+	for name, want := range map[string]string{"Зарплата": "wages", "Премии": "wages", "Проценты по вкладам": "interest"} {
+		if c := by[name]; c.TaxMark.IsNull() || string(c.TaxMark.MustGet()) != want {
+			t.Errorf("%s: %+v, want %s", name, c.TaxMark, want)
+		}
+	}
+	if !by["Подработка"].TaxMark.IsNull() || !by["Продукты"].TaxMark.IsNull() {
+		t.Error("an unmarked default carries a mark")
+	}
+	var got apitypes.Category
+	apitest.Decode(t, apitest.Do(t, owner, http.MethodPatch, base+"/api/v1/categories/"+by["Подработка"].Id.String(), `{"tax_mark":"wages"}`), &got)
+	if got.TaxMark.IsNull() || got.TaxMark.MustGet() != "wages" {
+		t.Errorf("marked: %+v", got)
+	}
+	apitest.Decode(t, apitest.Do(t, owner, http.MethodPatch, base+"/api/v1/categories/"+by["Подработка"].Id.String(), `{"name":"Подработки"}`), &got)
+	if got.TaxMark.IsNull() {
+		t.Error("an edit that does not name the mark took it off")
+	}
+	apitest.Decode(t, apitest.Do(t, owner, http.MethodPatch, base+"/api/v1/categories/"+by["Подработка"].Id.String(), `{"tax_mark":null}`), &got)
+	if !got.TaxMark.IsNull() {
+		t.Errorf("taken off: %+v", got)
+	}
+	if r := apitest.Do(t, owner, http.MethodPatch, base+"/api/v1/categories/"+by["Продукты"].Id.String(), `{"tax_mark":"wages"}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a spending category marked = %d, want 400", r.StatusCode)
+	}
+}

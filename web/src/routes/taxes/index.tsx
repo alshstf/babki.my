@@ -80,11 +80,13 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
               ? t("taxes.refund", { amount: formatMinor(p.refund_minor, c) })
               : t("taxes.nothingToPay")}
         </div>
-        {(p.to_pay_minor > 0 || p.refund_minor > 0) && (
+        {p.to_pay_minor > 0 && (
+          <p className="text-sm text-muted-foreground">{t("taxes.toPayWhen", { declare: formatDate(year.declare_by), pay: formatDate(year.pay_by) })}</p>
+        )}
+        {p.refund_minor > 0 && (
           <p className="text-sm text-muted-foreground">
-            {p.to_pay_minor > 0
-              ? t("taxes.toPayWhen", { declare: formatDate(year.declare_by), pay: formatDate(year.pay_by) })
-              : t("taxes.refundWhy", { declare: formatDate(year.declare_by) })}
+            {p.to_pay_minor > 0 && `${t("taxes.refundToo", { amount: formatMinor(p.refund_minor, c) })} `}
+            {t("taxes.refundWhy", { declare: formatDate(year.declare_by) })}
           </p>
         )}
         <p className="text-sm" data-testid="tax-summary">
@@ -99,6 +101,30 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
             .filter(Boolean)
             .join(" · ")}
         </p>
+        {p.wages_minor > 0 && (
+          <div className="grid gap-1 text-sm" data-testid="tax-wages">
+            <p>
+              {t("taxes.wages", {
+                net: formatMinor(p.wages_net_minor, c),
+                gross: formatMinor(p.wages_minor, c),
+                tax: formatMinor(p.wages_tax_minor, c),
+                withheld: formatMinor(p.wages_withheld_minor, c),
+              })}
+            </p>
+            {p.wages_to_pay_minor > 0 && (
+              <p className="text-amber-700 dark:text-amber-400">{t("taxes.wagesToPay", { amount: formatMinor(p.wages_to_pay_minor, c) })}</p>
+            )}
+            {p.employers.length > 1 && (
+              <ul className="text-xs text-muted-foreground">
+                {p.employers.map((e) => (
+                  <li key={e.name}>
+                    {t("taxes.employer", { name: e.name || t("taxes.noEmployer"), net: formatMinor(e.net_minor, c), gross: formatMinor(e.gross_minor, c) })}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {p.interest_minor > 0 && (
           <p className="text-sm" data-testid="tax-interest">
             {p.interest_free_minor === null || year.key_rate === null

@@ -3035,7 +3035,7 @@ export interface components {
             credit_minor: number;
             /**
              * Format: int64
-             * @description Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero
+             * @description Left to pay by return: on the investment incomes tax_minor less by_notice_minor, credit_minor and by_agents_minor, not below zero, plus wages_to_pay_minor
              */
             to_pay_minor: number;
             /**
@@ -3058,9 +3058,52 @@ export interface components {
              * @description The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor
              */
             by_notice_minor: number;
+            /**
+             * Format: int64
+             * @description Wages as they reached the accounts
+             */
+            wages_net_minor: number;
+            /**
+             * Format: int64
+             * @description Wages before tax: earnings under categories marked wages, each employer's reckoned from what reached the account by the wages' scale over the year
+             */
+            wages_minor: number;
+            /**
+             * Format: int64
+             * @description The tax on wages_minor by the wages' scale (13, 15, 18, 20, 22 %)
+             */
+            wages_tax_minor: number;
+            /**
+             * Format: int64
+             * @description What the employers withheld, each on what it paid alone
+             */
+            wages_withheld_minor: number;
+            /**
+             * Format: int64
+             * @description Left to pay on the wages: two employers each under a band the sum crosses
+             */
+            wages_to_pay_minor: number;
+            /** @description In the order they first paid */
+            employers: components["schemas"]["TaxYearEmployer"][];
             /** @description Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them */
             unvalued: number;
             accounts: components["schemas"]["TaxYearAccount"][];
+        };
+        TaxYearEmployer: {
+            /** @description The earning rows' counterparty; empty when they name none */
+            name: string;
+            /**
+             * Format: int64
+             * @description What reached the accounts
+             */
+            net_minor: number;
+            /**
+             * Format: int64
+             * @description Before tax, as the program reckons it
+             */
+            gross_minor: number;
+            /** Format: int64 */
+            withheld_minor: number;
         };
         TaxYearAccount: {
             /** Format: uuid */
@@ -4016,6 +4059,11 @@ export interface components {
             archived: boolean;
             /** @description Its place among its siblings, smallest first */
             position: number;
+            /**
+             * @description What an earning category means for the year's tax (decision Р-41): wages — paid net of the employer's withholding, the main base; interest — deposits' interest. Null for none; always null on a spending category
+             * @enum {string|null}
+             */
+            tax_mark: "wages" | "interest" | null;
         };
         CreateCategoryRequest: {
             kind: components["schemas"]["CategoryKind"];
@@ -4032,6 +4080,11 @@ export interface components {
             parent_id?: string | null;
             archived?: boolean;
             position?: number;
+            /**
+             * @description See Category.tax_mark; null takes it off, absent leaves it. 400 on a spending category
+             * @enum {string|null}
+             */
+            tax_mark?: "wages" | "interest" | null;
         };
         BackgroundTask: {
             /**
