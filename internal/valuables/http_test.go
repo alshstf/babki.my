@@ -12,8 +12,10 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpserver"
@@ -228,4 +230,84 @@ func spaceOf(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// A bar sold: the money lands on the card under «Продажа вещей», the bar
+// leaves the storage's worth and shows sold with its gain and tax; sold
+// twice or before its purchase is refused; the sale taken back takes the
+// money's row with it.
+func TestABarIsSold(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	accStore, md, opStore := account.NewStore(pool), marketdata.NewStore(pool), operation.NewStore(pool)
+	cats := category.NewStore(pool)
+	svc := valuables.NewService(pool, accStore, md).WithWorth(famStore, md, marketdata.NewConverter(md)).WithJournal(operation.NewService(opStore), cats)
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	account.NewHandler(accStore, famStore, marketdata.NewConverter(md), nil, auth, sm).Mount(srv)
+	operation.NewHandler(operation.NewService(opStore), opStore, famStore, marketdata.NewConverter(md), auth, sm).Mount(srv)
+	category.NewHandler(cats, auth, sm).Mount(srv)
+	valuables.NewHandler(svc, auth, sm).Mount(srv)
+	url, c := apitest.Serve(t, srv.Handler())
+	mk := func(body string) string {
+		var a struct {
+			ID string `json:"id"`
+		}
+		apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/accounts", body), &a)
+		return a.ID
+	}
+	box, card, dollars := mk(`{"name":"Ячейка","type":"valuables","currency":"RUB"}`), mk(`{"name":"Карта","type":"checking","currency":"RUB"}`), mk(`{"name":"Доллары","type":"checking","currency":"USD"}`)
+	// The family's categories, the default set's «Продажа вещей» among them.
+	apitest.Do(t, c, "GET", url+"/api/v1/categories", "")
+	base := url + "/api/v1/accounts/" + box + "/valuables"
+	var got apitypes.Valuables
+	apitest.Decode(t, apitest.Do(t, c, "POST", base+"/items", `{"kind":"bar","metal":"gold","weight":"50","fineness":"999.9","maker":"Приокский","foreign_made":false,"serial":"654321",
+		"certificate":true,"sealed":true,"bought_on":"2024-11-05","cost_minor":41000000,"currency":"RUB","owner_user_id":null,"note":""}`), &got)
+	bar := got.Items[0].Id.String()
+
+	if r := apitest.Do(t, c, "POST", base+"/items/"+bar+"/sale", `{"sold_on":"2024-11-01","amount_minor":1,"to_account_id":null}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("sold before bought = %d, want 400", r.StatusCode)
+	}
+	if r := apitest.Do(t, c, "POST", base+"/items/"+bar+"/sale", `{"sold_on":"2026-10-01","amount_minor":52500000,"to_account_id":"`+dollars+`"}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("roubles to a dollar account = %d, want 400", r.StatusCode)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "POST", base+"/items/"+bar+"/sale", `{"sold_on":"2026-10-01","amount_minor":52500000,"to_account_id":"`+card+`"}`), &got)
+	if len(got.Items) != 0 || len(got.Sold) != 1 || got.SellMinor.MustGet() != 0 {
+		t.Fatalf("after the sale: %+v", got)
+	}
+	s := got.Sold[0]
+	if s.SoldOn != "2026-10-01" || s.SoldMinor != 525_000_00 || s.GainMinor != 115_000_00 || s.TaxFree || s.TaxMinor != 14_950_00 || s.SaleOperationId.IsNull() {
+		t.Errorf("sold = %+v", s)
+	}
+	var journal struct {
+		Operations []struct {
+			ID          string  `json:"id"`
+			AmountMinor int64   `json:"amount_minor"`
+			Note        string  `json:"note"`
+			CategoryID  *string `json:"category_id"`
+		} `json:"operations"`
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+card+"/operations", ""), &journal)
+	if len(journal.Operations) != 1 || journal.Operations[0].AmountMinor != 525_000_00 || journal.Operations[0].Note != "Продажа слитка: 50 г, золото, № 654321" || journal.Operations[0].CategoryID == nil {
+		t.Errorf("the money's row = %+v", journal.Operations)
+	}
+	if r := apitest.Do(t, c, "POST", base+"/items/"+bar+"/sale", `{"sold_on":"2026-10-02","amount_minor":1,"to_account_id":null}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("sold twice = %d, want 400", r.StatusCode)
+	}
+	// The worth the day before the sale holds it; the day of, not.
+	held, _, err := svc.Worths(t.Context(), spaceOf(t, pool), parseID(t, box), []time.Time{time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)})
+	if err != nil || held[0].Operations != 1 || held[1].Operations != 0 {
+		t.Errorf("held around the sale: %+v, %v", held, err)
+	}
+
+	apitest.Decode(t, apitest.Do(t, c, "DELETE", base+"/items/"+bar+"/sale", ""), &got)
+	if len(got.Items) != 1 || len(got.Sold) != 0 {
+		t.Errorf("taken back: %+v", got)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+card+"/operations", ""), &journal)
+	if len(journal.Operations) != 0 {
+		t.Errorf("the money's row stayed: %+v", journal.Operations)
+	}
 }

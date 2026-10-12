@@ -41,6 +41,9 @@ type Service struct {
 	spaces  spaces
 	history history
 	rates   marketdata.RateSource
+	// For a sale's money (WithJournal).
+	journal    journal
+	categories categories
 }
 
 func NewService(x db.Executor, acc accounts, p prices) *Service {
@@ -55,12 +58,23 @@ type Valued struct {
 
 // Holding is what a storage holds and is worth: in roubles by the central
 // bank's price (Market) and as it would sell now (Sell) — nil when a piece
-// cannot be valued yet, a part of a sum being worse than none.
+// cannot be valued yet, a part of a sum being worse than none — and the
+// pieces it sold, each with its gain and tax.
 type Holding struct {
 	Storage      Storage
 	Items        []Valued
+	Sold         []Sold
 	BankPrices   []BankPrice
 	Market, Sell *int64
+}
+
+// Sold is a piece sold: its gain over what it cost, whether it sold free of
+// tax, and the tax it brings on its own (SaleTax).
+type Sold struct {
+	Item
+	Gain int64
+	Free bool
+	Tax  int64
 }
 
 // storageAccount is the space's account, refused unless it keeps valuables.
@@ -80,7 +94,7 @@ func (s *Service) Of(ctx context.Context, spaceID, accountID uuid.UUID) (Holding
 	if err := s.storageAccount(ctx, spaceID, accountID); err != nil {
 		return Holding{}, err
 	}
-	return s.holding(ctx, accountID, s.now())
+	return s.holding(ctx, spaceID, accountID, s.now())
 }
 
 // stored is a storage as written: its terms, the bank's prices and its
@@ -142,17 +156,25 @@ func (s *Service) load(ctx context.Context, accountID uuid.UUID) (stored, error)
 	return h, nil
 }
 
-func (s *Service) holding(ctx context.Context, accountID uuid.UUID, today time.Time) (Holding, error) {
+func (s *Service) holding(ctx context.Context, spaceID, accountID uuid.UUID, today time.Time) (Holding, error) {
 	st, err := s.load(ctx, accountID)
 	if err != nil {
 		return Holding{}, err
 	}
-	h := Holding{Storage: st.Storage, BankPrices: st.BankPrices, Items: []Valued{}}
-	items := st.Items
+	h := Holding{Storage: st.Storage, BankPrices: st.BankPrices, Items: []Valued{}, Sold: []Sold{}}
+	rules, err := s.rules(ctx, spaceID)
+	if err != nil {
+		return Holding{}, err
+	}
 	cbr := map[marketdata.Metal]*marketdata.MetalPrice{}
 	var market, sell int64
 	whole := true
-	for _, it := range items {
+	for _, it := range st.Items {
+		if it.SoldOn != nil {
+			gain, free, tax := SaleTax(it, rules)
+			h.Sold = append(h.Sold, Sold{Item: it, Gain: gain, Free: free, Tax: tax})
+			continue
+		}
 		p, seen := cbr[it.Metal]
 		if !seen {
 			got, err := s.prices.MetalPriceOn(ctx, it.Metal, today)
@@ -183,8 +205,11 @@ func (s *Service) holding(ctx context.Context, accountID uuid.UUID, today time.T
 const itemCols = `id, account_id, kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed,
 	bought_on, cost_minor, currency, owner_user_id, note`
 
+// soldCols are a piece's sale, read beside itemCols.
+const soldCols = `sold_on, sold_minor, sale_operation_id`
+
 func (s *Service) items(ctx context.Context, accountID uuid.UUID) ([]Item, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+itemCols+` FROM valuables_items WHERE account_id = $1 ORDER BY bought_on, created_at`, accountID)
+	rows, err := s.db.Query(ctx, `SELECT `+itemCols+`, `+soldCols+` FROM valuables_items WHERE account_id = $1 ORDER BY bought_on, created_at`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("valuables: items: %w", err)
 	}
@@ -193,7 +218,8 @@ func (s *Service) items(ctx context.Context, accountID uuid.UUID) ([]Item, error
 	for rows.Next() {
 		var it Item
 		if err := rows.Scan(&it.ID, &it.AccountID, &it.Kind, &it.Metal, &it.Weight, &it.Fineness, &it.Maker, &it.ForeignMade,
-			&it.Serial, &it.Certificate, &it.Sealed, &it.BoughtOn, &it.CostMinor, &it.Currency, &it.OwnerUserID, &it.Note); err != nil {
+			&it.Serial, &it.Certificate, &it.Sealed, &it.BoughtOn, &it.CostMinor, &it.Currency, &it.OwnerUserID, &it.Note,
+			&it.SoldOn, &it.SoldMinor, &it.SaleOperationID); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -223,7 +249,7 @@ func (s *Service) SetStorage(ctx context.Context, spaceID, accountID uuid.UUID, 
 	if err != nil {
 		return Holding{}, fmt.Errorf("valuables: set storage: %w", err)
 	}
-	return s.holding(ctx, accountID, s.now())
+	return s.holding(ctx, spaceID, accountID, s.now())
 }
 
 func validStorage(st Storage) error {
@@ -256,7 +282,7 @@ func (s *Service) AddItem(ctx context.Context, spaceID, accountID uuid.UUID, it 
 	if err != nil {
 		return Holding{}, writeErr("add item", err)
 	}
-	return s.holding(ctx, accountID, s.now())
+	return s.holding(ctx, spaceID, accountID, s.now())
 }
 
 // UpdateItem states a piece anew.
@@ -279,7 +305,7 @@ func (s *Service) UpdateItem(ctx context.Context, spaceID, accountID, itemID uui
 	if tag.RowsAffected() == 0 {
 		return Holding{}, ErrNotFound
 	}
-	return s.holding(ctx, accountID, s.now())
+	return s.holding(ctx, spaceID, accountID, s.now())
 }
 
 // DeleteItem takes a piece off the account — written in by mistake; a sale
@@ -295,7 +321,7 @@ func (s *Service) DeleteItem(ctx context.Context, spaceID, accountID, itemID uui
 	if tag.RowsAffected() == 0 {
 		return Holding{}, ErrNotFound
 	}
-	return s.holding(ctx, accountID, s.now())
+	return s.holding(ctx, spaceID, accountID, s.now())
 }
 
 // SetBankPrice writes in what the family's bank buys a gram of the metal
@@ -319,7 +345,7 @@ func (s *Service) SetBankPrice(ctx context.Context, spaceID, accountID uuid.UUID
 	if err != nil {
 		return Holding{}, fmt.Errorf("valuables: set bank price: %w", err)
 	}
-	return s.holding(ctx, accountID, s.now())
+	return s.holding(ctx, spaceID, accountID, s.now())
 }
 
 var currencyCode = func(c string) bool {
@@ -362,4 +388,17 @@ func writeErr(what string, err error) error {
 		return fmt.Errorf("%w: owner_user_id does not name a user", family.ErrValidation)
 	}
 	return fmt.Errorf("valuables: %s: %w", what, err)
+}
+
+// rules are the space's tax rules, Russia's for a service built without the
+// spaces (WithWorth).
+func (s *Service) rules(ctx context.Context, spaceID uuid.UUID) (family.TaxRules, error) {
+	if s.spaces == nil {
+		return family.TaxRulesFor(family.DefaultTaxResidency), nil
+	}
+	sp, err := s.spaces.SpaceByID(ctx, spaceID)
+	if err != nil {
+		return family.TaxRules{}, err
+	}
+	return sp.CostBasisRules(), nil
 }

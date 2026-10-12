@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, Trash2 } from "lucide-react";
+import { HandCoins, Pencil, Trash2, Undo2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,11 +10,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { AccountWithBalance } from "@/api/accounts";
+import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { useMembers } from "@/api/members";
 import {
   useDeleteItem,
   useSaveItem,
+  useSellItem,
   useSetBankPrice,
   useSetStorage,
   useValuables,
@@ -53,7 +54,9 @@ export function ValuablesPanel({ account, canEdit }: { account: AccountWithBalan
   const [storageOpen, setStorageOpen] = useState(false);
   const [item, setItem] = useState<ValuablesItem | "new" | null>(null);
   const [bankOpen, setBankOpen] = useState(false);
+  const [selling, setSelling] = useState<ValuablesItem | null>(null);
   const remove = useDeleteItem(account.id);
+  const sell = useSellItem(account.id);
   const data = q.data;
   if (q.isError) {
     return (
@@ -136,6 +139,9 @@ export function ValuablesPanel({ account, canEdit }: { account: AccountWithBalan
                   <TableCell className={cn("hidden whitespace-normal text-xs sm:table-cell", taxClass(it, today))}>{taxText(t, it, today)}</TableCell>
                   {canEdit && (
                     <TableCell className="whitespace-nowrap text-right">
+                      <Button variant="ghost" size="icon" aria-label={t("valuables.sell")} onClick={() => setSelling(it)}>
+                        <HandCoins className="size-4" />
+                      </Button>
                       <Button variant="ghost" size="icon" aria-label={t("valuables.edit")} onClick={() => setItem(it)}>
                         <Pencil className="size-4" />
                       </Button>
@@ -159,6 +165,49 @@ export function ValuablesPanel({ account, canEdit }: { account: AccountWithBalan
       )}
 
       {byGuide && <p className="text-xs text-muted-foreground">{t("valuables.guideHint")}</p>}
+      {data.sold.length > 0 && (
+        <div className="grid gap-2" data-testid="valuables-sold">
+          <h3 className="text-sm font-medium">{t("valuables.soldTitle")}</h3>
+          <ul className="grid gap-2 text-sm">
+            {data.sold.map((it) => (
+              <li key={it.id} className="flex flex-wrap items-start justify-between gap-2" data-testid="valuables-sold-item">
+                <div>
+                  <div>
+                    {t(`valuables.kinds.${it.kind}`)}, {t(`valuables.metals.${it.metal}`)}, {num(it.weight)} {t("valuables.grams")}
+                    {it.serial && ` · ${t("valuables.serial", { serial: it.serial })}`}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {t("valuables.soldLine", {
+                      date: formatDate(it.sold_on),
+                      amount: formatMinor(it.sold_minor, RUB),
+                      gain: `${it.gain_minor >= 0 ? "+" : "−"}${formatMinor(Math.abs(it.gain_minor), RUB)}`,
+                    })}
+                  </div>
+                  <div className={cn("text-xs", it.tax_free ? "text-emerald-700 dark:text-emerald-400" : it.tax_minor > 0 ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+                    {it.tax_free
+                      ? t("valuables.saleFree")
+                      : it.tax_minor > 0
+                        ? t("valuables.saleTax", { amount: formatMinor(it.tax_minor, RUB), year: Number(it.sold_on.slice(0, 4)) + 1 })
+                        : t("valuables.saleNoTax")}
+                  </div>
+                </div>
+                {canEdit && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (window.confirm(t("valuables.unsellConfirm"))) sell.mutate({ itemId: it.id, body: null });
+                    }}
+                  >
+                    <Undo2 className="size-4" />
+                    {t("valuables.unsell")}
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {data.bank_prices.length > 0 && (
         <p className="text-xs text-muted-foreground" data-testid="valuables-bank-prices">
           {data.bank_prices
@@ -179,6 +228,7 @@ export function ValuablesPanel({ account, canEdit }: { account: AccountWithBalan
       {storageOpen && <StorageDialog accountId={account.id} storage={data.storage} onClose={() => setStorageOpen(false)} />}
       {item && <ItemDialog accountId={account.id} item={item === "new" ? null : item} onClose={() => setItem(null)} />}
       {bankOpen && <BankPriceDialog accountId={account.id} data={data} onClose={() => setBankOpen(false)} />}
+      {selling && <SellDialog accountId={account.id} item={selling} onClose={() => setSelling(null)} />}
     </div>
   );
 }
@@ -539,6 +589,83 @@ function BankPriceDialog({ accountId, data, onClose }: { accountId: string; data
           </Button>
           <Button disabled={!valid || save.isPending} onClick={() => value && save.mutate({ metal, price: value, on }, { onSuccess: onClose })}>
             {t("common.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const NO_ACCOUNT = "none";
+
+// SellDialog records a piece sold: the day, what it sold for, and the rouble
+// account the money went to — or none, when the family writes it itself.
+function SellDialog({ accountId, item, onClose }: { accountId: string; item: ValuablesItem; onClose: () => void }) {
+  const { t } = useTranslation();
+  const sell = useSellItem(accountId);
+  const accounts = useAccounts();
+  const [on, setOn] = useState(localToday());
+  const [amount, setAmount] = useState(item.sell_minor !== null ? minorToInput(item.sell_minor) : "");
+  const [to, setTo] = useState(NO_ACCOUNT);
+  const minor = parseToMinor(amount);
+  const targets = (accounts.data ?? []).filter((a) => a.currency === RUB && a.status === "active" && a.type !== "valuables" && a.type !== "brokerage");
+  const valid = minor !== null && minor >= 0 && on !== "" && on >= item.bought_on && on <= localToday();
+  const submit = () =>
+    minor !== null &&
+    sell.mutate(
+      { itemId: item.id, body: { sold_on: on, amount_minor: minor, to_account_id: to === NO_ACCOUNT ? null : to } },
+      { onSuccess: onClose },
+    );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("valuables.sellTitle")}</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <p className="text-sm">
+            {t(`valuables.kinds.${item.kind}`)}, {t(`valuables.metals.${item.metal}`)}, {num(item.weight)} {t("valuables.grams")}
+            {item.serial && ` · ${t("valuables.serial", { serial: item.serial })}`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <div className="grid gap-1">
+              <Label htmlFor="valuables-sold-on">{t("valuables.soldOn")}</Label>
+              <Input id="valuables-sold-on" type="date" className="w-40" value={on} min={item.bought_on} max={localToday()} onChange={(e) => setOn(e.target.value)} />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="valuables-sold-amount">{t("valuables.soldAmount")}</Label>
+              <Input id="valuables-sold-amount" inputMode="decimal" className="w-40" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="valuables-sold-to">{t("valuables.soldTo")}</Label>
+            <Select value={to} onValueChange={setTo}>
+              <SelectTrigger id="valuables-sold-to" className="w-64">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_ACCOUNT}>{t("valuables.soldToNone")}</SelectItem>
+                {targets.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{t("valuables.soldToHint")}</p>
+          </div>
+          {sell.isError && (
+            <Alert variant="destructive">
+              <AlertDescription>{t("valuables.saveFailed")}</AlertDescription>
+            </Alert>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!valid || sell.isPending} onClick={submit}>
+            {t("valuables.sellButton")}
           </Button>
         </DialogFooter>
       </DialogContent>

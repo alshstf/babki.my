@@ -12,6 +12,7 @@ import (
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/valuables"
 )
 
 type fakeAccounts []account.WithBalance
@@ -272,5 +273,45 @@ func TestWages(t *testing.T) {
 	}
 	if m.Wages != 100_000_00 || m.WagesToPay != 0 || m.Interest != 300_000_00 || m.ByNotice != 11_700_00 {
 		t.Errorf("Maria = %+v", m)
+	}
+}
+
+type fakeSold []valuables.SoldPiece
+
+func (f fakeSold) SoldIn(context.Context, uuid.UUID, int) ([]valuables.SoldPiece, error) {
+	return f, nil
+}
+
+// Bars sold: Maria's 50 g of 2024, sold for 525 000 against 410 000, gains
+// 115 000 — less than 525 000 less 250 000 — so 115 000 is taxed, by return;
+// the bar of 2020 sold free; Alex's 10 g sold for 95 000 at a gain of 35 000
+// is under the year's 250 000 — nothing.
+func TestPropertySold(t *testing.T) {
+	alex, maria := member("Алекс", family.RoleOwner), member("Мария", family.RoleEditor)
+	sold := func(owner *uuid.UUID, bought, on string, cost, minor int64) valuables.SoldPiece {
+		b, _ := time.Parse(time.DateOnly, bought)
+		d, _ := time.Parse(time.DateOnly, on)
+		return valuables.SoldPiece{Item: valuables.Item{OwnerUserID: owner, BoughtOn: b, CostMinor: cost, SoldOn: &d, SoldMinor: &minor}}
+	}
+	pieces := fakeSold{
+		sold(&maria.ID, "2024-11-05", "2026-10-01", 410_000_00, 525_000_00),
+		sold(&maria.ID, "2020-01-10", "2026-10-01", 300_000_00, 1_100_000_00),
+		sold(nil, "2025-05-20", "2026-10-01", 60_000_00, 95_000_00),
+	}
+	y, err := NewService(fakeAccounts{}, fakeFacts{}, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}, fakeKeys{rate21}).
+		WithProperty(pieces).Of(t.Context(), uuid.New(), 2026)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(y.People) != 2 {
+		t.Fatalf("people = %+v", y.People)
+	}
+	m, a := y.People[1], y.People[0]
+	if m.UserID != maria.ID || m.PropertySold != 525_000_00 || m.PropertyGain != 115_000_00 || m.PropertyBase != 115_000_00 || m.PropertyFree != 1 ||
+		m.Tax != 14_950_00 || m.ToPay != 14_950_00 {
+		t.Errorf("Maria = %+v", m)
+	}
+	if a.PropertyBase != 0 || a.PropertySold != 95_000_00 || a.Tax != 0 {
+		t.Errorf("Alex = %+v", a)
 	}
 }

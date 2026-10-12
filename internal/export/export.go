@@ -397,6 +397,11 @@ func exportValuables(st valuables.Storage, bank []valuables.BankPrice, items []v
 			Maker: it.Maker, ForeignMade: it.ForeignMade, Serial: it.Serial, Certificate: it.Certificate, Sealed: it.Sealed,
 			BoughtOn: it.BoughtOn.Format(time.DateOnly), CostMinor: it.CostMinor, Currency: it.Currency,
 			OwnerUsername: nullable.NewNullNullable[string](), Note: it.Note,
+			SoldOn: nullable.NewNullNullable[string](), SoldMinor: nullable.NewNullNullable[int64](),
+		}
+		if it.SoldOn != nil && it.SoldMinor != nil {
+			e.SoldOn = nullable.NewNullableWithValue(it.SoldOn.Format(time.DateOnly))
+			e.SoldMinor = nullable.NewNullableWithValue(*it.SoldMinor)
 		}
 		if it.OwnerUserID != nil {
 			e.OwnerUsername = nullable.NewNullableWithValue(usernames[*it.OwnerUserID])

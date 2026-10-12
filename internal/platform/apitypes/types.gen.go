@@ -1552,6 +1552,24 @@ func (e ValuablesItemInputKind) Valid() bool {
 	}
 }
 
+// Defines values for ValuablesSoldKind.
+const (
+	ValuablesSoldKindBar  ValuablesSoldKind = "bar"
+	ValuablesSoldKindCoin ValuablesSoldKind = "coin"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesSoldKind enum.
+func (e ValuablesSoldKind) Valid() bool {
+	switch e {
+	case ValuablesSoldKindBar:
+		return true
+	case ValuablesSoldKindCoin:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ValuablesStorageFeePeriod.
 const (
 	ValuablesStorageFeePeriodMonth ValuablesStorageFeePeriod = "month"
@@ -3334,6 +3352,12 @@ type ExportValuablesItem struct {
 	Sealed        bool                      `json:"sealed"`
 	Serial        string                    `json:"serial"`
 
+	// SoldMinor What it sold for in roubles' minor units; null while kept
+	SoldMinor nullable.Nullable[int64] `json:"sold_minor"`
+
+	// SoldOn Date YYYY-MM-DD it was sold; null while kept
+	SoldOn nullable.Nullable[string] `json:"sold_on"`
+
 	// Weight Decimal, grams
 	Weight string `json:"weight"`
 }
@@ -4892,6 +4916,18 @@ type TaxYearPerson struct {
 	InterestMinor int64  `json:"interest_minor"`
 	Name          string `json:"name"`
 
+	// PropertyBaseMinor What of it is taxed: the gain, or the proceeds less the year's 250 000 deduction when smaller, not below zero; in base_minor, its tax paid by return
+	PropertyBaseMinor int64 `json:"property_base_minor"`
+
+	// PropertyFree Bars and coins sold in the year free of tax: held three years and more
+	PropertyFree int `json:"property_free"`
+
+	// PropertyGainMinor What they gained over what they cost, signed
+	PropertyGainMinor int64 `json:"property_gain_minor"`
+
+	// PropertySoldMinor What the bars and coins sold in the year brought, those held three years and more left out
+	PropertySoldMinor int64 `json:"property_sold_minor"`
+
 	// RefundMinor What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise
 	RefundMinor int64 `json:"refund_minor"`
 
@@ -5375,7 +5411,10 @@ type Valuables struct {
 
 	// SellMinor All pieces as they would sell now; null when one cannot be valued yet
 	SellMinor nullable.Nullable[int64] `json:"sell_minor"`
-	Storage   ValuablesStorage         `json:"storage"`
+
+	// Sold The pieces sold, earliest bought first
+	Sold    []ValuablesSold  `json:"sold"`
+	Storage ValuablesStorage `json:"storage"`
 }
 
 // ValuablesBankPrice defines model for ValuablesBankPrice.
@@ -5502,6 +5541,77 @@ type ValuablesItemInput struct {
 
 // ValuablesItemInputKind defines model for ValuablesItemInput.Kind.
 type ValuablesItemInputKind string
+
+// ValuablesSale defines model for ValuablesSale.
+type ValuablesSale struct {
+	// AmountMinor What it sold for, in roubles' minor units
+	AmountMinor int64 `json:"amount_minor"`
+
+	// SoldOn Date YYYY-MM-DD
+	SoldOn string `json:"sold_on"`
+
+	// ToAccountId The account the money went to; null: the family writes it itself
+	ToAccountId nullable.Nullable[openapi_types.UUID] `json:"to_account_id"`
+}
+
+// ValuablesSold defines model for ValuablesSold.
+type ValuablesSold struct {
+	// BoughtOn Date YYYY-MM-DD
+	BoughtOn string `json:"bought_on"`
+
+	// Certificate Its certificate is at hand
+	Certificate bool `json:"certificate"`
+
+	// CostMinor What it cost, in currency's minor units
+	CostMinor int64  `json:"cost_minor"`
+	Currency  string `json:"currency"`
+
+	// Fineness Decimal, thousandths, to tenths: 999.9 is 99.99 % metal
+	Fineness string `json:"fineness"`
+
+	// ForeignMade Made abroad: a Russian bank may not take it back without an assay
+	ForeignMade bool `json:"foreign_made"`
+
+	// GainMinor What it sold for less what it cost, signed
+	GainMinor int64              `json:"gain_minor"`
+	Id        openapi_types.UUID `json:"id"`
+	Kind      ValuablesSoldKind  `json:"kind"`
+
+	// Maker The refinery or mint
+	Maker string `json:"maker"`
+	Metal Metal  `json:"metal"`
+	Note  string `json:"note"`
+
+	// OwnerUserId Whose it is; null: the family's
+	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id"`
+
+	// SaleOperationId The journal's row of the money, when written to an account
+	SaleOperationId nullable.Nullable[openapi_types.UUID] `json:"sale_operation_id"`
+
+	// Sealed Its maker's packing is whole
+	Sealed bool `json:"sealed"`
+
+	// Serial The bar's number; empty for a coin
+	Serial string `json:"serial"`
+
+	// SoldMinor What it sold for, in roubles' minor units
+	SoldMinor int64 `json:"sold_minor"`
+
+	// SoldOn Date YYYY-MM-DD
+	SoldOn string `json:"sold_on"`
+
+	// TaxFree Held three years and more: it sold free of tax
+	TaxFree bool `json:"tax_free"`
+
+	// TaxMinor The tax it brings on its own: 13 % on the gain, or on the price less 250 000 when smaller; 0 when free or at a loss. The return's; the year's estimate takes the 250 000 once for all such sales
+	TaxMinor int64 `json:"tax_minor"`
+
+	// Weight Decimal, grams, to ten-thousandths: what the piece weighs
+	Weight string `json:"weight"`
+}
+
+// ValuablesSoldKind defines model for ValuablesSold.Kind.
+type ValuablesSoldKind string
 
 // ValuablesStorage defines model for ValuablesStorage.
 type ValuablesStorage struct {
@@ -5862,6 +5972,9 @@ type AddValuablesItemJSONRequestBody = ValuablesItemInput
 
 // UpdateValuablesItemJSONRequestBody defines body for UpdateValuablesItem for application/json ContentType.
 type UpdateValuablesItemJSONRequestBody = ValuablesItemInput
+
+// SellValuablesItemJSONRequestBody defines body for SellValuablesItem for application/json ContentType.
+type SellValuablesItemJSONRequestBody = ValuablesSale
 
 // SetValuablesStorageJSONRequestBody defines body for SetValuablesStorage for application/json ContentType.
 type SetValuablesStorageJSONRequestBody = ValuablesStorage

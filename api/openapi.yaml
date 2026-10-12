@@ -161,6 +161,38 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/valuables/items/{itemId}/sale:
+    post:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: sellValuablesItem
+      description: >-
+        Records a piece sold (physical metals, plan step 4): the day and what it sold for in roubles; with
+        to_account_id, the money as an earning on that active rouble account, under «Продажа вещей» when the
+        family has it. The piece leaves the storage's worth from that day. 400 when it is sold already, the day
+        is before its purchase or ahead, or the account does not take roubles.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ValuablesSale" } } } }
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: unsellValuablesItem
+      description: Takes a sale recorded by mistake back, and the money's row with it. 400 when the piece is not sold.
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/valuables/bank-prices:
     put:
       tags: [valuables]
@@ -3455,7 +3487,7 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/ExportValuablesItem" }, description: "Earliest bought first" }
     ExportValuablesItem:
       type: object
-      required: [id, kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed, bought_on, cost_minor, currency, owner_username, note]
+      required: [id, kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed, bought_on, cost_minor, currency, owner_username, note, sold_on, sold_minor]
       properties:
         id: { type: string, format: uuid }
         kind: { type: string }
@@ -3472,6 +3504,8 @@ components:
         currency: { type: string }
         owner_username: { type: string, nullable: true, description: "The member it is personal to; null for the family's" }
         note: { type: string }
+        sold_on: { type: string, nullable: true, description: "Date YYYY-MM-DD it was sold; null while kept" }
+        sold_minor: { type: integer, format: int64, nullable: true, description: "What it sold for in roubles' minor units; null while kept" }
     ExportOperation:
       type: object
       required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty, member_username, parts]
@@ -3788,6 +3822,26 @@ components:
             price_on: { type: string, nullable: true, description: "Date of the central bank's price used" }
             tax_free_from: { type: string, description: "Date YYYY-MM-DD from which it sells free of tax: three years from its purchase" }
             hard_to_sell: { type: array, items: { type: string, enum: [foreign_made, no_certificate, opened] }, description: "Why a bank may not take it back at its price without an assay; empty when none" }
+    ValuablesSale:
+      type: object
+      required: [sold_on, amount_minor, to_account_id]
+      properties:
+        sold_on: { type: string, description: "Date YYYY-MM-DD" }
+        amount_minor: { type: integer, format: int64, minimum: 0, description: "What it sold for, in roubles' minor units" }
+        to_account_id: { type: string, format: uuid, nullable: true, description: "The account the money went to; null: the family writes it itself" }
+    ValuablesSold:
+      allOf:
+        - $ref: "#/components/schemas/ValuablesItemInput"
+        - type: object
+          required: [id, sold_on, sold_minor, gain_minor, tax_free, tax_minor, sale_operation_id]
+          properties:
+            id: { type: string, format: uuid }
+            sold_on: { type: string, description: "Date YYYY-MM-DD" }
+            sold_minor: { type: integer, format: int64, description: "What it sold for, in roubles' minor units" }
+            gain_minor: { type: integer, format: int64, description: "What it sold for less what it cost, signed" }
+            tax_free: { type: boolean, description: "Held three years and more: it sold free of tax" }
+            tax_minor: { type: integer, format: int64, description: "The tax it brings on its own: 13 % on the gain, or on the price less 250 000 when smaller; 0 when free or at a loss. The return's; the year's estimate takes the 250 000 once for all such sales" }
+            sale_operation_id: { type: string, format: uuid, nullable: true, description: "The journal's row of the money, when written to an account" }
     ValuablesBankPrice:
       type: object
       required: [metal, price, on]
@@ -3797,9 +3851,10 @@ components:
         on: { type: string, description: "Date YYYY-MM-DD the price is of" }
     Valuables:
       type: object
-      required: [storage, items, bank_prices, market_minor, sell_minor, currency]
+      required: [storage, items, sold, bank_prices, market_minor, sell_minor, currency]
       properties:
         storage: { $ref: "#/components/schemas/ValuablesStorage" }
+        sold: { type: array, items: { $ref: "#/components/schemas/ValuablesSold" }, description: "The pieces sold, earliest bought first" }
         items: { type: array, items: { $ref: "#/components/schemas/ValuablesItem" }, description: "Earliest bought first" }
         bank_prices: { type: array, items: { $ref: "#/components/schemas/ValuablesBankPrice" } }
         market_minor: { type: integer, format: int64, nullable: true, description: "All pieces by the central bank's price; null when one cannot be valued yet" }
@@ -3822,7 +3877,7 @@ components:
         people: { type: array, items: { $ref: "#/components/schemas/TaxYearPerson" }, description: "The space's owner first; a person with no counted account is absent" }
     TaxYearPerson:
       type: object
-      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, wages_net_minor, wages_minor, wages_tax_minor, wages_withheld_minor, wages_to_pay_minor, employers, unvalued, accounts]
+      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, wages_net_minor, wages_minor, wages_tax_minor, wages_withheld_minor, wages_to_pay_minor, employers, property_sold_minor, property_gain_minor, property_base_minor, property_free, unvalued, accounts]
       properties:
         user_id: { type: string, format: uuid }
         name: { type: string }
@@ -3842,6 +3897,10 @@ components:
         wages_withheld_minor: { type: integer, format: int64, description: "What the employers withheld, each on what it paid alone" }
         wages_to_pay_minor: { type: integer, format: int64, description: "Left to pay on the wages: two employers each under a band the sum crosses" }
         employers: { type: array, items: { $ref: "#/components/schemas/TaxYearEmployer" }, description: "In the order they first paid" }
+        property_sold_minor: { type: integer, format: int64, description: "What the bars and coins sold in the year brought, those held three years and more left out" }
+        property_gain_minor: { type: integer, format: int64, description: "What they gained over what they cost, signed" }
+        property_base_minor: { type: integer, format: int64, description: "What of it is taxed: the gain, or the proceeds less the year's 250 000 deduction when smaller, not below zero; in base_minor, its tax paid by return" }
+        property_free: { type: integer, description: "Bars and coins sold in the year free of tax: held three years and more" }
         unvalued: { type: integer, description: "Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them" }
         accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearAccount" } }
     TaxYearEmployer:
