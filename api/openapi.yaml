@@ -3409,6 +3409,37 @@ components:
           description: "A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account"
           allOf:
             - $ref: "#/components/schemas/CreditCardTerms"
+        valuables:
+          nullable: true
+          description: "A valuables account's storage, bank prices and bars and coins as written in (decision Р-39), nothing valued; null on every other account"
+          allOf:
+            - $ref: "#/components/schemas/ExportValuables"
+    ExportValuables:
+      type: object
+      required: [storage, bank_prices, items]
+      properties:
+        storage: { $ref: "#/components/schemas/ValuablesStorage" }
+        bank_prices: { type: array, items: { $ref: "#/components/schemas/ValuablesBankPrice" } }
+        items: { type: array, items: { $ref: "#/components/schemas/ExportValuablesItem" }, description: "Earliest bought first" }
+    ExportValuablesItem:
+      type: object
+      required: [id, kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed, bought_on, cost_minor, currency, owner_username, note]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        metal: { type: string }
+        weight: { type: string, description: "Decimal, grams" }
+        fineness: { type: string, description: "Decimal, thousandths" }
+        maker: { type: string }
+        foreign_made: { type: boolean }
+        serial: { type: string }
+        certificate: { type: boolean }
+        sealed: { type: boolean }
+        bought_on: { type: string, description: "Date YYYY-MM-DD" }
+        cost_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        owner_username: { type: string, nullable: true, description: "The member it is personal to; null for the family's" }
+        note: { type: string }
     ExportOperation:
       type: object
       required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty, member_username, parts]

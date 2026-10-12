@@ -2373,6 +2373,37 @@ export interface components {
             loan: components["schemas"]["LoanTerms"] | null;
             /** @description A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account */
             credit_card: components["schemas"]["CreditCardTerms"] | null;
+            /** @description A valuables account's storage, bank prices and bars and coins as written in (decision Р-39), nothing valued; null on every other account */
+            valuables?: components["schemas"]["ExportValuables"] | null;
+        };
+        ExportValuables: {
+            storage: components["schemas"]["ValuablesStorage"];
+            bank_prices: components["schemas"]["ValuablesBankPrice"][];
+            /** @description Earliest bought first */
+            items: components["schemas"]["ExportValuablesItem"][];
+        };
+        ExportValuablesItem: {
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            metal: string;
+            /** @description Decimal, grams */
+            weight: string;
+            /** @description Decimal, thousandths */
+            fineness: string;
+            maker: string;
+            foreign_made: boolean;
+            serial: string;
+            certificate: boolean;
+            sealed: boolean;
+            /** @description Date YYYY-MM-DD */
+            bought_on: string;
+            /** Format: int64 */
+            cost_minor: number;
+            currency: string;
+            /** @description The member it is personal to; null for the family's */
+            owner_username: string | null;
+            note: string;
         };
         ExportOperation: {
             /** Format: uuid */

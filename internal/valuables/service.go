@@ -91,6 +91,21 @@ type stored struct {
 	Items      []Item
 }
 
+// Entered is what the family wrote in for a valuables account — its terms,
+// the bank's prices and its pieces, nothing valued — for the space's export;
+// ok is false for an account of another type.
+func (s *Service) Entered(ctx context.Context, spaceID, accountID uuid.UUID) (Storage, []BankPrice, []Item, bool, error) {
+	a, err := s.accounts.ByID(ctx, spaceID, accountID)
+	if err != nil || a.Type != account.TypeValuables {
+		return Storage{}, nil, nil, false, err
+	}
+	st, err := s.load(ctx, accountID)
+	if err != nil {
+		return Storage{}, nil, nil, true, err
+	}
+	return st.Storage, st.BankPrices, st.Items, true, nil
+}
+
 func (s *Service) load(ctx context.Context, accountID uuid.UUID) (stored, error) {
 	h := stored{Storage: Storage{Place: PlaceHome}, BankPrices: []BankPrice{}}
 	var period *string
