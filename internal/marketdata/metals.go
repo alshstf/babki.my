@@ -70,3 +70,28 @@ func (s *Store) LatestMetalPriceDay(ctx context.Context) (time.Time, error) {
 	}
 	return *on, nil
 }
+
+// MetalPricesUpTo is every price of the metals on or before the day, each
+// metal's oldest first — a history to resolve many days from in one read.
+func (s *Store) MetalPricesUpTo(ctx context.Context, metals []Metal, to time.Time) ([]MetalPrice, error) {
+	names := make([]string, len(metals))
+	for i, m := range metals {
+		names[i] = string(m)
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT metal, on_date, price, source FROM metal_prices
+		WHERE metal = ANY($1) AND on_date <= $2 ORDER BY metal, on_date`, names, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MetalPrice
+	for rows.Next() {
+		var p MetalPrice
+		if err := rows.Scan(&p.Metal, &p.On, &p.Price, &p.Source); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

@@ -59,19 +59,39 @@ import (
 // journalValues hands the portfolio engine's valuation of an account to the
 // account module, which counts brokerage accounts in the family total by their
 // journal and must not import the engine to do it.
-type journalValues struct{ positions *portfolio.Service }
+// journalValues values an account by its journal for the family's total and
+// capital: a valuables account by its pieces, any other by the portfolio.
+type journalValues struct {
+	positions *portfolio.Service
+	valuables *valuables.Service
+}
 
 func (j journalValues) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (account.JournalValue, error) {
+	if v, ok, err := j.valuables.Worths(ctx, spaceID, accountID, []time.Time{time.Now().UTC()}); ok || err != nil {
+		if err != nil {
+			return account.JournalValue{}, err
+		}
+		return v[0], nil
+	}
 	v, err := j.positions.ValueFromJournal(ctx, spaceID, accountID)
 	return account.JournalValue(v), err
 }
 
 func (j journalValues) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (account.JournalValue, error) {
+	if v, ok, err := j.valuables.Worths(ctx, spaceID, accountID, []time.Time{day}); ok || err != nil {
+		if err != nil {
+			return account.JournalValue{}, err
+		}
+		return v[0], nil
+	}
 	v, err := j.positions.ValueOn(ctx, spaceID, accountID, day)
 	return account.JournalValue(v), err
 }
 
 func (j journalValues) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]account.JournalValue, error) {
+	if v, ok, err := j.valuables.Worths(ctx, spaceID, accountID, days); ok || err != nil {
+		return v, err
+	}
 	values, err := j.positions.ValuesOn(ctx, spaceID, accountID, days)
 	out := make([]account.JournalValue, len(values))
 	for i, v := range values {
@@ -122,16 +142,18 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		metrics.Registry.MustRegister(background.NewSourcesCollector(r.pool))
 		srv.Mount("GET /metrics", metrics.Handler())
 	}
-	accHandler := account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM)
+	// Bars and coins of precious metal on valuables accounts (decisions Р-39, Р-40).
+	valuablesSvc := valuables.NewService(r.pool, accStore, mdStore).WithWorth(famStore, mdStore, converter)
+	valuables.NewHandler(valuablesSvc, famAuth, famSM).Mount(srv)
+	worths := journalValues{positions: positions, valuables: valuablesSvc}
+	accHandler := account.NewHandler(accStore, famStore, converter, worths, famAuth, famSM)
 	accHandler.Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
-	structureSvc := structure.NewService(accStore, positions, famStore, converter)
+	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore)
 	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
-	// Bars and coins of precious metal on valuables accounts (decisions Р-39, Р-40).
-	valuables.NewHandler(valuables.NewService(r.pool, accStore, mdStore), famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)

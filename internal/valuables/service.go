@@ -37,6 +37,10 @@ type Service struct {
 	accounts accounts
 	prices   prices
 	now      func() time.Time
+	// For Worths (WithWorth).
+	spaces  spaces
+	history history
+	rates   marketdata.RateSource
 }
 
 func NewService(x db.Executor, acc accounts, p prices) *Service {
@@ -79,15 +83,23 @@ func (s *Service) Of(ctx context.Context, spaceID, accountID uuid.UUID) (Holding
 	return s.holding(ctx, accountID, s.now())
 }
 
-func (s *Service) holding(ctx context.Context, accountID uuid.UUID, today time.Time) (Holding, error) {
-	h := Holding{Storage: Storage{Place: PlaceHome}, Items: []Valued{}, BankPrices: []BankPrice{}}
+// stored is a storage as written: its terms, the bank's prices and its
+// pieces, not yet valued.
+type stored struct {
+	Storage    Storage
+	BankPrices []BankPrice
+	Items      []Item
+}
+
+func (s *Service) load(ctx context.Context, accountID uuid.UUID) (stored, error) {
+	h := stored{Storage: Storage{Place: PlaceHome}, BankPrices: []BankPrice{}}
 	var period *string
 	err := s.db.QueryRow(ctx, `
 		SELECT place, bank, until, fee_minor, fee_period, buyback_percent
 		FROM valuables_storages WHERE account_id = $1`, accountID).
 		Scan(&h.Storage.Place, &h.Storage.Bank, &h.Storage.Until, &h.Storage.FeeMinor, &period, &h.Storage.Buyback)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return Holding{}, fmt.Errorf("valuables: storage: %w", err)
+		return stored{}, fmt.Errorf("valuables: storage: %w", err)
 	}
 	if period != nil {
 		p := FeePeriod(*period)
@@ -95,24 +107,33 @@ func (s *Service) holding(ctx context.Context, accountID uuid.UUID, today time.T
 	}
 	rows, err := s.db.Query(ctx, `SELECT metal, price, on_date FROM valuables_bank_prices WHERE account_id = $1 ORDER BY metal`, accountID)
 	if err != nil {
-		return Holding{}, fmt.Errorf("valuables: bank prices: %w", err)
+		return stored{}, fmt.Errorf("valuables: bank prices: %w", err)
 	}
 	for rows.Next() {
 		var b BankPrice
 		if err := rows.Scan(&b.Metal, &b.Price, &b.On); err != nil {
 			rows.Close()
-			return Holding{}, err
+			return stored{}, err
 		}
 		h.BankPrices = append(h.BankPrices, b)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return Holding{}, err
+		return stored{}, err
 	}
-	items, err := s.items(ctx, accountID)
+	if h.Items, err = s.items(ctx, accountID); err != nil {
+		return stored{}, err
+	}
+	return h, nil
+}
+
+func (s *Service) holding(ctx context.Context, accountID uuid.UUID, today time.Time) (Holding, error) {
+	st, err := s.load(ctx, accountID)
 	if err != nil {
 		return Holding{}, err
 	}
+	h := Holding{Storage: st.Storage, BankPrices: st.BankPrices, Items: []Valued{}}
+	items := st.Items
 	cbr := map[marketdata.Metal]*marketdata.MetalPrice{}
 	var market, sell int64
 	whole := true

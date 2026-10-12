@@ -92,11 +92,15 @@ type valuation struct {
 
 // CountedByJournal is whether the total counts a's journal rather than its
 // balance: a broker's account unless pinned to its balance, an everyday one
-// only when the family keeps it by its operations. An account with no
+// only when the family keeps it by its operations, a valuables account always
+// — its pieces stand for a journal (internal/valuables). An account with no
 // operations is counted by its balance whatever this says.
 func CountedByJournal(a Account) bool {
-	if a.Type == TypeBrokerage {
+	switch a.Type {
+	case TypeBrokerage:
 		return !a.ValuedByBalance
+	case TypeValuables:
+		return true
 	}
 	return a.KeptByOperations
 }

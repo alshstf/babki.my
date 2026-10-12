@@ -174,7 +174,9 @@ type Value struct {
 func Valuing(it Item, cbr *marketdata.MetalPrice, st Storage, bank []BankPrice, today time.Time) Value {
 	pure := it.Pure()
 	for _, b := range bank {
-		if b.Metal == it.Metal && !b.On.Before(today.AddDate(0, 0, -bankPriceDays)) {
+		// A price stands from its day for a month; a day before it is not
+		// told by it.
+		if b.Metal == it.Metal && !b.On.After(today) && !b.On.Before(today.AddDate(0, 0, -bankPriceDays)) {
 			sell := pure.Mul(b.Price).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
 			on := b.On
 			v := Value{Sell: &sell, By: SellByBankPrice, BankOn: &on}
