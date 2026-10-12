@@ -3,8 +3,9 @@
 // them, what the brokers who are tax agents withhold, what the tax withheld
 // abroad offsets, and what is left to pay by return. An estimate, not the
 // tax office's figure: it reads the journals the family keeps and says what
-// it could not value. This step counts the brokers' accounts; deposits,
-// wages and property join next (tax-year plan).
+// it could not value. It counts the brokers' accounts and the interest the
+// banks' accounts kept by their operations paid; wages and property join
+// next (tax-year plan).
 package taxyear
 
 import (
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
@@ -30,6 +32,10 @@ type facts interface {
 	YearFacts(ctx context.Context, spaceID, accountID uuid.UUID, year int, currency string, longYears int) (portfolio.YearFacts, error)
 }
 
+type keyRates interface {
+	HighestKeyRate(ctx context.Context, from, to time.Time) (decimal.Decimal, bool, error)
+}
+
 type spaces interface {
 	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 	ListMembers(ctx context.Context, spaceID uuid.UUID) ([]family.Member, error)
@@ -40,20 +46,28 @@ type Service struct {
 	accounts accounts
 	facts    facts
 	spaces   spaces
+	keys     keyRates
+	now      func() time.Time
 }
 
-func NewService(a accounts, f facts, s spaces) *Service {
-	return &Service{accounts: a, facts: f, spaces: s}
+func NewService(a accounts, f facts, s spaces, k keyRates) *Service {
+	return &Service{accounts: a, facts: f, spaces: s, keys: k, now: time.Now}
 }
+
+// interestFreeBase is what the key rate is applied to for the interest free
+// of tax: 1 млн roubles (НК РФ ст. 214.2 п. 1).
+const interestFreeBase = 1_000_000_00
 
 // ErrNoEstimate: the space's country of tax residency has no rules for the
 // year's tax in the application.
 var ErrNoEstimate = errors.New("taxyear: no estimate for the country")
 
-// Account is one broker's account's part of a person's year.
+// Account is one account's part of a person's year: a broker's, or a
+// bank's kept by its operations, for the interest it paid.
 type Account struct {
 	ID            uuid.UUID
 	Name          string
+	Bank          bool
 	ForeignBroker bool
 	Facts         portfolio.YearFacts
 	// Securities is the account's result on papers — sales, the gain on
@@ -80,7 +94,14 @@ type Person struct {
 	// agents took past the tax — a loss on one broker they did not see —
 	// that a return gets back.
 	Tax, ByAgents, Withheld, Credit, ToPay, Refund int64
-	Unvalued                                       int
+	// Interest is what the banks paid; InterestFree what of it is free of
+	// tax (1 млн × the year's highest key rate), nil without the rate;
+	// ByNotice the tax on the rest, which the tax office asks for by notice —
+	// part of Tax, not of ToPay.
+	Interest     int64
+	InterestFree *int64
+	ByNotice     int64
+	Unvalued     int
 }
 
 // Year is the family's year.
@@ -88,8 +109,13 @@ type Year struct {
 	Year     int
 	Currency string
 	People   []Person
-	// DeclareBy and PayBy are the return's and the payment's last days.
-	DeclareBy, PayBy time.Time
+	// DeclareBy and PayBy are the return's and the payment's last days;
+	// NoticeBy the last day to pay the tax on deposits' interest.
+	DeclareBy, PayBy, NoticeBy time.Time
+	// KeyRate is the year's highest so far, nil when unknown; ByBalance the
+	// deposits and savings kept by their balance, whose interest is not in.
+	KeyRate   *decimal.Decimal
+	ByBalance int
 }
 
 // Of estimates year for the space.
@@ -120,24 +146,46 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	}
 	people := map[uuid.UUID]*Person{}
 	var order []uuid.UUID
-	for _, a := range list {
-		if a.Type != account.TypeBrokerage || !account.CountedByJournal(a.Account) {
-			continue
-		}
-		f, err := s.facts.YearFacts(ctx, spaceID, a.ID, year, rules.TaxCurrency, rules.LongHoldingYears)
-		if err != nil {
-			return Year{}, fmt.Errorf("taxyear: account %s: %w", a.ID, err)
-		}
-		if f == (portfolio.YearFacts{}) {
-			continue
-		}
-		who := whose(a.Account, owner)
+	personOf := func(a account.Account) *Person {
+		who := whose(a, owner)
 		p, ok := people[who]
 		if !ok {
 			p = &Person{UserID: who, Name: names[who]}
 			people[who] = p
 			order = append(order, who)
 		}
+		return p
+	}
+	byBalance := 0
+	for _, a := range list {
+		if a.Status != account.StatusActive {
+			continue
+		}
+		bank := a.Type == account.TypeChecking || a.Type == account.TypeSavings || a.Type == account.TypeDeposit
+		if bank && !account.CountedByJournal(a.Account) && (a.Type == account.TypeSavings || a.Type == account.TypeDeposit) {
+			byBalance++
+		}
+		if !account.CountedByJournal(a.Account) || (a.Type != account.TypeBrokerage && !bank) {
+			continue
+		}
+		f, err := s.facts.YearFacts(ctx, spaceID, a.ID, year, rules.TaxCurrency, rules.LongHoldingYears)
+		if err != nil {
+			return Year{}, fmt.Errorf("taxyear: account %s: %w", a.ID, err)
+		}
+		if bank {
+			if f.Interest == 0 && f.Unvalued == 0 {
+				continue
+			}
+			p := personOf(a.Account)
+			p.Accounts = append(p.Accounts, Account{ID: a.ID, Name: a.Name, Bank: true, Facts: f})
+			p.Interest += f.Interest
+			p.Unvalued += f.Unvalued
+			continue
+		}
+		if f == (portfolio.YearFacts{}) {
+			continue
+		}
+		p := personOf(a.Account)
 		acc := Account{ID: a.ID, Name: a.Name, ForeignBroker: a.ForeignBroker, Facts: f}
 		acc.Securities = f.Sales - max(f.SalesLong, 0) + f.Coupons
 		acc.Dividends = max(f.Dividends, 0)
@@ -154,9 +202,22 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		p.Unvalued += f.Unvalued
 	}
 	out := Year{
-		Year: year, Currency: rules.TaxCurrency, People: []Person{},
+		Year: year, Currency: rules.TaxCurrency, People: []Person{}, ByBalance: byBalance,
 		DeclareBy: time.Date(year+1, time.April, 30, 0, 0, 0, 0, time.UTC),
 		PayBy:     time.Date(year+1, time.July, 15, 0, 0, 0, 0, time.UTC),
+		NoticeBy:  time.Date(year+1, time.December, 1, 0, 0, 0, 0, time.UTC),
+	}
+	// The year's highest key rate so far: for this year it may still rise.
+	end := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	if today := s.now().UTC(); today.Before(end) {
+		end = today
+	}
+	rate, known, err := s.keys.HighestKeyRate(ctx, time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC), end)
+	if err != nil {
+		return Year{}, err
+	}
+	if known {
+		out.KeyRate = &rate
 	}
 	for _, who := range order {
 		p := people[who]
@@ -165,9 +226,18 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			securities += a.Securities
 			dividends += a.Dividends
 		}
-		p.Base = max(securities, 0) + dividends
+		invested := max(securities, 0) + dividends
+		var taxable int64
+		if known {
+			free := rate.Mul(decimal.NewFromInt(interestFreeBase)).Div(decimal.NewFromInt(100)).Round(0).IntPart()
+			p.InterestFree = &free
+			taxable = max(p.Interest-free, 0)
+		}
+		p.Base = invested + taxable
 		p.Tax = family.Banded(rules.InvestmentBands[:], p.Base, rules.TaxUnitMinor)
-		due := max(p.Tax-p.Credit, 0)
+		// The interest's tax is what it adds on top of the rest.
+		p.ByNotice = p.Tax - family.Banded(rules.InvestmentBands[:], invested, rules.TaxUnitMinor)
+		due := max(p.Tax-p.ByNotice-p.Credit, 0)
 		p.ToPay, p.Refund = max(due-p.ByAgents, 0), max(p.ByAgents-due, 0)
 		out.People = append(out.People, *p)
 	}

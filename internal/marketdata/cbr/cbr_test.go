@@ -581,3 +581,37 @@ func TestMetalPrices_RefusesAWrongRangeAndABadPrice(t *testing.T) {
 		t.Error("gold at nothing was taken")
 	}
 }
+
+// The key rate's page: a row per business day, comma decimals; a page with
+// no table is an error.
+func TestKeyRates_ReadsThePage(t *testing.T) {
+	body := []byte(`<html><body><table class="data">
+      <tr>
+        <th>Дата</th>
+        <th>Ставка</th>
+      </tr>
+      <tr>
+        <td>12.10.2026</td>
+        <td>14,00</td>
+      </tr>
+      <tr>
+        <td>28.07.2025</td>
+        <td>18,00</td>
+      </tr>
+    </table></body></html>`)
+	srv, gotQuery := serve(t, http.StatusOK, body)
+	got, err := cbr.New(srv.Client(), srv.URL).KeyRates(context.Background(), time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *gotQuery != "UniDbQuery.Posted=True&UniDbQuery.From=01.07.2025&UniDbQuery.To=13.10.2026" {
+		t.Errorf("query = %q", *gotQuery)
+	}
+	if len(got) != 2 || got[0].On.Format(time.DateOnly) != "2026-10-12" || !got[0].Rate.Equal(decimal.NewFromInt(14)) || !got[1].Rate.Equal(decimal.NewFromInt(18)) || got[1].Source != "cbr" {
+		t.Errorf("rates = %+v", got)
+	}
+	srv, _ = serve(t, http.StatusOK, []byte(`<html>maintenance</html>`))
+	if _, err := cbr.New(srv.Client(), srv.URL).KeyRates(context.Background(), time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 7, 2, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Error("a page with no table was taken")
+	}
+}

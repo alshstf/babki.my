@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,10 @@ const DefaultDynamicURL = "https://www.cbr.ru/scripts/XML_dynamic.asp"
 
 // DefaultMetalsURL returns the metals' accounting prices over a date range.
 const DefaultMetalsURL = "https://www.cbr.ru/scripts/xml_metall.asp"
+
+// DefaultKeyRateURL is the key rate's page: a table of the rate by day over
+// a date range. The bank publishes it as a page, not a feed.
+const DefaultKeyRateURL = "https://www.cbr.ru/hd_base/KeyRate/"
 
 // userAgent identifies this program; the bank refuses Go's default agent.
 const userAgent = "babki.my/1.0 (+https://github.com/alshstf/babki.my)"
@@ -46,6 +51,7 @@ type Client struct {
 	dailyURL   string
 	dynamicURL string
 	metalsURL  string
+	keyRateURL string
 }
 
 // New returns a Client. A nil client means http.DefaultClient; a non-empty
@@ -56,9 +62,9 @@ func New(client *http.Client, baseURL string) *Client {
 		client = http.DefaultClient
 	}
 	if baseURL == "" {
-		return &Client{http: client, dailyURL: DefaultBaseURL, dynamicURL: DefaultDynamicURL, metalsURL: DefaultMetalsURL}
+		return &Client{http: client, dailyURL: DefaultBaseURL, dynamicURL: DefaultDynamicURL, metalsURL: DefaultMetalsURL, keyRateURL: DefaultKeyRateURL}
 	}
-	return &Client{http: client, dailyURL: baseURL, dynamicURL: baseURL, metalsURL: baseURL}
+	return &Client{http: client, dailyURL: baseURL, dynamicURL: baseURL, metalsURL: baseURL, keyRateURL: baseURL}
 }
 
 // Name implements marketdata.FxProvider.
@@ -286,6 +292,56 @@ func (c *Client) MetalPrices(ctx context.Context, from, to time.Time) ([]marketd
 			return nil, fmt.Errorf("cbr: %s on %s priced at %s", metal, rec.Date, price)
 		}
 		out = append(out, marketdata.MetalPrice{Metal: metal, On: on, Price: price, Source: sourceName})
+	}
+	return out, nil
+}
+
+// keyRateTable finds the page's table and keyRateRow its rows: a day and the
+// rate in force, comma-decimal.
+var (
+	keyRateTable = regexp.MustCompile(`<table class="data">`)
+	keyRateRow   = regexp.MustCompile(`<td>(\d{2}\.\d{2}\.\d{4})</td>\s*<td>(\d+(?:,\d+)?)</td>`)
+)
+
+// KeyRates implements marketdata.KeyRateProvider: the key rate in force on
+// each business day of [from, to], from the bank's page. A page without the
+// table is an error — its layout changed — so the source shows as failing.
+func (c *Client) KeyRates(ctx context.Context, from, to time.Time) ([]marketdata.KeyRate, error) {
+	if to.Before(from) {
+		return nil, fmt.Errorf("cbr: invalid range for the key rate: to (%s) is before from (%s)", to.Format(dateLayout), from.Format(dateLayout))
+	}
+	reqURL := c.keyRateURL + "?UniDbQuery.Posted=True&UniDbQuery.From=" + from.Format(dateLayout) + "&UniDbQuery.To=" + to.Format(dateLayout)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cbr: build request: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cbr: request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cbr: unexpected status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, fmt.Errorf("cbr: read the key rate page: %w", err)
+	}
+	if !keyRateTable.Match(body) {
+		return nil, fmt.Errorf("cbr: the key rate page has no table of rates")
+	}
+	var out []marketdata.KeyRate
+	for _, m := range keyRateRow.FindAllSubmatch(body, -1) {
+		on, err := time.Parse(dateLayout, string(m[1]))
+		if err != nil {
+			return nil, fmt.Errorf("cbr: parse key rate date %q: %w", m[1], err)
+		}
+		rate, err := decimal.NewFromString(strings.ReplaceAll(string(m[2]), ",", "."))
+		if err != nil || !rate.IsPositive() {
+			return nil, fmt.Errorf("cbr: key rate %q on %s", m[2], m[1])
+		}
+		out = append(out, marketdata.KeyRate{On: on, Rate: rate, Source: sourceName})
 	}
 	return out, nil
 }

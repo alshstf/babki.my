@@ -116,6 +116,11 @@ func NewWorkers(
 	if metals, ok := fxProvider.(marketdata.MetalPriceProvider); ok {
 		river.AddWorker(workers, marketdata.NewMetalPricesWorker(mdStore, metals, log))
 	}
+	// The key rate too: the year's highest frees deposits' interest of tax up
+	// to 1 млн × it (decision Р-41).
+	if keys, ok := fxProvider.(marketdata.KeyRateProvider); ok {
+		river.AddWorker(workers, marketdata.NewKeyRatesWorker(mdStore, keys, log))
+	}
 	// Past closing prices come from the exchange too, by the same rule.
 	if history, ok := quoteProvider.(marketdata.HistoryProvider); ok {
 		river.AddWorker(workers, marketdata.NewBackfillQuotesWorker(mdStore, operations, instruments, history, log))
@@ -214,6 +219,7 @@ func Schedule() []jobs.Periodic {
 		{Every: backfillFxInterval, Args: marketdata.BackfillFxArgs{}},
 		{Every: backfillFxInterval, Args: marketdata.BackfillGoldArgs{}},
 		{Every: refreshFxInterval, Args: marketdata.RefreshMetalPricesArgs{}},
+		{Every: refreshFxInterval, Args: marketdata.RefreshKeyRatesArgs{}},
 		{Every: backfillFxInterval, Args: marketdata.BackfillQuotesArgs{}},
 		{Every: tinvestSyncInterval, Args: tinvest.SyncDispatchArgs{}},
 		{Every: tinvestQuotesInterval, Args: tinvest.RefreshQuotesArgs{}},
@@ -252,6 +258,7 @@ var sources = []jobs.SourceKind{
 	{Kind: marketdata.RefreshBondSchedulesArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshIndexesArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshMetalPricesArgs{}.Kind(), Every: refreshFxInterval},
+	{Kind: marketdata.RefreshKeyRatesArgs{}.Kind(), Every: refreshFxInterval},
 }
 
 // Sources reads how each source's jobs last ended.

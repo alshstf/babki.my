@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
@@ -23,6 +24,18 @@ type fakeFacts map[uuid.UUID]portfolio.YearFacts
 func (f fakeFacts) YearFacts(_ context.Context, _, id uuid.UUID, _ int, _ string, _ int) (portfolio.YearFacts, error) {
 	return f[id], nil
 }
+
+// fakeKeys is the year's highest key rate, none when nil.
+type fakeKeys struct{ rate *decimal.Decimal }
+
+func (f fakeKeys) HighestKeyRate(context.Context, time.Time, time.Time) (decimal.Decimal, bool, error) {
+	if f.rate == nil {
+		return decimal.Zero, false, nil
+	}
+	return *f.rate, true, nil
+}
+
+var rate21 = func() *decimal.Decimal { r := decimal.NewFromInt(21); return &r }()
 
 type fakeSpaces struct {
 	residency string
@@ -63,7 +76,7 @@ func TestTheYearByPerson(t *testing.T) {
 		kz.ID:     {Dividends: 100_000_00, Withheld: 10_000_00},
 		mine.ID:   {Dividends: 100_000_00},
 	}
-	svc := NewService(fakeAccounts{t1, t2, shared, kz, mine}, f, fakeSpaces{residency: "RU", members: []family.Member{maria, alex}})
+	svc := NewService(fakeAccounts{t1, t2, shared, kz, mine}, f, fakeSpaces{residency: "RU", members: []family.Member{maria, alex}}, fakeKeys{rate21})
 	y, err := svc.Of(t.Context(), uuid.New(), 2026)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +112,7 @@ func TestTheBandAboveTheThresholdIsLeftToPay(t *testing.T) {
 	alex := member("Алекс", family.RoleOwner)
 	t1, t2 := broker("Т-Банк", &alex.ID, false), broker("Альфа", &alex.ID, false)
 	f := fakeFacts{t1.ID: {Sales: 2_000_000_00}, t2.ID: {Sales: 2_000_000_00}}
-	y, err := NewService(fakeAccounts{t1, t2}, f, fakeSpaces{residency: "RU", members: []family.Member{alex}}).Of(t.Context(), uuid.New(), 2026)
+	y, err := NewService(fakeAccounts{t1, t2}, f, fakeSpaces{residency: "RU", members: []family.Member{alex}}, fakeKeys{rate21}).Of(t.Context(), uuid.New(), 2026)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,14 +128,14 @@ func TestTheCreditAndWhatIsLeftOut(t *testing.T) {
 	alex, maria := member("Алекс", family.RoleOwner), member("Мария", family.RoleEditor)
 	kz, quiet := broker("Freedom KZ", &alex.ID, true), broker("Пустой", &maria.ID, false)
 	f := fakeFacts{kz.ID: {Dividends: 100_000_00, Withheld: 30_000_00}}
-	y, err := NewService(fakeAccounts{kz, quiet}, f, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}).Of(t.Context(), uuid.New(), 2026)
+	y, err := NewService(fakeAccounts{kz, quiet}, f, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}, fakeKeys{rate21}).Of(t.Context(), uuid.New(), 2026)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(y.People) != 1 || y.People[0].Credit != 13_000_00 || y.People[0].ToPay != 0 {
 		t.Errorf("year = %+v", y.People)
 	}
-	if _, err := NewService(fakeAccounts{kz}, f, fakeSpaces{residency: "DE"}).Of(t.Context(), uuid.New(), 2026); err != ErrNoEstimate {
+	if _, err := NewService(fakeAccounts{kz}, f, fakeSpaces{residency: "DE"}, fakeKeys{rate21}).Of(t.Context(), uuid.New(), 2026); err != ErrNoEstimate {
 		t.Errorf("Germany: %v", err)
 	}
 }
@@ -139,5 +152,52 @@ func TestTheYearAsked(t *testing.T) {
 		if _, err := parseYear(raw, now); err == nil {
 			t.Errorf("%q taken", raw)
 		}
+	}
+}
+
+func bank(name string, typ account.Type, owner *uuid.UUID, kept bool) account.WithBalance {
+	return account.WithBalance{Account: account.Account{
+		ID: uuid.New(), Name: name, Type: typ, Status: account.StatusActive, OwnerUserID: owner, KeptByOperations: kept,
+	}}
+}
+
+// Deposits' interest: free up to 1 млн × the year's highest key rate (21 % —
+// 210 000); Maria's 400 000 leaves 190 000, 13 % by notice. Alex's interest
+// sits above his 2,4 млн on papers, so its tax is at 15 %, all by notice,
+// none of it his to pay by return. A deposit kept by its balance is counted
+// apart: its interest is not known.
+func TestDepositsInterest(t *testing.T) {
+	alex, maria := member("Алекс", family.RoleOwner), member("Мария", family.RoleEditor)
+	t1 := broker("Т-Банк", &alex.ID, false)
+	alexSavings, mariaSavings := bank("Накопительный", account.TypeSavings, &alex.ID, true), bank("Вклад", account.TypeDeposit, &maria.ID, true)
+	byBalance := bank("Вклад остатком", account.TypeDeposit, &maria.ID, false)
+	f := fakeFacts{
+		t1.ID:           {Sales: 2_400_000_00},
+		alexSavings.ID:  {Interest: 1_210_000_00},
+		mariaSavings.ID: {Interest: 400_000_00},
+	}
+	svc := NewService(fakeAccounts{t1, alexSavings, mariaSavings, byBalance}, f, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}, fakeKeys{rate21})
+	y, err := svc.Of(t.Context(), uuid.New(), 2025)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y.KeyRate == nil || !y.KeyRate.Equal(decimal.NewFromInt(21)) || y.ByBalance != 1 || y.NoticeBy.Format("2006-01-02") != "2026-12-01" {
+		t.Fatalf("year = %+v", y)
+	}
+	a, m := y.People[0], y.People[1]
+	if a.Interest != 1_210_000_00 || *a.InterestFree != 210_000_00 || a.Base != 3_400_000_00 || a.Tax != 462_000_00 || a.ByNotice != 150_000_00 || a.ByAgents != 312_000_00 || a.ToPay != 0 || a.Refund != 0 {
+		t.Errorf("Alex = %+v", a)
+	}
+	if len(a.Accounts) != 2 || !a.Accounts[1].Bank || a.Accounts[1].AgentTax != 0 {
+		t.Errorf("Alex's accounts = %+v", a.Accounts)
+	}
+	if m.Base != 190_000_00 || m.Tax != 24_700_00 || m.ByNotice != 24_700_00 || m.ToPay != 0 {
+		t.Errorf("Maria = %+v", m)
+	}
+	// Without the key rate the free part is not known: the interest is shown,
+	// not taxed.
+	y, err = NewService(fakeAccounts{mariaSavings}, f, fakeSpaces{residency: "RU", members: []family.Member{alex, maria}}, fakeKeys{}).Of(t.Context(), uuid.New(), 2025)
+	if err != nil || y.KeyRate != nil || y.People[0].InterestFree != nil || y.People[0].Tax != 0 || y.People[0].Interest != 400_000_00 {
+		t.Errorf("no key rate: %+v, %v", y, err)
 	}
 }

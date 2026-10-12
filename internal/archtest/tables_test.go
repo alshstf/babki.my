@@ -49,6 +49,7 @@ var owners = map[string]string{
 	"quotes":                      "internal/marketdata",
 	"fx_rates":                    "internal/marketdata",
 	"metal_prices":                "internal/marketdata",
+	"key_rates":                   "internal/marketdata",
 	"reference_prices":            "internal/marketdata",
 	"bond_days":                   "internal/marketdata",
 	"bond_events":                 "internal/marketdata",
