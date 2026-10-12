@@ -61,6 +61,7 @@ const (
 	AccountTypeDeposit    AccountType = "deposit"
 	AccountTypeLoan       AccountType = "loan"
 	AccountTypeSavings    AccountType = "savings"
+	AccountTypeValuables  AccountType = "valuables"
 )
 
 // Valid indicates whether the value is a known member of the AccountType enum.
@@ -79,6 +80,8 @@ func (e AccountType) Valid() bool {
 	case AccountTypeLoan:
 		return true
 	case AccountTypeSavings:
+		return true
+	case AccountTypeValuables:
 		return true
 	default:
 		return false
@@ -814,6 +817,30 @@ func (e MarketValueGap) Valid() bool {
 	}
 }
 
+// Defines values for Metal.
+const (
+	Gold      Metal = "gold"
+	Palladium Metal = "palladium"
+	Platinum  Metal = "platinum"
+	Silver    Metal = "silver"
+)
+
+// Valid indicates whether the value is a known member of the Metal enum.
+func (e Metal) Valid() bool {
+	switch e {
+	case Gold:
+		return true
+	case Palladium:
+		return true
+	case Platinum:
+		return true
+	case Silver:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OperationSource.
 const (
 	OperationSourceCsv      OperationSource = "csv"
@@ -1408,6 +1435,129 @@ func (e TradingModeKind) Valid() bool {
 	}
 }
 
+// Defines values for ValuablesItemHardToSell.
+const (
+	ForeignMade   ValuablesItemHardToSell = "foreign_made"
+	NoCertificate ValuablesItemHardToSell = "no_certificate"
+	Opened        ValuablesItemHardToSell = "opened"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesItemHardToSell enum.
+func (e ValuablesItemHardToSell) Valid() bool {
+	switch e {
+	case ForeignMade:
+		return true
+	case NoCertificate:
+		return true
+	case Opened:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ValuablesItemKind.
+const (
+	ValuablesItemKindBar  ValuablesItemKind = "bar"
+	ValuablesItemKindCoin ValuablesItemKind = "coin"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesItemKind enum.
+func (e ValuablesItemKind) Valid() bool {
+	switch e {
+	case ValuablesItemKindBar:
+		return true
+	case ValuablesItemKindCoin:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ValuablesItemSellBy.
+const (
+	BankPrice      ValuablesItemSellBy = "bank_price"
+	GuidePercent   ValuablesItemSellBy = "guide_percent"
+	NoPrice        ValuablesItemSellBy = "no_price"
+	StoragePercent ValuablesItemSellBy = "storage_percent"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesItemSellBy enum.
+func (e ValuablesItemSellBy) Valid() bool {
+	switch e {
+	case BankPrice:
+		return true
+	case GuidePercent:
+		return true
+	case NoPrice:
+		return true
+	case StoragePercent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ValuablesItemInputKind.
+const (
+	ValuablesItemInputKindBar  ValuablesItemInputKind = "bar"
+	ValuablesItemInputKindCoin ValuablesItemInputKind = "coin"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesItemInputKind enum.
+func (e ValuablesItemInputKind) Valid() bool {
+	switch e {
+	case ValuablesItemInputKindBar:
+		return true
+	case ValuablesItemInputKindCoin:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ValuablesStorageFeePeriod.
+const (
+	ValuablesStorageFeePeriodMonth ValuablesStorageFeePeriod = "month"
+	ValuablesStorageFeePeriodYear  ValuablesStorageFeePeriod = "year"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesStorageFeePeriod enum.
+func (e ValuablesStorageFeePeriod) Valid() bool {
+	switch e {
+	case ValuablesStorageFeePeriodMonth:
+		return true
+	case ValuablesStorageFeePeriodYear:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ValuablesStoragePlace.
+const (
+	Custody ValuablesStoragePlace = "custody"
+	Home    ValuablesStoragePlace = "home"
+	Other   ValuablesStoragePlace = "other"
+	SafeBox ValuablesStoragePlace = "safe_box"
+)
+
+// Valid indicates whether the value is a known member of the ValuablesStoragePlace enum.
+func (e ValuablesStoragePlace) Valid() bool {
+	switch e {
+	case Custody:
+		return true
+	case Home:
+		return true
+	case Other:
+		return true
+	case SafeBox:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WithheldAbroadState.
 const (
 	WithheldAbroadStateEstimated WithheldAbroadState = "estimated"
@@ -1515,16 +1665,16 @@ func (e GetAllocationTopUpParamsValuation) Valid() bool {
 
 // Defines values for GetCapitalParamsStep.
 const (
-	Month GetCapitalParamsStep = "month"
-	Week  GetCapitalParamsStep = "week"
+	GetCapitalParamsStepMonth GetCapitalParamsStep = "month"
+	GetCapitalParamsStepWeek  GetCapitalParamsStep = "week"
 )
 
 // Valid indicates whether the value is a known member of the GetCapitalParamsStep enum.
 func (e GetCapitalParamsStep) Valid() bool {
 	switch e {
-	case Month:
+	case GetCapitalParamsStepMonth:
 		return true
-	case Week:
+	case GetCapitalParamsStepWeek:
 		return true
 	default:
 		return false
@@ -1658,7 +1808,7 @@ type AccountTotal struct {
 	ZeroValuedPositions int `json:"zero_valued_positions"`
 }
 
-// AccountType defines model for AccountType.
+// AccountType valuables: where bars and coins of precious metal are kept (decision Р-39); its worth is theirs
 type AccountType string
 
 // AccountWithBalance defines model for AccountWithBalance.
@@ -1685,8 +1835,10 @@ type AccountWithBalance struct {
 	Status           AccountStatus                         `json:"status"`
 
 	// TradesAbroad Whether the account's broker trades on foreign exchanges (Freedom Finance Kazakhstan, Interactive Brokers): a foreign share held there sells at its home exchange's close, which then counts as its market price — in the liquid valuation and the account's total — when no market price of the broker or the Moscow Exchange is fresher (decision Р-20). False until somebody sets it; on a Russian broker's account that close stays a reference for the full valuation only, since what the depository froze does not sell at it.
-	TradesAbroad bool        `json:"trades_abroad"`
-	Type         AccountType `json:"type"`
+	TradesAbroad bool `json:"trades_abroad"`
+
+	// Type valuables: where bars and coins of precious metal are kept (decision Р-39); its worth is theirs
+	Type AccountType `json:"type"`
 
 	// ValuedByBalance The family's choice for a brokerage account kept by its operations: count it in the total by its balance rather than by its journal, while the journal's history is incomplete. False until somebody sets it (UpdateAccountRequest.valued_by_balance). On any other kind of account it is stored and means nothing — those are always counted by their balance.
 	ValuedByBalance bool `json:"valued_by_balance"`
@@ -2229,8 +2381,10 @@ type CreateAccountRequest struct {
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 
 	// TradesAbroad See AccountWithBalance.trades_abroad. Omitted, false.
-	TradesAbroad *bool       `json:"trades_abroad,omitempty"`
-	Type         AccountType `json:"type"`
+	TradesAbroad *bool `json:"trades_abroad,omitempty"`
+
+	// Type valuables: where bars and coins of precious metal are kept (decision Р-39); its worth is theirs
+	Type AccountType `json:"type"`
 }
 
 // CreateArrivalRequest defines model for CreateArrivalRequest.
@@ -3633,6 +3787,9 @@ type MemberInfo struct {
 	Username    string             `json:"username"`
 }
 
+// Metal defines model for Metal.
+type Metal string
+
 // MoneyInBase defines model for MoneyInBase.
 type MoneyInBase struct {
 	// AmountMinor Amount in the base currency's minor units
@@ -4963,6 +5120,174 @@ type UserInfo struct {
 	Username    string             `json:"username"`
 }
 
+// Valuables defines model for Valuables.
+type Valuables struct {
+	BankPrices []ValuablesBankPrice `json:"bank_prices"`
+
+	// Currency RUB: the central bank prices metals in roubles
+	Currency string `json:"currency"`
+
+	// Items Earliest bought first
+	Items []ValuablesItem `json:"items"`
+
+	// MarketMinor All pieces by the central bank's price; null when one cannot be valued yet
+	MarketMinor nullable.Nullable[int64] `json:"market_minor"`
+
+	// SellMinor All pieces as they would sell now; null when one cannot be valued yet
+	SellMinor nullable.Nullable[int64] `json:"sell_minor"`
+	Storage   ValuablesStorage         `json:"storage"`
+}
+
+// ValuablesBankPrice defines model for ValuablesBankPrice.
+type ValuablesBankPrice struct {
+	Metal Metal `json:"metal"`
+
+	// On Date YYYY-MM-DD the price is of
+	On string `json:"on"`
+
+	// Price Decimal: roubles the bank pays for a gram of the metal
+	Price string `json:"price"`
+}
+
+// ValuablesItem defines model for ValuablesItem.
+type ValuablesItem struct {
+	// BankPriceOn Date of the bank's price used
+	BankPriceOn nullable.Nullable[string] `json:"bank_price_on"`
+
+	// BoughtOn Date YYYY-MM-DD
+	BoughtOn string `json:"bought_on"`
+
+	// BuybackPercent Decimal: the percent sell_minor is below market_minor; null by the bank's price
+	BuybackPercent nullable.Nullable[string] `json:"buyback_percent"`
+
+	// Certificate Its certificate is at hand
+	Certificate bool `json:"certificate"`
+
+	// CostMinor What it cost, in currency's minor units
+	CostMinor int64  `json:"cost_minor"`
+	Currency  string `json:"currency"`
+
+	// Fineness Decimal, thousandths, to tenths: 999.9 is 99.99 % metal
+	Fineness string `json:"fineness"`
+
+	// ForeignMade Made abroad: a Russian bank may not take it back without an assay
+	ForeignMade bool `json:"foreign_made"`
+
+	// HardToSell Why a bank may not take it back at its price without an assay; empty when none
+	HardToSell []ValuablesItemHardToSell `json:"hard_to_sell"`
+	Id         openapi_types.UUID        `json:"id"`
+	Kind       ValuablesItemKind         `json:"kind"`
+
+	// Maker The refinery or mint
+	Maker string `json:"maker"`
+
+	// MarketMinor Its worth by the central bank's accounting price of price_on, in roubles' minor units; null before the bank has a price
+	MarketMinor nullable.Nullable[int64] `json:"market_minor"`
+	Metal       Metal                    `json:"metal"`
+	Note        string                   `json:"note"`
+
+	// OwnerUserId Whose it is; null: the family's
+	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id"`
+
+	// PriceOn Date of the central bank's price used
+	PriceOn nullable.Nullable[string] `json:"price_on"`
+
+	// PureGrams Decimal: grams of metal in it, weight × fineness / 1000
+	PureGrams string `json:"pure_grams"`
+
+	// Sealed Its maker's packing is whole
+	Sealed bool `json:"sealed"`
+
+	// SellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
+	SellBy ValuablesItemSellBy `json:"sell_by"`
+
+	// SellMinor What it would sell for now (decision Р-40 Г), in roubles' minor units; null before there is a price
+	SellMinor nullable.Nullable[int64] `json:"sell_minor"`
+
+	// Serial The bar's number; empty for a coin
+	Serial string `json:"serial"`
+
+	// TaxFreeFrom Date YYYY-MM-DD from which it sells free of tax: three years from its purchase
+	TaxFreeFrom string `json:"tax_free_from"`
+
+	// Weight Decimal, grams, to ten-thousandths: what the piece weighs
+	Weight string `json:"weight"`
+}
+
+// ValuablesItemHardToSell defines model for ValuablesItem.HardToSell.
+type ValuablesItemHardToSell string
+
+// ValuablesItemKind defines model for ValuablesItem.Kind.
+type ValuablesItemKind string
+
+// ValuablesItemSellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
+type ValuablesItemSellBy string
+
+// ValuablesItemInput defines model for ValuablesItemInput.
+type ValuablesItemInput struct {
+	// BoughtOn Date YYYY-MM-DD
+	BoughtOn string `json:"bought_on"`
+
+	// Certificate Its certificate is at hand
+	Certificate bool `json:"certificate"`
+
+	// CostMinor What it cost, in currency's minor units
+	CostMinor int64  `json:"cost_minor"`
+	Currency  string `json:"currency"`
+
+	// Fineness Decimal, thousandths, to tenths: 999.9 is 99.99 % metal
+	Fineness string `json:"fineness"`
+
+	// ForeignMade Made abroad: a Russian bank may not take it back without an assay
+	ForeignMade bool                   `json:"foreign_made"`
+	Kind        ValuablesItemInputKind `json:"kind"`
+
+	// Maker The refinery or mint
+	Maker string `json:"maker"`
+	Metal Metal  `json:"metal"`
+	Note  string `json:"note"`
+
+	// OwnerUserId Whose it is; null: the family's
+	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id"`
+
+	// Sealed Its maker's packing is whole
+	Sealed bool `json:"sealed"`
+
+	// Serial The bar's number; empty for a coin
+	Serial string `json:"serial"`
+
+	// Weight Decimal, grams, to ten-thousandths: what the piece weighs
+	Weight string `json:"weight"`
+}
+
+// ValuablesItemInputKind defines model for ValuablesItemInput.Kind.
+type ValuablesItemInputKind string
+
+// ValuablesStorage defines model for ValuablesStorage.
+type ValuablesStorage struct {
+	// Bank The bank of a safe box or custody; empty otherwise
+	Bank string `json:"bank"`
+
+	// BuybackPercent Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal and weight
+	BuybackPercent nullable.Nullable[string] `json:"buyback_percent"`
+
+	// FeeMinor What the box or the custody costs a period, in roubles' minor units; null with fee_period
+	FeeMinor  nullable.Nullable[int64]                     `json:"fee_minor"`
+	FeePeriod nullable.Nullable[ValuablesStorageFeePeriod] `json:"fee_period"`
+
+	// Place home; safe_box: a bank's safe box; custody: kept by a bank under a contract; other
+	Place ValuablesStoragePlace `json:"place"`
+
+	// Until Date YYYY-MM-DD the box's rent or the custody contract runs to
+	Until nullable.Nullable[string] `json:"until"`
+}
+
+// ValuablesStorageFeePeriod defines model for ValuablesStorage.FeePeriod.
+type ValuablesStorageFeePeriod string
+
+// ValuablesStoragePlace home; safe_box: a bank's safe box; custody: kept by a bank under a contract; other
+type ValuablesStoragePlace string
+
 // WithheldAbroad The tax withheld abroad from one foreign dividend. A broker reports only what arrived, so the figure is an ESTIMATE from the broker's dividend calendar: the declared dividend per share times the shares the account held when the right was fixed is the gross, and the gross less what arrived is the tax. A reader must show it as an estimate (≈) to be checked against the broker's statement. Where it cannot be estimated honestly, `state` says so and `unknown_reason` why.
 type WithheldAbroad struct {
 	// BrokerTax Tax the broker reported as its own rows on this paper on the payment's day, per currency, sign preserved (negative). Those rows stay in the journal as they are; this repeats them beside the payment they belong to. Empty when there are none.
@@ -5282,6 +5607,18 @@ type RecordLoanPaymentJSONRequestBody = LoanPaymentRequest
 
 // RecordLoanPrepaymentJSONRequestBody defines body for RecordLoanPrepayment for application/json ContentType.
 type RecordLoanPrepaymentJSONRequestBody = LoanPrepaymentRequest
+
+// SetValuablesBankPriceJSONRequestBody defines body for SetValuablesBankPrice for application/json ContentType.
+type SetValuablesBankPriceJSONRequestBody = ValuablesBankPrice
+
+// AddValuablesItemJSONRequestBody defines body for AddValuablesItem for application/json ContentType.
+type AddValuablesItemJSONRequestBody = ValuablesItemInput
+
+// UpdateValuablesItemJSONRequestBody defines body for UpdateValuablesItem for application/json ContentType.
+type UpdateValuablesItemJSONRequestBody = ValuablesItemInput
+
+// SetValuablesStorageJSONRequestBody defines body for SetValuablesStorage for application/json ContentType.
+type SetValuablesStorageJSONRequestBody = ValuablesStorage
 
 // SetAllocationModeJSONRequestBody defines body for SetAllocationMode for application/json ContentType.
 type SetAllocationModeJSONRequestBody SetAllocationModeJSONBody

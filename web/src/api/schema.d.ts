@@ -55,6 +55,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/valuables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What a valuables account keeps (decision Р-39): the storage's terms, every bar and coin with its value, the bank's buyback prices written in, and the whole valued twice (decision Р-40). 400 for an account of another type. */
+        get: operations["getValuables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/valuables/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description States the storage's terms anew. 400 when they do not hold. */
+        put: operations["setValuablesStorage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/valuables/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Puts a bar or a coin on the account. 400 when it does not hold. */
+        post: operations["addValuablesItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/valuables/items/{itemId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description States a piece anew. 404 when the account has no such piece. */
+        put: operations["updateValuablesItem"];
+        post?: never;
+        /** @description Takes a piece written in by mistake off the account; a sale is its own operation. */
+        delete: operations["deleteValuablesItem"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/valuables/bank-prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Writes in what the family's bank buys a gram of a metal back for, as of a day; while it is no older than 30 days it stands for the guide in «if sold now» (decision Р-40 Г). */
+        put: operations["setValuablesBankPrice"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/rebalance": {
         parameters: {
             query?: never;
@@ -1888,8 +1974,11 @@ export interface components {
         UpdateMemberRequest: {
             role: components["schemas"]["Role"];
         };
-        /** @enum {string} */
-        AccountType: "brokerage" | "checking" | "savings" | "deposit" | "credit_card" | "loan" | "cash";
+        /**
+         * @description valuables: where bars and coins of precious metal are kept (decision Р-39); its worth is theirs
+         * @enum {string}
+         */
+        AccountType: "brokerage" | "checking" | "savings" | "deposit" | "credit_card" | "loan" | "cash" | "valuables";
         /** @enum {string} */
         AccountStatus: "active" | "archived";
         AccountWithBalance: {
@@ -2707,6 +2796,117 @@ export interface components {
              * @description Of the gain, what lots held longer than long_holding_years gain — free of the tax
              */
             free_minor: number;
+        };
+        /** @enum {string} */
+        Metal: "gold" | "silver" | "platinum" | "palladium";
+        ValuablesStorage: {
+            /**
+             * @description home; safe_box: a bank's safe box; custody: kept by a bank under a contract; other
+             * @enum {string}
+             */
+            place: "home" | "safe_box" | "custody" | "other";
+            /** @description The bank of a safe box or custody; empty otherwise */
+            bank: string;
+            /** @description Date YYYY-MM-DD the box's rent or the custody contract runs to */
+            until: string | null;
+            /**
+             * Format: int64
+             * @description What the box or the custody costs a period, in roubles' minor units; null with fee_period
+             */
+            fee_minor: number | null;
+            /** @enum {string|null} */
+            fee_period: "month" | "year" | null;
+            /** @description Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal and weight */
+            buyback_percent: string | null;
+        };
+        ValuablesItemInput: {
+            /** @enum {string} */
+            kind: "bar" | "coin";
+            metal: components["schemas"]["Metal"];
+            /** @description Decimal, grams, to ten-thousandths: what the piece weighs */
+            weight: string;
+            /** @description Decimal, thousandths, to tenths: 999.9 is 99.99 % metal */
+            fineness: string;
+            /** @description The refinery or mint */
+            maker: string;
+            /** @description Made abroad: a Russian bank may not take it back without an assay */
+            foreign_made: boolean;
+            /** @description The bar's number; empty for a coin */
+            serial: string;
+            /** @description Its certificate is at hand */
+            certificate: boolean;
+            /** @description Its maker's packing is whole */
+            sealed: boolean;
+            /** @description Date YYYY-MM-DD */
+            bought_on: string;
+            /**
+             * Format: int64
+             * @description What it cost, in currency's minor units
+             */
+            cost_minor: number;
+            currency: string;
+            /**
+             * Format: uuid
+             * @description Whose it is; null: the family's
+             */
+            owner_user_id: string | null;
+            note: string;
+        };
+        ValuablesItem: components["schemas"]["ValuablesItemInput"] & {
+            /** Format: uuid */
+            id: string;
+            /** @description Decimal: grams of metal in it, weight × fineness / 1000 */
+            pure_grams: string;
+            /**
+             * Format: int64
+             * @description Its worth by the central bank's accounting price of price_on, in roubles' minor units; null before the bank has a price
+             */
+            market_minor: number | null;
+            /**
+             * Format: int64
+             * @description What it would sell for now (decision Р-40 Г), in roubles' minor units; null before there is a price
+             */
+            sell_minor: number | null;
+            /**
+             * @description bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
+             * @enum {string}
+             */
+            sell_by: "bank_price" | "storage_percent" | "guide_percent" | "no_price";
+            /** @description Decimal: the percent sell_minor is below market_minor; null by the bank's price */
+            buyback_percent: string | null;
+            /** @description Date of the bank's price used */
+            bank_price_on: string | null;
+            /** @description Date of the central bank's price used */
+            price_on: string | null;
+            /** @description Date YYYY-MM-DD from which it sells free of tax: three years from its purchase */
+            tax_free_from: string;
+            /** @description Why a bank may not take it back at its price without an assay; empty when none */
+            hard_to_sell: ("foreign_made" | "no_certificate" | "opened")[];
+        };
+        ValuablesBankPrice: {
+            metal: components["schemas"]["Metal"];
+            /** @description Decimal: roubles the bank pays for a gram of the metal */
+            price: string;
+            /** @description Date YYYY-MM-DD the price is of */
+            on: string;
+        };
+        Valuables: {
+            storage: components["schemas"]["ValuablesStorage"];
+            /** @description Earliest bought first */
+            items: components["schemas"]["ValuablesItem"][];
+            bank_prices: components["schemas"]["ValuablesBankPrice"][];
+            /**
+             * Format: int64
+             * @description All pieces by the central bank's price; null when one cannot be valued yet
+             */
+            market_minor: number | null;
+            /**
+             * Format: int64
+             * @description All pieces as they would sell now; null when one cannot be valued yet
+             */
+            sell_minor: number | null;
+            /** @description RUB: the central bank prices metals in roubles */
+            currency: string;
         };
         AllocationTarget: {
             key: string;
@@ -4948,6 +5148,178 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getValuables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setValuablesStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValuablesStorage"];
+            };
+        };
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    addValuablesItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValuablesItemInput"];
+            };
+        };
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateValuablesItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValuablesItemInput"];
+            };
+        };
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteValuablesItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setValuablesBankPrice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValuablesBankPrice"];
+            };
+        };
+        responses: {
+            /** @description The storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Valuables"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getAllocationRebalance: {

@@ -5,6 +5,7 @@ info:
 tags:
   - { name: family, description: "Setup, sign-in and sessions, the space, its members and roles (internal/family)." }
   - { name: accounts, description: "Accounts, balance marks, the family's total and capital (internal/account)." }
+  - { name: valuables, description: "Bars and coins of precious metal on valuables accounts, and where they are kept (internal/valuables)." }
   - { name: instruments, description: "The catalog of papers (internal/instrument)." }
   - { name: corporate-actions, description: "The registry of splits, conversions and spin-offs (internal/corporateaction)." }
   - { name: journal, description: "Operations: entry, edit, delete, transfers, arrivals (internal/operation)." }
@@ -89,6 +90,92 @@ paths:
               schema: { $ref: "#/components/schemas/AllocationTopUp" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/valuables:
+    get:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: getValuables
+      description: >-
+        What a valuables account keeps (decision Р-39): the storage's terms, every bar and coin with its
+        value, the bank's buyback prices written in, and the whole valued twice (decision Р-40). 400 for an
+        account of another type.
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/valuables/storage:
+    put:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: setValuablesStorage
+      description: States the storage's terms anew. 400 when they do not hold.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ValuablesStorage" } } } }
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/valuables/items:
+    post:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: addValuablesItem
+      description: Puts a bar or a coin on the account. 400 when it does not hold.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ValuablesItemInput" } } } }
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/valuables/items/{itemId}:
+    put:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: updateValuablesItem
+      description: States a piece anew. 404 when the account has no such piece.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ValuablesItemInput" } } } }
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: deleteValuablesItem
+      description: Takes a piece written in by mistake off the account; a sale is its own operation.
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/valuables/bank-prices:
+    put:
+      tags: [valuables]
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      operationId: setValuablesBankPrice
+      description: >-
+        Writes in what the family's bank buys a gram of a metal back for, as of a day; while it is no older
+        than 30 days it stands for the guide in «if sold now» (decision Р-40 Г).
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ValuablesBankPrice" } } } }
+      responses:
+        "200": { description: The storage, content: { application/json: { schema: { $ref: "#/components/schemas/Valuables" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/allocation/rebalance:
     get:
       tags: [allocation]
@@ -2865,7 +2952,8 @@ components:
         role: { $ref: "#/components/schemas/Role" }
     AccountType:
       type: string
-      enum: [brokerage, checking, savings, deposit, credit_card, loan, cash]
+      description: "valuables: where bars and coins of precious metal are kept (decision Р-39); its worth is theirs"
+      enum: [brokerage, checking, savings, deposit, credit_card, loan, cash, valuables]
     AccountStatus:
       type: string
       enum: [active, archived]
@@ -3590,6 +3678,70 @@ components:
         known: { type: boolean, description: "False when a sold lot's cost cannot be struck in the base currency (no date to take the rate of, no rate); the figures are then 0 and claim nothing" }
         gain_minor: { type: integer, format: int64, description: "What the sold papers gain over their cost, signed, in the base currency: each lot's cost at its purchase's rate, the earliest lots first" }
         free_minor: { type: integer, format: int64, description: "Of the gain, what lots held longer than long_holding_years gain — free of the tax" }
+    Metal:
+      type: string
+      enum: [gold, silver, platinum, palladium]
+    ValuablesStorage:
+      type: object
+      required: [place, bank, until, fee_minor, fee_period, buyback_percent]
+      properties:
+        place: { type: string, enum: [home, safe_box, custody, other], description: "home; safe_box: a bank's safe box; custody: kept by a bank under a contract; other" }
+        bank: { type: string, description: "The bank of a safe box or custody; empty otherwise" }
+        until: { type: string, nullable: true, description: "Date YYYY-MM-DD the box's rent or the custody contract runs to" }
+        fee_minor: { type: integer, format: int64, nullable: true, minimum: 0, description: "What the box or the custody costs a period, in roubles' minor units; null with fee_period" }
+        fee_period: { type: string, nullable: true, enum: [month, year] }
+        buyback_percent: { type: string, nullable: true, description: "Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal and weight" }
+    ValuablesItemInput:
+      type: object
+      required: [kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed, bought_on, cost_minor, currency, owner_user_id, note]
+      properties:
+        kind: { type: string, enum: [bar, coin] }
+        metal: { $ref: "#/components/schemas/Metal" }
+        weight: { type: string, description: "Decimal, grams, to ten-thousandths: what the piece weighs" }
+        fineness: { type: string, description: "Decimal, thousandths, to tenths: 999.9 is 99.99 % metal" }
+        maker: { type: string, description: "The refinery or mint" }
+        foreign_made: { type: boolean, description: "Made abroad: a Russian bank may not take it back without an assay" }
+        serial: { type: string, description: "The bar's number; empty for a coin" }
+        certificate: { type: boolean, description: "Its certificate is at hand" }
+        sealed: { type: boolean, description: "Its maker's packing is whole" }
+        bought_on: { type: string, description: "Date YYYY-MM-DD" }
+        cost_minor: { type: integer, format: int64, minimum: 0, description: "What it cost, in currency's minor units" }
+        currency: { type: string }
+        owner_user_id: { type: string, format: uuid, nullable: true, description: "Whose it is; null: the family's" }
+        note: { type: string }
+    ValuablesItem:
+      allOf:
+        - $ref: "#/components/schemas/ValuablesItemInput"
+        - type: object
+          required: [id, pure_grams, market_minor, sell_minor, sell_by, buyback_percent, bank_price_on, price_on, tax_free_from, hard_to_sell]
+          properties:
+            id: { type: string, format: uuid }
+            pure_grams: { type: string, description: "Decimal: grams of metal in it, weight × fineness / 1000" }
+            market_minor: { type: integer, format: int64, nullable: true, description: "Its worth by the central bank's accounting price of price_on, in roubles' minor units; null before the bank has a price" }
+            sell_minor: { type: integer, format: int64, nullable: true, description: "What it would sell for now (decision Р-40 Г), in roubles' minor units; null before there is a price" }
+            sell_by: { type: string, enum: [bank_price, storage_percent, guide_percent, no_price], description: "bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet" }
+            buyback_percent: { type: string, nullable: true, description: "Decimal: the percent sell_minor is below market_minor; null by the bank's price" }
+            bank_price_on: { type: string, nullable: true, description: "Date of the bank's price used" }
+            price_on: { type: string, nullable: true, description: "Date of the central bank's price used" }
+            tax_free_from: { type: string, description: "Date YYYY-MM-DD from which it sells free of tax: three years from its purchase" }
+            hard_to_sell: { type: array, items: { type: string, enum: [foreign_made, no_certificate, opened] }, description: "Why a bank may not take it back at its price without an assay; empty when none" }
+    ValuablesBankPrice:
+      type: object
+      required: [metal, price, on]
+      properties:
+        metal: { $ref: "#/components/schemas/Metal" }
+        price: { type: string, description: "Decimal: roubles the bank pays for a gram of the metal" }
+        on: { type: string, description: "Date YYYY-MM-DD the price is of" }
+    Valuables:
+      type: object
+      required: [storage, items, bank_prices, market_minor, sell_minor, currency]
+      properties:
+        storage: { $ref: "#/components/schemas/ValuablesStorage" }
+        items: { type: array, items: { $ref: "#/components/schemas/ValuablesItem" }, description: "Earliest bought first" }
+        bank_prices: { type: array, items: { $ref: "#/components/schemas/ValuablesBankPrice" } }
+        market_minor: { type: integer, format: int64, nullable: true, description: "All pieces by the central bank's price; null when one cannot be valued yet" }
+        sell_minor: { type: integer, format: int64, nullable: true, description: "All pieces as they would sell now; null when one cannot be valued yet" }
+        currency: { type: string, description: "RUB: the central bank prices metals in roubles" }
     AllocationTarget:
       type: object
       required: [key, percent]
