@@ -35,6 +35,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/valuables"
 )
 
 // Version is the document's format version (see SpaceExport.version).
@@ -81,6 +82,10 @@ type receipts interface {
 	All(ctx context.Context, spaceID uuid.UUID) ([]receipt.Receipt, error)
 }
 
+type valuableSets interface {
+	Entered(ctx context.Context, spaceID, accountID uuid.UUID) (valuables.Storage, []valuables.BankPrice, []valuables.Item, bool, error)
+}
+
 type allocations interface {
 	Settings(ctx context.Context, spaceID uuid.UUID) (allocation.Settings, error)
 }
@@ -107,6 +112,7 @@ type Handler struct {
 	budgets     budgets
 	receipts    receipts
 	allocations allocations
+	valuables   valuableSets
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
@@ -119,6 +125,12 @@ func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events
 		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
 		loans: l, cards: cc, budgets: b, receipts: rc, allocations: al, auth: auth, sm: sm, now: time.Now,
 	}
+}
+
+// WithValuables writes valuables accounts' bars and coins into the export.
+func (h *Handler) WithValuables(v valuableSets) *Handler {
+	h.valuables = v
+	return h
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -219,6 +231,15 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 				return apitypes.SpaceExport{}, err
 			}
 			out.CreditCardInstallments = creditcard.InstallmentsExport(plans)
+		}
+		if a.Type == account.TypeValuables && h.valuables != nil {
+			st, bank, items, ok, err := h.valuables.Entered(ctx, spaceID, a.ID)
+			if err != nil {
+				return apitypes.SpaceExport{}, err
+			}
+			if ok {
+				out.Valuables = nullable.NewNullableWithValue(exportValuables(st, bank, items, usernames))
+			}
 		}
 		doc.Accounts = append(doc.Accounts, out)
 		for _, o := range ops {
@@ -343,6 +364,7 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		LoanPrepayments:        []apitypes.LoanPrepayment{},
 		CreditCardInstallments: []apitypes.ExportCardInstallment{},
 		CreditCard:             nullable.NewNullNullable[apitypes.CreditCardTerms](),
+		Valuables:              nullable.NewNullNullable[apitypes.ExportValuables](),
 	}
 	for _, w := range stated {
 		out.WithheldStated = append(out.WithheldStated, apitypes.ExportWithheldStated{
@@ -357,6 +379,26 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 	}
 	for _, o := range ops {
 		out.Operations = append(out.Operations, exportOperation(o, usernames))
+	}
+	return out
+}
+
+// exportValuables is a storage as written in, its pieces' owners by
+// username like the journal's.
+func exportValuables(st valuables.Storage, bank []valuables.BankPrice, items []valuables.Item, usernames map[uuid.UUID]string) apitypes.ExportValuables {
+	whole := valuables.HoldingAPI(valuables.Holding{Storage: st, BankPrices: bank})
+	out := apitypes.ExportValuables{Storage: whole.Storage, BankPrices: whole.BankPrices, Items: []apitypes.ExportValuablesItem{}}
+	for _, it := range items {
+		e := apitypes.ExportValuablesItem{
+			Id: it.ID, Kind: string(it.Kind), Metal: string(it.Metal), Weight: it.Weight.String(), Fineness: it.Fineness.StringFixed(1),
+			Maker: it.Maker, ForeignMade: it.ForeignMade, Serial: it.Serial, Certificate: it.Certificate, Sealed: it.Sealed,
+			BoughtOn: it.BoughtOn.Format(time.DateOnly), CostMinor: it.CostMinor, Currency: it.Currency,
+			OwnerUsername: nullable.NewNullNullable[string](), Note: it.Note,
+		}
+		if it.OwnerUserID != nil {
+			e.OwnerUsername = nullable.NewNullableWithValue(usernames[*it.OwnerUserID])
+		}
+		out.Items = append(out.Items, e)
 	}
 	return out
 }

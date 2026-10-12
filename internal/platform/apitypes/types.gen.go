@@ -3100,11 +3100,14 @@ type ExportAccount struct {
 	Operations []ExportOperation `json:"operations"`
 
 	// OwnerUsername The member the account is personal to; null for a shared one
-	OwnerUsername   nullable.Nullable[string] `json:"owner_username"`
-	Status          string                    `json:"status"`
-	TradesAbroad    bool                      `json:"trades_abroad"`
-	Type            string                    `json:"type"`
-	ValuedByBalance bool                      `json:"valued_by_balance"`
+	OwnerUsername nullable.Nullable[string] `json:"owner_username"`
+	Status        string                    `json:"status"`
+	TradesAbroad  bool                      `json:"trades_abroad"`
+	Type          string                    `json:"type"`
+
+	// Valuables A valuables account's storage, bank prices and bars and coins as written in (decision Р-39), nothing valued; null on every other account
+	Valuables       nullable.Nullable[ExportValuables] `json:"valuables,omitempty"`
+	ValuedByBalance bool                               `json:"valued_by_balance"`
 
 	// WithheldStated Taxes withheld abroad stated by hand (PUT /operations/{operationId}/withheld-abroad), oldest payment first
 	WithheldStated []ExportWithheldStated `json:"withheld_stated"`
@@ -3243,6 +3246,41 @@ type ExportSpace struct {
 	Id           openapi_types.UUID `json:"id"`
 	Name         string             `json:"name"`
 	TaxResidency string             `json:"tax_residency"`
+}
+
+// ExportValuables defines model for ExportValuables.
+type ExportValuables struct {
+	BankPrices []ValuablesBankPrice `json:"bank_prices"`
+
+	// Items Earliest bought first
+	Items   []ExportValuablesItem `json:"items"`
+	Storage ValuablesStorage      `json:"storage"`
+}
+
+// ExportValuablesItem defines model for ExportValuablesItem.
+type ExportValuablesItem struct {
+	// BoughtOn Date YYYY-MM-DD
+	BoughtOn    string `json:"bought_on"`
+	Certificate bool   `json:"certificate"`
+	CostMinor   int64  `json:"cost_minor"`
+	Currency    string `json:"currency"`
+
+	// Fineness Decimal, thousandths
+	Fineness    string             `json:"fineness"`
+	ForeignMade bool               `json:"foreign_made"`
+	Id          openapi_types.UUID `json:"id"`
+	Kind        string             `json:"kind"`
+	Maker       string             `json:"maker"`
+	Metal       string             `json:"metal"`
+	Note        string             `json:"note"`
+
+	// OwnerUsername The member it is personal to; null for the family's
+	OwnerUsername nullable.Nullable[string] `json:"owner_username"`
+	Sealed        bool                      `json:"sealed"`
+	Serial        string                    `json:"serial"`
+
+	// Weight Decimal, grams
+	Weight string `json:"weight"`
 }
 
 // ExportWithheldStated defines model for ExportWithheldStated.

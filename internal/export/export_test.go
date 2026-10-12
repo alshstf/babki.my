@@ -30,6 +30,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/valuables"
 )
 
 type stack struct {
@@ -63,7 +64,8 @@ func newStack(t *testing.T) stack {
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
 		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore, category.NewStore(pool), operation.NewService(opStore)),
-		allocation.NewService(pool, nil), auth, sm).Mount(srv)
+		allocation.NewService(pool, nil), auth, sm).WithValuables(valuables.NewService(pool, accStore, md)).Mount(srv)
+	valuables.NewHandler(valuables.NewService(pool, accStore, md), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -371,5 +373,67 @@ func TestTheExportCarriesLoanAndCardTerms(t *testing.T) {
 	}
 	if seen != 3 {
 		t.Errorf("saw %d of the 3 accounts", seen)
+	}
+}
+
+// A safe box's terms, the bank's price and its bars go into the export as
+// written in, the owner of a piece by username; other accounts carry none.
+func TestTheExportCarriesValuables(t *testing.T) {
+	s := newStack(t)
+	box := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Ячейка","type":"valuables","currency":"RUB"}`, http.StatusCreated)["id"].(string)
+	current := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Текущий","type":"checking","currency":"RUB"}`, http.StatusCreated)["id"].(string)
+	put := func(url, body string) {
+		req, _ := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := s.c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s = %d", url, resp.StatusCode)
+		}
+	}
+	put(s.url+"/api/v1/accounts/"+box+"/valuables/storage", `{"place":"safe_box","bank":"ВТБ","until":"2027-03-31","fee_minor":180000,"fee_period":"month","buyback_percent":"4"}`)
+	put(s.url+"/api/v1/accounts/"+box+"/valuables/bank-prices", `{"metal":"gold","price":"10100","on":"2026-01-10"}`)
+	me := get(t, s.c, s.url+"/api/v1/auth/me")
+	var who struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(me.Body).Decode(&who); err != nil {
+		t.Fatal(err)
+	}
+	post(t, s.c, s.url+"/api/v1/accounts/"+box+"/valuables/items", `{"kind":"bar","metal":"gold","weight":"100","fineness":"999.9","maker":"Красцветмет",
+		"foreign_made":false,"serial":"123456","certificate":true,"sealed":true,"bought_on":"2023-03-15","cost_minor":52000000,"currency":"RUB",
+		"owner_user_id":"`+who.User.ID+`","note":"из ячейки"}`, http.StatusOK)
+
+	var doc struct {
+		Accounts []struct {
+			ID        string          `json:"id"`
+			Valuables json.RawMessage `json:"valuables"`
+		} `json:"accounts"`
+	}
+	if err := json.NewDecoder(get(t, s.c, s.url+"/api/v1/export").Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range doc.Accounts {
+		switch a.ID {
+		case box:
+			v := string(a.Valuables)
+			for _, want := range []string{`"place":"safe_box"`, `"buyback_percent":"4.00"`, `"price":"10100"`, `"serial":"123456"`, `"owner_username":"alex"`, `"weight":"100"`, `"note":"из ячейки"`} {
+				if !strings.Contains(v, want) {
+					t.Errorf("valuables %s lacks %s", v, want)
+				}
+			}
+			if strings.Contains(v, "market_minor") {
+				t.Errorf("valuables carry a value: %s", v)
+			}
+		case current:
+			if string(a.Valuables) != "null" {
+				t.Errorf("current: %s", a.Valuables)
+			}
+		}
 	}
 }
