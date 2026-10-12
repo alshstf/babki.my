@@ -1428,6 +1428,7 @@
     "verdictFurther": "дальше от цели на {{by}} п.п.",
     "verdictSame": "без изменений",
     "topUpFailed": "Не удалось посчитать. Попробуйте ещё раз.",
+    "legendHeld": "есть сейчас",
     "legendIn": "прибавка",
     "legendOut": "уйдёт со счетов брокеров",
     "legendTarget": "цель",

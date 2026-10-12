@@ -128,16 +128,23 @@ export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
 }
 
 // Moved is what a top-up moves into a kind (or out of the brokers' free
-// money) and the kind's share after it.
+// money), the same as a share of the worth after the top-up, and the kind's
+// share after it.
 interface Moved {
   change: number;
+  part: number;
   shareAfter: number;
 }
 
-// SEGMENT is what a top-up moves on a bar: half again as tall as the bar on
-// each side; HATCH fills what leaves.
+// HELD is what a kind holds on a bar, in a quiet grey: the colour is kept
+// for what a top-up changes. SEGMENT is that change: half again as tall as
+// the bar on each side, never thinner than a few pixels; ADDED is money put
+// in, a see-through green; HATCH fills money taken out.
+const HELD = "bg-muted-foreground/45";
 const SEGMENT = "absolute -top-1 -bottom-1 rounded-sm ring-2 ring-background";
-const HATCH = "repeating-linear-gradient(135deg, rgb(217 119 6 / 0.75) 0 3px, transparent 3px 6px)";
+const ADDED = "border border-emerald-600/60 bg-emerald-500/40 dark:border-emerald-400/60 dark:bg-emerald-400/35";
+const HATCH = "repeating-linear-gradient(135deg, var(--muted-foreground) 0 2px, transparent 2px 6px)";
+const THIN = "6px";
 
 // LINE places the words under a row's bar: across the row on a phone, under
 // the bar on a wide screen.
@@ -170,6 +177,12 @@ function Rows({
         const before = Number(r.share);
         const moved = preview?.get(r.key);
         const after = moved?.shareAfter ?? before;
+        // With a top-up counted the bar is the worth after it: what the
+        // kind holds now — thinner, as the worth grows, — what comes in on
+        // top of it, what leaves.
+        const added = moved && moved.part > 0 ? moved.part : 0;
+        const taken = moved && moved.part < 0 ? -moved.part : 0;
+        const held = Math.min(Math.max(after - added, 0), 100);
         const target = r.target === null ? null : Number(r.target);
         return (
           // On a wide screen the name, the bar and the figures sit in one
@@ -181,23 +194,18 @@ function Rows({
           >
             <span className="col-start-1 row-start-1 min-w-0 text-sm">{name(r.key)}</span>
             <div className="relative col-span-2 row-start-2 h-2 rounded bg-muted md:col-span-1 md:col-start-2 md:row-start-1">
-              <div className="absolute inset-y-0 left-0 rounded bg-emerald-500" style={{ width: `${Math.min(before, after, 100)}%` }} />
-              {/* What a top-up moves stands out above and below the bar and is
-                  never thinner than a few pixels, however small: money put
-                  in — blue; money taken out (the brokers' free money) —
-                  hatched. A share that only thins as the worth grows gets
-                  its words, not a mark. */}
+              <div className={cn("absolute inset-y-0 left-0 rounded", HELD)} style={{ width: `${held}%` }} />
               {moved && moved.change > 0 && (
                 <div
-                  className={SEGMENT + " bg-sky-500 dark:bg-sky-400"}
-                  style={{ left: `${Math.min(before, 100)}%`, width: `max(${Math.min(after, 100) - Math.min(before, 100)}%, 6px)` }}
+                  className={cn(SEGMENT, ADDED)}
+                  style={{ left: `${held}%`, width: `max(${Math.min(added, 100 - held)}%, ${THIN})` }}
                   data-testid="allocation-added"
                 />
               )}
               {moved && moved.change < 0 && (
                 <div
-                  className={SEGMENT + " border border-amber-600 bg-background"}
-                  style={{ left: `${Math.min(after, 100)}%`, width: `max(${Math.min(before, 100) - Math.min(after, 100)}%, 6px)`, backgroundImage: HATCH }}
+                  className={cn(SEGMENT, "border border-muted-foreground/60 bg-background")}
+                  style={{ left: `${held}%`, width: `max(${Math.min(taken, 100 - held)}%, ${THIN})`, backgroundImage: HATCH }}
                   data-testid="allocation-removed"
                 />
               )}
@@ -301,7 +309,14 @@ function TopUp({
   const topUp = useTopUp(asked, valuation);
   const data = asked ? topUp.data : undefined;
   useEffect(() => {
-    onPreview(data ? new Map(data.kinds.map((k) => [k.key, { change: k.change_minor, shareAfter: Number(k.share_after) }])) : null);
+    const worth = data?.worth_after_minor ?? 0;
+    onPreview(
+      data
+        ? new Map(
+            data.kinds.map((k) => [k.key, { change: k.change_minor, part: worth > 0 ? (k.change_minor / worth) * 100 : 0, shareAfter: Number(k.share_after) }]),
+          )
+        : null,
+    );
   }, [data, onPreview]);
   // The words say what was counted, not what is being typed.
   const counted = data && asked && !topUp.isPlaceholderData ? asked : null;
@@ -337,12 +352,16 @@ function TopUp({
       {counted && (
         <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="allocation-topup-legend">
           <span className="flex items-center gap-1.5">
-            <span className="inline-block h-3 w-4 rounded-sm bg-sky-500 dark:bg-sky-400" />
+            <span className={cn("inline-block h-2 w-4 rounded-sm", HELD)} />
+            {t("allocation.legendHeld")}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className={cn("inline-block h-3 w-4 rounded-sm", ADDED)} />
             {t("allocation.legendIn")}
           </span>
           {counted.fromBrokers > 0 && (
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-4 rounded-sm border border-amber-600" style={{ backgroundImage: HATCH }} />
+              <span className="inline-block h-3 w-4 rounded-sm border border-muted-foreground/60" style={{ backgroundImage: HATCH }} />
               {t("allocation.legendOut")}
             </span>
           )}
