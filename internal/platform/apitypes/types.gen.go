@@ -955,6 +955,27 @@ func (e PayoutKind) Valid() bool {
 	}
 }
 
+// Defines values for PayoutNetBy.
+const (
+	History PayoutNetBy = "history"
+	None    PayoutNetBy = "none"
+	Rule    PayoutNetBy = "rule"
+)
+
+// Valid indicates whether the value is a known member of the PayoutNetBy enum.
+func (e PayoutNetBy) Valid() bool {
+	switch e {
+	case History:
+		return true
+	case None:
+		return true
+	case Rule:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PayoutCheckKind.
 const (
 	PayoutCheckKindAmortization PayoutCheckKind = "amortization"
@@ -3640,6 +3661,15 @@ type Payout struct {
 	InstrumentId openapi_types.UUID       `json:"instrument_id"`
 	Kind         PayoutKind               `json:"kind"`
 
+	// NetBy How net_minor was told — history: as this paper's payout of this kind came to this account last time, its tax rows taken off; rule: a rouble coupon or dividend less 13 %, a repayment of face value whole; none: no tax known (a payout in another currency), the amount before tax. Null without an amount
+	NetBy nullable.Nullable[PayoutNetBy] `json:"net_by"`
+
+	// NetInBaseMinor net_minor in the base currency at today's rate; null without an amount or a rate
+	NetInBaseMinor nullable.Nullable[int64] `json:"net_in_base_minor"`
+
+	// NetMinor What will reach the account, in `currency` (decision Р-38); null without an amount
+	NetMinor nullable.Nullable[int64] `json:"net_minor"`
+
 	// On Date YYYY-MM-DD the money is due
 	On string `json:"on"`
 
@@ -3655,6 +3685,9 @@ type Payout struct {
 
 // PayoutKind defines model for Payout.Kind.
 type PayoutKind string
+
+// PayoutNetBy How net_minor was told — history: as this paper's payout of this kind came to this account last time, its tax rows taken off; rule: a rouble coupon or dividend less 13 %, a repayment of face value whole; none: no tax known (a payout in another currency), the amount before tax. Null without an amount
+type PayoutNetBy string
 
 // PayoutCheck defines model for PayoutCheck.
 type PayoutCheck struct {
@@ -3683,6 +3716,9 @@ type PayoutCheck struct {
 	// RecordOn The record day held against
 	RecordOn string            `json:"record_on"`
 	Status   PayoutCheckStatus `json:"status"`
+
+	// TaxMinor The tax rows on the paper about its day, in got_currency: negative; 0 when none
+	TaxMinor int64 `json:"tax_minor"`
 }
 
 // PayoutCheckKind defines model for PayoutCheck.Kind.
@@ -3706,6 +3742,10 @@ type PayoutsForecast struct {
 
 	// Months YYYY-MM, this month first
 	Months []string `json:"months"`
+
+	// NetByMonth What each month's payouts bring to the accounts (net_in_base_minor) in the base currency
+	NetByMonth    []int64 `json:"net_by_month"`
+	NetTotalMinor int64   `json:"net_total_minor"`
 
 	// Payouts Earliest first
 	Payouts []Payout `json:"payouts"`

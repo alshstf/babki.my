@@ -42,6 +42,10 @@ type Check struct {
 	Got         int64
 	GotCurrency string
 	GotOn       *time.Time
+	// Tax is the tax rows on the paper about its day in GotCurrency — a
+	// broker books the tax withheld from a payout as a row of its own;
+	// negative.
+	Tax int64
 }
 
 // MaxDays is the furthest back a check looks.
@@ -209,13 +213,17 @@ func heldBefore(ops []operation.Operation) func(id uuid.UUID, record time.Time) 
 }
 
 // match finds the journal's rows of the payout's kind for its paper about its
-// day, each row counted for one payout only, and says what came.
+// day, each row counted for one payout only, and says what came — and what
+// tax rows on the paper went with it.
 func match(c *Check, ops []operation.Operation, used map[uuid.UUID]bool, today time.Time) {
 	want := rowType[c.Kind]
 	first, last := c.On.AddDate(0, 0, -early), c.On.AddDate(0, 0, window(c.Kind))
+	in := func(op operation.Operation) bool {
+		return !used[op.ID] && op.InstrumentID != nil && *op.InstrumentID == c.InstrumentID &&
+			!op.OccurredOn.Before(first) && !op.OccurredOn.After(last)
+	}
 	for _, op := range ops {
-		if used[op.ID] || op.Type != want || op.InstrumentID == nil || *op.InstrumentID != c.InstrumentID ||
-			op.OccurredOn.Before(first) || op.OccurredOn.After(last) {
+		if op.Type != want || !in(op) {
 			continue
 		}
 		if c.GotOn == nil {
@@ -226,6 +234,14 @@ func match(c *Check, ops []operation.Operation, used map[uuid.UUID]bool, today t
 			c.Got += op.AmountMinor
 		}
 		used[op.ID] = true
+	}
+	if c.GotOn != nil {
+		for _, op := range ops {
+			if op.Type == operation.TypeTax && op.Currency == c.GotCurrency && in(op) {
+				c.Tax += op.AmountMinor
+				used[op.ID] = true
+			}
+		}
 	}
 	switch {
 	case c.GotOn == nil && today.After(last):

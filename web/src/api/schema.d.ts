@@ -2380,6 +2380,21 @@ export interface components {
              * @description amount_minor in the base currency at today's rate; null without an amount or a rate
              */
             in_base_minor: number | null;
+            /**
+             * Format: int64
+             * @description What will reach the account, in `currency` (decision Р-38); null without an amount
+             */
+            net_minor: number | null;
+            /**
+             * Format: int64
+             * @description net_minor in the base currency at today's rate; null without an amount or a rate
+             */
+            net_in_base_minor: number | null;
+            /**
+             * @description How net_minor was told — history: as this paper's payout of this kind came to this account last time, its tax rows taken off; rule: a rouble coupon or dividend less 13 %, a repayment of face value whole; none: no tax known (a payout in another currency), the amount before tax. Null without an amount
+             * @enum {string|null}
+             */
+            net_by: "history" | "rule" | "none" | null;
         };
         Benchmark: {
             /** @enum {string} */
@@ -2430,6 +2445,11 @@ export interface components {
             got_currency: string | null;
             /** @description The first row's day */
             got_on: string | null;
+            /**
+             * Format: int64
+             * @description The tax rows on the paper about its day, in got_currency: negative; 0 when none
+             */
+            tax_minor: number;
         };
         PayoutsForecast: {
             base_currency: string;
@@ -2443,6 +2463,10 @@ export interface components {
             by_month: number[];
             /** Format: int64 */
             total_minor: number;
+            /** @description What each month's payouts bring to the accounts (net_in_base_minor) in the base currency */
+            net_by_month: number[];
+            /** Format: int64 */
+            net_total_minor: number;
             /** @description Earliest first */
             payouts: components["schemas"]["Payout"][];
             /** @description Currencies left out of the base figures for want of today's rate */

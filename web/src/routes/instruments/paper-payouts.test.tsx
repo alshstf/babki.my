@@ -58,7 +58,7 @@ function renderIt() {
 describe("PaperPayouts", () => {
   it("lists the paper's own payouts for a year", async () => {
     payouts = [
-      { on: "2026-12-02", record_on: null, kind: "coupon", instrument_id: "i-ofz", account_id: "a-1", quantity: "100", per_unit: "35.4", amount_minor: 354_000, currency: "RUB", in_base_minor: 354_000 },
+      { on: "2026-12-02", record_on: null, kind: "coupon", instrument_id: "i-ofz", account_id: "a-1", quantity: "100", per_unit: "35.4", amount_minor: 354_000, currency: "RUB", in_base_minor: 354_000, net_minor: 307_980, net_in_base_minor: 307_980, net_by: "rule" },
     ];
     renderIt();
     expect(await screen.findByTestId("paper-payout")).toHaveTextContent(/02\.12\.2026.*купон.*Брокер.*3\s540/);
