@@ -28,7 +28,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The family's worth today against its targets (decision Р-37), at the liquid valuation (the one in «Итого»). The worth the targets share out is GET /structure's assets less the base currency on cards, current accounts and in cash (money to live on) and the brokers' accounts known only by their balance (their kinds are not known); debts are not in it. By kind of asset — foreign currency held as money (at a broker, in cash, on a current account) is foreign currency, metals held as money are metals, deposits in any currency are deposits, the base currency at brokers is money waiting to be put in — and by the currency each part is valued in, for the record only. */
+        /** @description The family's worth today against its targets (decision Р-37), papers at the valuation asked (liquid when absent — the one in «Итого»), as GET /structure lays it out. The worth the targets share out is GET /structure's assets less the base currency on cards, current accounts and in cash (money to live on) and the brokers' accounts known only by their balance (their kinds are not known); debts are not in it. By kind of asset — foreign currency held as money (at a broker, in cash, on a current account) is foreign currency, metals held as money are metals, deposits in any currency are deposits, the base currency at brokers is money waiting to be put in — and by the currency each part is valued in, for the record only. */
         get: operations["getAllocation"];
         put?: never;
         post?: never;
@@ -4762,7 +4762,10 @@ export interface operations {
     };
     getAllocation: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Papers at the liquid (when absent) or the full valuation (decision Р-11) */
+                valuation?: "liquid" | "full";
+            };
             header?: never;
             path?: never;
             cookie?: never;

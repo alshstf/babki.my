@@ -41,11 +41,11 @@ function answer(role: string, a: Allocation) {
   });
 }
 
-function show() {
+function show(valuation: "liquid" | "full" = "liquid") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TargetsCard />
+      <TargetsCard valuation={valuation} />
     </QueryClientProvider>,
   );
 }
@@ -68,6 +68,14 @@ describe("TargetsCard", () => {
     expect(norm(rows[5].textContent)).toMatch(/Свободные деньги у брокеров, RUB/);
     expect(norm(screen.getByTestId("allocation-outside").textContent)).toMatch(/деньги на жизнь .* 200 000/);
     expect(screen.queryByRole("button", { name: "Изменить цели" })).toBeNull();
+  });
+
+  it("follows the valuation picked on the page", async () => {
+    answer("viewer", allocation);
+    show("full");
+    expect(norm((await screen.findByTestId("allocation")).textContent)).toMatch(/по полной оценке, с замороженными бумагами/);
+    const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/allocation"));
+    expect(asked.every((u) => u.searchParams.get("valuation") === "full")).toBe(true);
   });
 
   it("states targets that add up to 100", async () => {

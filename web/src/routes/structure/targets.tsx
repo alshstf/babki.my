@@ -63,9 +63,9 @@ function percent(s: string): string {
 // Р-37): by kind of asset — what the suggestions will bring to the targets —
 // and by currency, for the record. Each part's bar shows its share, the tick
 // its target.
-export function TargetsCard() {
+export function TargetsCard({ valuation }: { valuation: "liquid" | "full" }) {
   const { t } = useTranslation();
-  const allocation = useAllocation();
+  const allocation = useAllocation(valuation);
   const { data: session } = useSession();
   const canEdit = session?.role === "owner" || session?.role === "editor";
   const [editing, setEditing] = useState<"kind" | "currency" | null>(null);
@@ -78,7 +78,11 @@ export function TargetsCard() {
     <Card className="min-w-0" data-testid="allocation">
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{t("allocation.title")}</CardTitle>
-        <p className="text-sm text-muted-foreground">{t("allocation.hint", { worth: formatMinorCompact(a.worth_minor, c) })}</p>
+        <p className="text-sm text-muted-foreground">
+          {valuation === "full"
+            ? t("allocation.hintFull", { worth: formatMinorCompact(a.worth_minor, c) })
+            : t("allocation.hint", { worth: formatMinorCompact(a.worth_minor, c) })}
+        </p>
       </CardHeader>
       <CardContent className="grid gap-4">
         {!kindTargets && <p className="text-sm text-muted-foreground">{t("allocation.empty")}</p>}

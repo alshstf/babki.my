@@ -9,12 +9,12 @@ export type AllocationMode = components["schemas"]["AllocationMode"];
 export type AllocationTargets = components["schemas"]["AllocationTargets"];
 
 // The family's worth against its target shares (GET /api/v1/allocation,
-// decision Р-37).
-export function useAllocation() {
+// decision Р-37), papers at the valuation picked on «Структура».
+export function useAllocation(valuation: "liquid" | "full" = "liquid") {
   return useQuery({
-    queryKey: ["allocation"],
+    queryKey: ["allocation", valuation],
     queryFn: async (): Promise<Allocation> => {
-      const { data, error, response } = await api.GET("/api/v1/allocation");
+      const { data, error, response } = await api.GET("/api/v1/allocation", { params: { query: { valuation } } });
       if (!data) throw apiError(response, error);
       return data;
     },
@@ -30,7 +30,8 @@ export function useSetTargets() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    onSuccess: (data) => queryClient.setQueryData(["allocation"], data),
+    // Read again at whichever valuation each view asks.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["allocation"] }),
   });
 }
 
@@ -43,6 +44,6 @@ export function useSetAllocationMode() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    onSuccess: (data) => queryClient.setQueryData(["allocation"], data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["allocation"] }),
   });
 }
