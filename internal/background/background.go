@@ -111,6 +111,11 @@ func NewWorkers(
 	if gold, ok := quoteProvider.(marketdata.GoldRateProvider); ok {
 		river.AddWorker(workers, marketdata.NewBackfillGoldWorker(mdStore, operations, gold, log))
 	}
+	// The metals' accounting prices come from the central bank, when the rates'
+	// provider is it (decisions Р-39, Р-40).
+	if metals, ok := fxProvider.(marketdata.MetalPriceProvider); ok {
+		river.AddWorker(workers, marketdata.NewMetalPricesWorker(mdStore, metals, log))
+	}
 	// Past closing prices come from the exchange too, by the same rule.
 	if history, ok := quoteProvider.(marketdata.HistoryProvider); ok {
 		river.AddWorker(workers, marketdata.NewBackfillQuotesWorker(mdStore, operations, instruments, history, log))
@@ -208,6 +213,7 @@ func Schedule() []jobs.Periodic {
 		{Every: refreshQuotesInterval, Args: marketdata.RefreshQuotesArgs{}},
 		{Every: backfillFxInterval, Args: marketdata.BackfillFxArgs{}},
 		{Every: backfillFxInterval, Args: marketdata.BackfillGoldArgs{}},
+		{Every: refreshFxInterval, Args: marketdata.RefreshMetalPricesArgs{}},
 		{Every: backfillFxInterval, Args: marketdata.BackfillQuotesArgs{}},
 		{Every: tinvestSyncInterval, Args: tinvest.SyncDispatchArgs{}},
 		{Every: tinvestQuotesInterval, Args: tinvest.RefreshQuotesArgs{}},
@@ -245,6 +251,7 @@ var sources = []jobs.SourceKind{
 	{Kind: marketdata.RefreshCryptoPricesArgs{}.Kind(), Every: referencePricesInterval},
 	{Kind: marketdata.RefreshBondSchedulesArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshIndexesArgs{}.Kind(), Every: tinvestDividendsInterval},
+	{Kind: marketdata.RefreshMetalPricesArgs{}.Kind(), Every: refreshFxInterval},
 }
 
 // Sources reads how each source's jobs last ended.

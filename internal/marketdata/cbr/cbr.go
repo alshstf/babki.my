@@ -1,5 +1,6 @@
-// Package cbr reads the Bank of Russia's FX rates: the daily document
-// (XML_daily.asp) and the date-range series (XML_dynamic.asp).
+// Package cbr reads the Bank of Russia's FX rates — the daily document
+// (XML_daily.asp) and the date-range series (XML_dynamic.asp) — and its
+// accounting prices of precious metals (xml_metall.asp).
 package cbr
 
 import (
@@ -24,6 +25,9 @@ const DefaultBaseURL = "https://www.cbr.ru/scripts/XML_daily.asp"
 // DefaultDynamicURL returns one currency's rates over a date range.
 const DefaultDynamicURL = "https://www.cbr.ru/scripts/XML_dynamic.asp"
 
+// DefaultMetalsURL returns the metals' accounting prices over a date range.
+const DefaultMetalsURL = "https://www.cbr.ru/scripts/xml_metall.asp"
+
 // userAgent identifies this program; the bank refuses Go's default agent.
 const userAgent = "babki.my/1.0 (+https://github.com/alshstf/babki.my)"
 
@@ -41,6 +45,7 @@ type Client struct {
 	http       *http.Client
 	dailyURL   string
 	dynamicURL string
+	metalsURL  string
 }
 
 // New returns a Client. A nil client means http.DefaultClient; a non-empty
@@ -51,9 +56,9 @@ func New(client *http.Client, baseURL string) *Client {
 		client = http.DefaultClient
 	}
 	if baseURL == "" {
-		return &Client{http: client, dailyURL: DefaultBaseURL, dynamicURL: DefaultDynamicURL}
+		return &Client{http: client, dailyURL: DefaultBaseURL, dynamicURL: DefaultDynamicURL, metalsURL: DefaultMetalsURL}
 	}
-	return &Client{http: client, dailyURL: baseURL, dynamicURL: baseURL}
+	return &Client{http: client, dailyURL: baseURL, dynamicURL: baseURL, metalsURL: baseURL}
 }
 
 // Name implements marketdata.FxProvider.
@@ -233,6 +238,56 @@ func (c *Client) RatesRange(ctx context.Context, code, currencyID string, from, 
 	}
 
 	return rates, nil
+}
+
+// metall is xml_metall.asp's root: a record per metal and published day.
+type metall struct {
+	XMLName xml.Name      `xml:"Metall"`
+	Records []metalRecord `xml:"Record"`
+}
+
+// metalRecord is one <Record>: Code 1 gold, 2 silver, 3 platinum, 4
+// palladium; Buy and Sell are both the accounting price, roubles per gram.
+type metalRecord struct {
+	Date string `xml:"Date,attr"`
+	Code int    `xml:"Code,attr"`
+	Buy  string `xml:"Buy"`
+}
+
+// metalCodes are the bank's metal codes.
+var metalCodes = map[int]marketdata.Metal{1: marketdata.Gold, 2: marketdata.Silver, 3: marketdata.Platinum, 4: marketdata.Palladium}
+
+// MetalPrices implements marketdata.MetalPriceProvider: the four metals'
+// accounting prices over [from, to] in one request. Days without a record
+// (weekends, holidays) are left missing; a code the bank adds is skipped.
+func (c *Client) MetalPrices(ctx context.Context, from, to time.Time) ([]marketdata.MetalPrice, error) {
+	if to.Before(from) {
+		return nil, fmt.Errorf("cbr: invalid range for metals: to (%s) is before from (%s)", to.Format(dateLayout), from.Format(dateLayout))
+	}
+	var doc metall
+	if err := c.fetchXML(ctx, c.metalsURL+"?date_req1="+from.Format(rangeDateLayout)+"&date_req2="+to.Format(rangeDateLayout), &doc); err != nil {
+		return nil, err
+	}
+	out := make([]marketdata.MetalPrice, 0, len(doc.Records))
+	for _, rec := range doc.Records {
+		metal, ok := metalCodes[rec.Code]
+		if !ok {
+			continue
+		}
+		on, err := time.Parse(dateLayout, rec.Date)
+		if err != nil {
+			return nil, fmt.Errorf("cbr: parse metal record date %q: %w", rec.Date, err)
+		}
+		price, err := parseRate(rec.Buy, 1, string(metal))
+		if err != nil {
+			return nil, err
+		}
+		if !price.IsPositive() {
+			return nil, fmt.Errorf("cbr: %s on %s priced at %s", metal, rec.Date, price)
+		}
+		out = append(out, marketdata.MetalPrice{Metal: metal, On: on, Price: price, Source: sourceName})
+	}
+	return out, nil
 }
 
 // parseRate turns a comma-decimal value into rubles per one unit, dividing by
