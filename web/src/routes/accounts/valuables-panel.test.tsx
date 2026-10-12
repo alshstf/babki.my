@@ -156,4 +156,24 @@ describe("ValuablesPanel", () => {
     const post = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
     expect(await post.json()).toEqual({ sold_on: "2026-10-10", amount_minor: 1_100_000_00, to_account_id: "card-1" });
   });
+
+  it("adds a metal account: grams, its bank and number, no fineness or packing", async () => {
+    Element.prototype.scrollIntoView = () => {};
+    answer(stored);
+    show();
+    fireEvent.click(await screen.findByText("Добавить слиток или монету"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Что это" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Металлический счёт" }));
+    expect(within(dialog).queryByLabelText("Проба")).toBeNull();
+    expect(within(dialog).queryByText("Есть сертификат")).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText("Граммов на счёте"), { target: { value: "31,1" } });
+    fireEvent.change(within(dialog).getByLabelText("Банк"), { target: { value: "Сбербанк" } });
+    fireEvent.change(within(dialog).getByLabelText("Номер счёта"), { target: { value: "40815" } });
+    fireEvent.change(within(dialog).getByLabelText("Цена покупки, ₽"), { target: { value: "300000" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Добавить" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
+    expect(await post.json()).toMatchObject({ kind: "account", weight: "31.1", fineness: "1000", maker: "Сбербанк", serial: "40815", certificate: true, sealed: true, foreign_made: false });
+  });
 });

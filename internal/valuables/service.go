@@ -362,8 +362,8 @@ var currencyCode = func(c string) bool {
 
 func (s *Service) validItem(it Item) error {
 	switch {
-	case it.Kind != KindBar && it.Kind != KindCoin:
-		return fmt.Errorf("%w: a piece is a bar or a coin", family.ErrValidation)
+	case it.Kind != KindBar && it.Kind != KindCoin && it.Kind != KindAccount:
+		return fmt.Errorf("%w: a piece is a bar, a coin or a metal account", family.ErrValidation)
 	case !slices.Contains(marketdata.Metals, it.Metal):
 		return fmt.Errorf("%w: the metal is gold, silver, platinum or palladium", family.ErrValidation)
 	case !it.Weight.IsPositive() || !it.Weight.Equal(it.Weight.Round(4)):

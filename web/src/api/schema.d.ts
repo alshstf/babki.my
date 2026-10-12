@@ -2912,8 +2912,11 @@ export interface components {
             buyback_percent: string | null;
         };
         ValuablesItemInput: {
-            /** @enum {string} */
-            kind: "bar" | "coin";
+            /**
+             * @description account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
+             * @enum {string}
+             */
+            kind: "bar" | "coin" | "account";
             metal: components["schemas"]["Metal"];
             /** @description Decimal, grams, to ten-thousandths: what the piece weighs */
             weight: string;

@@ -108,7 +108,8 @@ export function ValuablesPanel({ account, canEdit }: { account: AccountWithBalan
                 <TableRow key={it.id} data-testid="valuables-item">
                   <TableCell className="whitespace-normal">
                     <div>
-                      {t(`valuables.kinds.${it.kind}`)}, {t(`valuables.metals.${it.metal}`)}, {num(it.weight)} {t("valuables.grams")}, {num(it.fineness)}
+                      {t(`valuables.kinds.${it.kind}`)}, {t(`valuables.metals.${it.metal}`)}, {num(it.weight)} {t("valuables.grams")}
+                      {it.kind !== "account" && `, ${num(it.fineness)}`}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {[it.maker, it.serial && t("valuables.serial", { serial: it.serial })].filter(Boolean).join(" · ")}
@@ -418,7 +419,9 @@ function ItemDialog({ accountId, item, onClose }: { accountId: string; item: Val
       {
         id: item?.id,
         body: {
-          kind, metal, weight: weightValue, fineness: finenessValue, maker, foreign_made: foreign, serial, certificate, sealed,
+          kind, metal, weight: weightValue, fineness: kind === "account" ? "1000" : finenessValue, maker,
+          foreign_made: kind === "account" ? false : foreign, serial,
+          certificate: kind === "account" ? true : certificate, sealed: kind === "account" ? true : sealed,
           bought_on: bought, cost_minor: costMinor, currency: RUB, owner_user_id: owner === "family" ? null : owner, note,
         },
       },
@@ -433,13 +436,21 @@ function ItemDialog({ accountId, item, onClose }: { accountId: string; item: Val
         </DialogHeader>
         <div className="grid gap-3">
           <div className="flex flex-wrap gap-2">
-            <Select value={kind} onValueChange={(v) => setKind(v === "coin" ? "coin" : "bar")}>
+            <Select
+              value={kind}
+              onValueChange={(v) => {
+                const next = v === "coin" ? "coin" : v === "account" ? "account" : "bar";
+                setKind(next);
+                if (next === "account") setFineness("1000");
+              }}
+            >
               <SelectTrigger className="w-36" aria-label={t("valuables.kind")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="bar">{t("valuables.kinds.bar")}</SelectItem>
                 <SelectItem value="coin">{t("valuables.kinds.coin")}</SelectItem>
+                <SelectItem value="account">{t("valuables.kinds.account")}</SelectItem>
               </SelectContent>
             </Select>
             <Select value={metal} onValueChange={(v) => setMetal(v as Metal)}>
@@ -457,24 +468,27 @@ function ItemDialog({ accountId, item, onClose }: { accountId: string; item: Val
           </div>
           <div className="flex flex-wrap gap-2">
             <div className="grid gap-1">
-              <Label htmlFor="valuables-weight">{t("valuables.weight")}</Label>
+              <Label htmlFor="valuables-weight">{kind === "account" ? t("valuables.gramsOnAccount") : t("valuables.weight")}</Label>
               <Input id="valuables-weight" inputMode="decimal" className="w-32" value={weight} onChange={(e) => setWeight(e.target.value)} />
             </div>
-            <div className="grid gap-1">
-              <Label htmlFor="valuables-fineness">{t("valuables.fineness")}</Label>
-              <Input id="valuables-fineness" inputMode="decimal" className="w-32" value={fineness} onChange={(e) => setFineness(e.target.value)} />
-            </div>
+            {kind !== "account" && (
+              <div className="grid gap-1">
+                <Label htmlFor="valuables-fineness">{t("valuables.fineness")}</Label>
+                <Input id="valuables-fineness" inputMode="decimal" className="w-32" value={fineness} onChange={(e) => setFineness(e.target.value)} />
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <div className="grid gap-1">
-              <Label htmlFor="valuables-maker">{t("valuables.maker")}</Label>
+              <Label htmlFor="valuables-maker">{kind === "account" ? t("valuables.bank") : t("valuables.maker")}</Label>
               <Input id="valuables-maker" className="w-56" value={maker} onChange={(e) => setMaker(e.target.value)} />
             </div>
             <div className="grid gap-1">
-              <Label htmlFor="valuables-serial">{t("valuables.serialLabel")}</Label>
+              <Label htmlFor="valuables-serial">{kind === "account" ? t("valuables.accountNumber") : t("valuables.serialLabel")}</Label>
               <Input id="valuables-serial" className="w-40" value={serial} onChange={(e) => setSerial(e.target.value)} />
             </div>
           </div>
+          {kind !== "account" && (
           <div className="grid gap-2">
             <Label className="flex items-center gap-2 font-normal">
               <Checkbox checked={foreign} onCheckedChange={(v) => setForeign(v === true)} />
@@ -489,6 +503,7 @@ function ItemDialog({ accountId, item, onClose }: { accountId: string; item: Val
               {t("valuables.sealed")}
             </Label>
           </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <div className="grid gap-1">
               <Label htmlFor="valuables-bought">{t("valuables.boughtOn")}</Label>

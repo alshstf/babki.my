@@ -134,8 +134,11 @@ func (s *Service) item(ctx context.Context, accountID, itemID uuid.UUID) (Item, 
 // saleNote is the money's row's words: what was sold.
 func saleNote(it Item) string {
 	what := "Продажа слитка"
-	if it.Kind == KindCoin {
+	switch it.Kind {
+	case KindCoin:
 		what = "Продажа монеты"
+	case KindAccount:
+		what = "Продажа с металлического счёта"
 	}
 	note := fmt.Sprintf("%s: %s г, %s", what, it.Weight.String(), metalName[it.Metal])
 	if it.Serial != "" {

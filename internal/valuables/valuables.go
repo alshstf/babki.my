@@ -52,6 +52,9 @@ type Kind string
 const (
 	KindBar  Kind = "bar"
 	KindCoin Kind = "coin"
+	// KindAccount is a bank's unallocated metal account (ОМС): grams on the
+	// account, its bank as the maker, its number as the serial.
+	KindAccount Kind = "account"
 )
 
 // Item is a bar or a coin. Weight is in grams; Fineness in thousandths
@@ -133,6 +136,10 @@ const (
 // Russian piece with its certificate.
 func (it Item) HardToSell() []Hard {
 	out := []Hard{}
+	if it.Kind == KindAccount {
+		// Grams on an account sell at the bank's price, no assay.
+		return out
+	}
 	if it.ForeignMade {
 		out = append(out, HardForeign)
 	}

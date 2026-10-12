@@ -1494,13 +1494,16 @@ func (e ValuablesItemHardToSell) Valid() bool {
 
 // Defines values for ValuablesItemKind.
 const (
-	ValuablesItemKindBar  ValuablesItemKind = "bar"
-	ValuablesItemKindCoin ValuablesItemKind = "coin"
+	ValuablesItemKindAccount ValuablesItemKind = "account"
+	ValuablesItemKindBar     ValuablesItemKind = "bar"
+	ValuablesItemKindCoin    ValuablesItemKind = "coin"
 )
 
 // Valid indicates whether the value is a known member of the ValuablesItemKind enum.
 func (e ValuablesItemKind) Valid() bool {
 	switch e {
+	case ValuablesItemKindAccount:
+		return true
 	case ValuablesItemKindBar:
 		return true
 	case ValuablesItemKindCoin:
@@ -1536,13 +1539,16 @@ func (e ValuablesItemSellBy) Valid() bool {
 
 // Defines values for ValuablesItemInputKind.
 const (
-	ValuablesItemInputKindBar  ValuablesItemInputKind = "bar"
-	ValuablesItemInputKindCoin ValuablesItemInputKind = "coin"
+	ValuablesItemInputKindAccount ValuablesItemInputKind = "account"
+	ValuablesItemInputKindBar     ValuablesItemInputKind = "bar"
+	ValuablesItemInputKindCoin    ValuablesItemInputKind = "coin"
 )
 
 // Valid indicates whether the value is a known member of the ValuablesItemInputKind enum.
 func (e ValuablesItemInputKind) Valid() bool {
 	switch e {
+	case ValuablesItemInputKindAccount:
+		return true
 	case ValuablesItemInputKindBar:
 		return true
 	case ValuablesItemInputKindCoin:
@@ -1554,13 +1560,16 @@ func (e ValuablesItemInputKind) Valid() bool {
 
 // Defines values for ValuablesSoldKind.
 const (
-	ValuablesSoldKindBar  ValuablesSoldKind = "bar"
-	ValuablesSoldKindCoin ValuablesSoldKind = "coin"
+	ValuablesSoldKindAccount ValuablesSoldKind = "account"
+	ValuablesSoldKindBar     ValuablesSoldKind = "bar"
+	ValuablesSoldKindCoin    ValuablesSoldKind = "coin"
 )
 
 // Valid indicates whether the value is a known member of the ValuablesSoldKind enum.
 func (e ValuablesSoldKind) Valid() bool {
 	switch e {
+	case ValuablesSoldKindAccount:
+		return true
 	case ValuablesSoldKindBar:
 		return true
 	case ValuablesSoldKindCoin:
@@ -5455,7 +5464,9 @@ type ValuablesItem struct {
 	// HardToSell Why a bank may not take it back at its price without an assay; empty when none
 	HardToSell []ValuablesItemHardToSell `json:"hard_to_sell"`
 	Id         openapi_types.UUID        `json:"id"`
-	Kind       ValuablesItemKind         `json:"kind"`
+
+	// Kind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
+	Kind ValuablesItemKind `json:"kind"`
 
 	// Maker The refinery or mint
 	Maker string `json:"maker"`
@@ -5496,7 +5507,7 @@ type ValuablesItem struct {
 // ValuablesItemHardToSell defines model for ValuablesItem.HardToSell.
 type ValuablesItemHardToSell string
 
-// ValuablesItemKind defines model for ValuablesItem.Kind.
+// ValuablesItemKind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
 type ValuablesItemKind string
 
 // ValuablesItemSellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
@@ -5518,8 +5529,10 @@ type ValuablesItemInput struct {
 	Fineness string `json:"fineness"`
 
 	// ForeignMade Made abroad: a Russian bank may not take it back without an assay
-	ForeignMade bool                   `json:"foreign_made"`
-	Kind        ValuablesItemInputKind `json:"kind"`
+	ForeignMade bool `json:"foreign_made"`
+
+	// Kind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
+	Kind ValuablesItemInputKind `json:"kind"`
 
 	// Maker The refinery or mint
 	Maker string `json:"maker"`
@@ -5539,7 +5552,7 @@ type ValuablesItemInput struct {
 	Weight string `json:"weight"`
 }
 
-// ValuablesItemInputKind defines model for ValuablesItemInput.Kind.
+// ValuablesItemInputKind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
 type ValuablesItemInputKind string
 
 // ValuablesSale defines model for ValuablesSale.
@@ -5575,7 +5588,9 @@ type ValuablesSold struct {
 	// GainMinor What it sold for less what it cost, signed
 	GainMinor int64              `json:"gain_minor"`
 	Id        openapi_types.UUID `json:"id"`
-	Kind      ValuablesSoldKind  `json:"kind"`
+
+	// Kind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
+	Kind ValuablesSoldKind `json:"kind"`
 
 	// Maker The refinery or mint
 	Maker string `json:"maker"`
@@ -5610,7 +5625,7 @@ type ValuablesSold struct {
 	Weight string `json:"weight"`
 }
 
-// ValuablesSoldKind defines model for ValuablesSold.Kind.
+// ValuablesSoldKind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
 type ValuablesSoldKind string
 
 // ValuablesStorage defines model for ValuablesStorage.
