@@ -134,6 +134,11 @@ interface Moved {
   shareAfter: number;
 }
 
+// SEGMENT is what a top-up moves on a bar: half again as tall as the bar on
+// each side; HATCH fills what leaves.
+const SEGMENT = "absolute -top-1 -bottom-1 rounded-sm ring-2 ring-background";
+const HATCH = "repeating-linear-gradient(135deg, rgb(217 119 6 / 0.75) 0 3px, transparent 3px 6px)";
+
 // LINE places the words under a row's bar: across the row on a phone, under
 // the bar on a wide screen.
 const LINE = "col-span-2 row-start-3 text-xs md:col-span-2 md:col-start-2 md:row-start-2";
@@ -177,23 +182,28 @@ function Rows({
             <span className="col-start-1 row-start-1 min-w-0 text-sm">{name(r.key)}</span>
             <div className="relative col-span-2 row-start-2 h-2 rounded bg-muted md:col-span-1 md:col-start-2 md:row-start-1">
               <div className="absolute inset-y-0 left-0 rounded bg-emerald-500" style={{ width: `${Math.min(before, after, 100)}%` }} />
-              {after > before && (
+              {/* What a top-up moves stands out above and below the bar and is
+                  never thinner than a few pixels, however small: money put
+                  in — blue; money taken out (the brokers' free money) —
+                  hatched. A share that only thins as the worth grows gets
+                  its words, not a mark. */}
+              {moved && moved.change > 0 && (
                 <div
-                  className="absolute inset-y-0 rounded-r bg-emerald-300 dark:bg-emerald-700"
-                  style={{ left: `${Math.min(before, 100)}%`, width: `${Math.min(after, 100) - Math.min(before, 100)}%` }}
+                  className={SEGMENT + " bg-sky-500 dark:bg-sky-400"}
+                  style={{ left: `${Math.min(before, 100)}%`, width: `max(${Math.min(after, 100) - Math.min(before, 100)}%, 6px)` }}
                   data-testid="allocation-added"
                 />
               )}
-              {after < before && (
+              {moved && moved.change < 0 && (
                 <div
-                  className="absolute inset-y-0 rounded-r bg-muted-foreground/25"
-                  style={{ left: `${Math.min(after, 100)}%`, width: `${Math.min(before, 100) - Math.min(after, 100)}%` }}
+                  className={SEGMENT + " border border-amber-600 bg-background"}
+                  style={{ left: `${Math.min(after, 100)}%`, width: `max(${Math.min(before, 100) - Math.min(after, 100)}%, 6px)`, backgroundImage: HATCH }}
                   data-testid="allocation-removed"
                 />
               )}
               {target !== null && (
                 <div
-                  className="absolute -top-1 h-4 w-0.5 bg-foreground"
+                  className="absolute -top-1.5 z-10 h-5 w-0.5 bg-foreground"
                   style={{ left: `calc(${Math.min(target, 100)}% - 1px)` }}
                   title={t("allocation.targetTick", { target: percent(r.target ?? "0") })}
                 />
@@ -324,6 +334,24 @@ function TopUp({
         )}
       </div>
       {useFree && !brokersOk && <p className="text-xs text-red-700 dark:text-red-400">{t("allocation.topUpTooMuch", { amount: formatMinorCompact(free, c) })}</p>}
+      {counted && (
+        <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="allocation-topup-legend">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-4 rounded-sm bg-sky-500 dark:bg-sky-400" />
+            {t("allocation.legendIn")}
+          </span>
+          {counted.fromBrokers > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-3 w-4 rounded-sm border border-amber-600" style={{ backgroundImage: HATCH }} />
+              {t("allocation.legendOut")}
+            </span>
+          )}
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-0.5 bg-foreground" />
+            {t("allocation.legendTarget")}
+          </span>
+        </p>
+      )}
       {counted && (
         <p className="text-sm" data-testid="allocation-topup-total">
           {counted.fromBrokers > 0
