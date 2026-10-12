@@ -53,6 +53,9 @@ export function TaxesPage() {
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("taxes.empty", { year: data.year })}</div>
       )}
       {data && data.supported && data.people.map((p) => <PersonCard key={p.user_id} year={data} person={p} />)}
+      {data && data.supported && data.by_balance > 0 && (
+        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="tax-by-balance">{t("taxes.byBalance", { count: data.by_balance })}</p>
+      )}
       {data && data.supported && (
         <p className="text-xs text-muted-foreground">{t("taxes.notYet")}</p>
       )}
@@ -96,6 +99,18 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
             .filter(Boolean)
             .join(" · ")}
         </p>
+        {p.interest_minor > 0 && (
+          <p className="text-sm" data-testid="tax-interest">
+            {p.interest_free_minor === null || year.key_rate === null
+              ? t("taxes.interestNoRate", { interest: formatMinor(p.interest_minor, c) })
+              : t("taxes.interest", {
+                  interest: formatMinor(p.interest_minor, c),
+                  free: formatMinor(p.interest_free_minor, c),
+                  rate: Number(year.key_rate).toLocaleString("ru-RU", { maximumFractionDigits: 2 }),
+                })}{" "}
+            {p.by_notice_minor > 0 && t("taxes.byNotice", { amount: formatMinor(p.by_notice_minor, c), date: formatDate(year.notice_by) })}
+          </p>
+        )}
         {p.unvalued > 0 && <p className="text-xs text-amber-700 dark:text-amber-400">{t("taxes.unvalued", { count: p.unvalued })}</p>}
         <div className="overflow-x-auto">
           <Table>
@@ -109,7 +124,7 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {p.accounts.map((a) => (
+              {p.accounts.filter((a) => !a.bank).map((a) => (
                 <TableRow key={a.account_id} data-testid="tax-account">
                   <TableCell className="whitespace-normal">
                     {a.name}

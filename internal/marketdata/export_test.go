@@ -50,3 +50,8 @@ func NewBackfillFxWorkerWithClock(
 func NewMetalPricesWorkerAt(store *Store, provider MetalPriceProvider, now time.Time) river.Worker[RefreshMetalPricesArgs] {
 	return &metalPricesWorker{store: store, provider: provider, log: slog.Default(), now: func() time.Time { return now }}
 }
+
+// NewKeyRatesWorkerAt is the key rate's worker with its clock pinned.
+func NewKeyRatesWorkerAt(store *Store, provider KeyRateProvider, now time.Time) river.Worker[RefreshKeyRatesArgs] {
+	return &keyRatesWorker{store: store, provider: provider, log: slog.Default(), now: func() time.Time { return now }}
+}

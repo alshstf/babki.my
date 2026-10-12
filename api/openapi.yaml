@@ -3807,9 +3807,12 @@ components:
         currency: { type: string, description: "RUB: the central bank prices metals in roubles" }
     TaxYear:
       type: object
-      required: [year, supported, currency, declare_by, pay_by, to_pay_minor, refund_minor, people]
+      required: [year, supported, currency, declare_by, pay_by, notice_by, key_rate, by_balance, to_pay_minor, refund_minor, people]
       properties:
         year: { type: integer }
+        notice_by: { type: string, description: "Date YYYY-MM-DD: the last day to pay the tax on deposits' interest, which the tax office asks for by notice" }
+        key_rate: { type: string, nullable: true, description: "Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown" }
+        by_balance: { type: integer, description: "Deposits and savings accounts kept by their balance: their interest is not in the journal, so not in the estimate" }
         to_pay_minor: { type: integer, format: int64, description: "The people's to_pay_minor summed" }
         refund_minor: { type: integer, format: int64, description: "The people's refund_minor summed" }
         supported: { type: boolean, description: "False when the space's tax residency has no rules for the year's tax; people is then empty" }
@@ -3819,7 +3822,7 @@ components:
         people: { type: array, items: { $ref: "#/components/schemas/TaxYearPerson" }, description: "The space's owner first; a person with no counted account is absent" }
     TaxYearPerson:
       type: object
-      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, unvalued, accounts]
+      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, unvalued, accounts]
       properties:
         user_id: { type: string, format: uuid }
         name: { type: string }
@@ -3830,20 +3833,24 @@ components:
         credit_minor: { type: integer, format: int64, description: "The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them" }
         to_pay_minor: { type: integer, format: int64, description: "Left to pay by return: tax_minor less by_agents_minor and credit_minor, not below zero" }
         refund_minor: { type: integer, format: int64, description: "What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise" }
+        interest_minor: { type: integer, format: int64, description: "Interest the banks' accounts kept by their operations paid in the year" }
+        interest_free_minor: { type: integer, format: int64, nullable: true, description: "What of it is free of tax: 1 млн × the year's highest key rate; null without the rate" }
+        by_notice_minor: { type: integer, format: int64, description: "The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor" }
         unvalued: { type: integer, description: "Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them" }
         accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearAccount" } }
     TaxYearAccount:
       type: object
-      required: [account_id, name, foreign_broker, sales_minor, sales_long_minor, coupons_minor, dividends_minor, interest_minor, withheld_minor, securities_minor, agent_tax_minor, unvalued]
+      required: [account_id, name, bank, foreign_broker, sales_minor, sales_long_minor, coupons_minor, dividends_minor, interest_minor, withheld_minor, securities_minor, agent_tax_minor, unvalued]
       properties:
         account_id: { type: string, format: uuid }
         name: { type: string }
+        bank: { type: boolean, description: "A bank's account (current, savings, deposit) kept by its operations: only its interest counts" }
         foreign_broker: { type: boolean }
         sales_minor: { type: integer, format: int64, description: "The year's disposals' result, signed: proceeds and fee at the disposal's day's rate, each piece at its purchase's" }
         sales_long_minor: { type: integer, format: int64, description: "Of it, the result on pieces held longer than the long-holding years" }
         coupons_minor: { type: integer, format: int64 }
         dividends_minor: { type: integer, format: int64 }
-        interest_minor: { type: integer, format: int64, description: "Interest paid on the account; counted with deposits in a later step" }
+        interest_minor: { type: integer, format: int64, description: "Interest paid on the account: a bank's counts toward the person's interest; a broker's is shown, not taxed here" }
         withheld_minor: { type: integer, format: int64, description: "Tax rows of the year: what was withheld" }
         securities_minor: { type: integer, format: int64, description: "The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons" }
         agent_tax_minor: { type: integer, format: int64, description: "What the broker withholds for the year as a tax agent; 0 for a broker abroad" }

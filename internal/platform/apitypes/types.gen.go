@@ -4748,11 +4748,20 @@ type TableImport struct {
 
 // TaxYear defines model for TaxYear.
 type TaxYear struct {
+	// ByBalance Deposits and savings accounts kept by their balance: their interest is not in the journal, so not in the estimate
+	ByBalance int `json:"by_balance"`
+
 	// Currency What the tax is counted in; empty when not supported
 	Currency string `json:"currency"`
 
 	// DeclareBy Date YYYY-MM-DD: the return's last day
 	DeclareBy string `json:"declare_by"`
+
+	// KeyRate Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown
+	KeyRate nullable.Nullable[string] `json:"key_rate"`
+
+	// NoticeBy Date YYYY-MM-DD: the last day to pay the tax on deposits' interest, which the tax office asks for by notice
+	NoticeBy string `json:"notice_by"`
 
 	// PayBy Date YYYY-MM-DD: the last day to pay what the return says
 	PayBy string `json:"pay_by"`
@@ -4776,12 +4785,15 @@ type TaxYearAccount struct {
 	AccountId openapi_types.UUID `json:"account_id"`
 
 	// AgentTaxMinor What the broker withholds for the year as a tax agent; 0 for a broker abroad
-	AgentTaxMinor  int64 `json:"agent_tax_minor"`
+	AgentTaxMinor int64 `json:"agent_tax_minor"`
+
+	// Bank A bank's account (current, savings, deposit) kept by its operations: only its interest counts
+	Bank           bool  `json:"bank"`
 	CouponsMinor   int64 `json:"coupons_minor"`
 	DividendsMinor int64 `json:"dividends_minor"`
 	ForeignBroker  bool  `json:"foreign_broker"`
 
-	// InterestMinor Interest paid on the account; counted with deposits in a later step
+	// InterestMinor Interest paid on the account: a bank's counts toward the person's interest; a broker's is shown, not taxed here
 	InterestMinor int64  `json:"interest_minor"`
 	Name          string `json:"name"`
 
@@ -4809,9 +4821,18 @@ type TaxYearPerson struct {
 	// ByAgentsMinor What the brokers who are tax agents withhold for the year, each on its own account by the same bands
 	ByAgentsMinor int64 `json:"by_agents_minor"`
 
+	// ByNoticeMinor The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor
+	ByNoticeMinor int64 `json:"by_notice_minor"`
+
 	// CreditMinor The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them
-	CreditMinor int64  `json:"credit_minor"`
-	Name        string `json:"name"`
+	CreditMinor int64 `json:"credit_minor"`
+
+	// InterestFreeMinor What of it is free of tax: 1 млн × the year's highest key rate; null without the rate
+	InterestFreeMinor nullable.Nullable[int64] `json:"interest_free_minor"`
+
+	// InterestMinor Interest the banks' accounts kept by their operations paid in the year
+	InterestMinor int64  `json:"interest_minor"`
+	Name          string `json:"name"`
 
 	// RefundMinor What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise
 	RefundMinor int64 `json:"refund_minor"`

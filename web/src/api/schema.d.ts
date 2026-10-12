@@ -2977,6 +2977,12 @@ export interface components {
         };
         TaxYear: {
             year: number;
+            /** @description Date YYYY-MM-DD: the last day to pay the tax on deposits' interest, which the tax office asks for by notice */
+            notice_by: string;
+            /** @description Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown */
+            key_rate: string | null;
+            /** @description Deposits and savings accounts kept by their balance: their interest is not in the journal, so not in the estimate */
+            by_balance: number;
             /**
              * Format: int64
              * @description The people's to_pay_minor summed
@@ -3037,6 +3043,21 @@ export interface components {
              * @description What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise
              */
             refund_minor: number;
+            /**
+             * Format: int64
+             * @description Interest the banks' accounts kept by their operations paid in the year
+             */
+            interest_minor: number;
+            /**
+             * Format: int64
+             * @description What of it is free of tax: 1 млн × the year's highest key rate; null without the rate
+             */
+            interest_free_minor: number | null;
+            /**
+             * Format: int64
+             * @description The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor
+             */
+            by_notice_minor: number;
             /** @description Disposals and payments left out for want of a purchase day or a rate: the estimate is short by them */
             unvalued: number;
             accounts: components["schemas"]["TaxYearAccount"][];
@@ -3045,6 +3066,8 @@ export interface components {
             /** Format: uuid */
             account_id: string;
             name: string;
+            /** @description A bank's account (current, savings, deposit) kept by its operations: only its interest counts */
+            bank: boolean;
             foreign_broker: boolean;
             /**
              * Format: int64
@@ -3062,7 +3085,7 @@ export interface components {
             dividends_minor: number;
             /**
              * Format: int64
-             * @description Interest paid on the account; counted with deposits in a later step
+             * @description Interest paid on the account: a bank's counts toward the person's interest; a broker's is shown, not taxed here
              */
             interest_minor: number;
             /**

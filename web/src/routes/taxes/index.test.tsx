@@ -18,19 +18,21 @@ if (!Element.prototype.scrollIntoView) {
 // Alex with two Russian brokers past the threshold and a broker abroad;
 // Maria whose broker took more than her year's tax.
 const year: TaxYear = {
-  year: 2026, supported: true, currency: "RUB", declare_by: "2027-04-30", pay_by: "2027-07-15", to_pay_minor: 32_000_00, refund_minor: 8_000_00,
+  year: 2026, supported: true, currency: "RUB", declare_by: "2027-04-30", pay_by: "2027-07-15", notice_by: "2027-12-01", key_rate: "21.00", by_balance: 1,
+  to_pay_minor: 32_000_00, refund_minor: 8_000_00,
   people: [
     {
       user_id: "u-alex", name: "Алекс", base_minor: 4_000_000_00, tax_minor: 552_000_00, by_agents_minor: 520_000_00, withheld_minor: 6_500_00,
-      credit_minor: 0, to_pay_minor: 32_000_00, refund_minor: 0, unvalued: 2,
+      credit_minor: 0, to_pay_minor: 32_000_00, refund_minor: 0, unvalued: 2, interest_minor: 400_000_00, interest_free_minor: 210_000_00, by_notice_minor: 28_500_00,
       accounts: [
-        { account_id: "a-1", name: "Т-Банк", foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2 },
-        { account_id: "a-2", name: "Freedom KZ", foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 },
+        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2 },
+        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 },
+        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 },
       ],
     },
     {
       user_id: "u-maria", name: "Мария", base_minor: 100_000_00, tax_minor: 13_000_00, by_agents_minor: 21_000_00, withheld_minor: 0,
-      credit_minor: 0, to_pay_minor: 0, refund_minor: 8_000_00, unvalued: 0, accounts: [],
+      credit_minor: 0, to_pay_minor: 0, refund_minor: 8_000_00, unvalued: 0, accounts: [], interest_minor: 0, interest_free_minor: 210_000_00, by_notice_minor: 0,
     },
   ],
 };
@@ -83,6 +85,14 @@ describe("TaxesPage", () => {
     expect(norm(rows[0].textContent)).toMatch(/Т-Банк2 400 000,00 ₽из них 400 000,00 ₽ — бумаги дольше трёх лет, без налога/);
     expect(norm(rows[1].textContent)).toMatch(/Freedom KZиностранный брокер.*сами, по декларации/);
     expect(norm(within(people[1]).getByTestId("tax-verdict").textContent)).toBe("Можно вернуть по декларации: 8 000,00 ₽");
+    // Interest: free up to the key rate's 210 000, the rest by notice; the
+    // bank's account is not a row of the brokers' table.
+    expect(norm(within(people[0]).getByTestId("tax-interest").textContent)).toBe(
+      "Проценты по вкладам и счетам: 400 000,00 ₽, из них без налога 210 000,00 ₽ (1 млн × наибольшая ключевая ставка года, 21 %). Налог с остального ≈ 28 500,00 ₽ — ФНС пришлёт уведомление, оплата до 01.12.2027; он уже в налоге за год, в «доплатить самим» не входит.",
+    );
+    expect(rows).toHaveLength(2);
+    expect(within(people[1]).queryByTestId("tax-interest")).toBeNull();
+    expect(norm(screen.getByTestId("tax-by-balance").textContent)).toMatch(/ведутся остатком: 1 —/);
   });
 
   it("asks whose a shared broker's account is for tax", async () => {
@@ -101,7 +111,7 @@ describe("TaxesPage", () => {
   });
 
   it("says when the country has no estimate", async () => {
-    answer({ ...year, supported: false, currency: "", people: [], to_pay_minor: 0, refund_minor: 0 });
+    answer({ ...year, supported: false, currency: "", people: [], to_pay_minor: 0, refund_minor: 0, key_rate: null, by_balance: 0 });
     show();
     expect(await screen.findByText(/только для налоговых резидентов России/)).toBeTruthy();
     expect(screen.queryByTestId("tax-person")).toBeNull();
