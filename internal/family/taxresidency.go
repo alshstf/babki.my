@@ -76,6 +76,13 @@ type TaxRules struct {
 	// CapitalGainsTaxed is false where individuals' capital gains are untaxed. It
 	// feeds the notices rather than being published.
 	CapitalGainsTaxed bool
+	// SaleTaxBP is the rate, in hundredths of a percent, an estimate of what a
+	// sale of papers would cost in tax takes (the rebalance of decision Р-37 В):
+	// the first band, before any higher one. 0: no estimate for the country.
+	SaleTaxBP int
+	// LongHoldingYears frees from that tax the gain on a lot held longer than
+	// this many years; 0: no such rule in the estimate.
+	LongHoldingYears int
 }
 
 // DefaultTaxResidency is a space's residency unless set otherwise, and what
@@ -94,7 +101,10 @@ var taxRules = map[string]TaxRules{
 	// Russia. НК РФ ст. 214.1 п. 13: «по стоимости первых по времени
 	// приобретений» — FIFO, mandatory. 425-ФЗ keeps the queue per brokerage
 	// contract from 2027-01-01; an ИИС is already separate.
-	"RU": {Country: "RU", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true},
+	// A sale's tax: 13 % up to 2,4 млн of the year's investment income, 15 %
+	// above (ст. 224 п. 1.1); a paper held over three years is free of it
+	// (инвестиционный вычет, ст. 219.1 п. 1 пп. 1, up to 3 млн a year held).
+	"RU": {Country: "RU", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, SaleTaxBP: 1300, LongHoldingYears: 3},
 
 	// Germany. § 20 Abs. 4 S. 7 EStG: FIFO, mandatory; per depot (BMF letter of
 	// 2025-05-14).

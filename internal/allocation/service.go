@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/db"
+	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/structure"
 )
 
@@ -20,14 +23,73 @@ type structures interface {
 	Of(ctx context.Context, spaceID uuid.UUID, valuation structure.Valuation) (structure.Structure, error)
 }
 
+type accounts interface {
+	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
+}
+
+type sales interface {
+	ForSale(ctx context.Context, spaceID, accountID uuid.UUID) ([]portfolio.SaleLots, error)
+}
+
+type spaces interface {
+	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
+}
+
 // Service keeps the targets and sets the worth against them.
 type Service struct {
 	db         db.Executor
 	structures structures
+	accounts   accounts
+	sales      sales
+	spaces     spaces
 }
 
 func NewService(x db.Executor, s structures) *Service {
 	return &Service{db: x, structures: s}
+}
+
+// WithSales lets the service estimate what a rebalance's sales would bring in
+// tax: the accounts the papers are on, their lots, the space's residency.
+func (s *Service) WithSales(a accounts, sl sales, sp spaces) *Service {
+	s.accounts, s.sales, s.spaces = a, sl, sp
+	return s
+}
+
+// Rebalancing is the worth against the targets, what bringing it to them by
+// buying and selling with fresh new money does, and the tax its sales are
+// estimated to bring.
+func (s *Service) Rebalancing(ctx context.Context, spaceID uuid.UUID, valuation structure.Valuation, fresh int64) (View, []Move, Estimate, family.TaxRules, error) {
+	v, err := s.View(ctx, spaceID, valuation)
+	if err != nil {
+		return View{}, nil, Estimate{}, family.TaxRules{}, err
+	}
+	moves, err := Rebalance(v, fresh)
+	if err != nil {
+		return View{}, nil, Estimate{}, family.TaxRules{}, err
+	}
+	sp, err := s.spaces.SpaceByID(ctx, spaceID)
+	if err != nil {
+		return View{}, nil, Estimate{}, family.TaxRules{}, err
+	}
+	var held []portfolio.SaleLots
+	if slices.ContainsFunc(moves, func(m Move) bool { return m.Minor < 0 && paperKinds[structure.Kind(m.Key)] }) {
+		list, err := s.accounts.ListWithBalance(ctx, spaceID)
+		if err != nil {
+			return View{}, nil, Estimate{}, family.TaxRules{}, err
+		}
+		for _, a := range list {
+			if a.Status != account.StatusActive || !account.CountedByJournal(a.Account) {
+				continue
+			}
+			got, err := s.sales.ForSale(ctx, spaceID, a.ID)
+			if err != nil {
+				return View{}, nil, Estimate{}, family.TaxRules{}, err
+			}
+			held = append(held, got...)
+		}
+	}
+	rules := sp.CostBasisRules()
+	return v, moves, Estimating(moves, held, rules, time.Now().UTC()), rules, nil
 }
 
 // Settings are the family's targets and mode.

@@ -5,17 +5,41 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/allocation"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/apitest"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
+	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/structure"
 )
+
+// fakeAccounts is one broker's account kept by its journal.
+type fakeAccounts struct{}
+
+func (fakeAccounts) ListWithBalance(context.Context, uuid.UUID) ([]account.WithBalance, error) {
+	return []account.WithBalance{{Account: account.Account{ID: uuid.New(), Type: account.TypeBrokerage, Status: account.StatusActive}}}, nil
+}
+
+// fakeSales is the shares of fakeStructures: 100 of one paper worth 600 000
+// now, bought in January 2025 for 500 000.
+type fakeSales struct{}
+
+func (fakeSales) ForSale(context.Context, uuid.UUID, uuid.UUID) ([]portfolio.SaleLots, error) {
+	worth, on := int64(600_000_00), time.Date(2025, 1, 10, 0, 0, 0, 0, time.UTC)
+	return []portfolio.SaleLots{{
+		InstrumentID: uuid.New(), Type: instrument.TypeShare, Quantity: decimal.NewFromInt(100), LiquidInBase: &worth,
+		Lots: []portfolio.HeldLot{{Quantity: decimal.NewFromInt(100), AcquiredOn: &on, CostInBase: 500_000_00, CostKnown: true}},
+	}}, nil
+}
 
 // fakeStructures is a worth of 1 000 000: 600 000 in shares, 400 000 in
 // bonds, all in roubles, and 100 000 to live on; at the full valuation a
@@ -46,7 +70,7 @@ func TestTheTargetsOverHTTP(t *testing.T) {
 	auth := family.NewAuth(sm, famStore)
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
-	allocation.NewHandler(allocation.NewService(pool, fakeStructures{}), auth, sm).Mount(srv)
+	allocation.NewHandler(allocation.NewService(pool, fakeStructures{}).WithSales(fakeAccounts{}, fakeSales{}, famStore), auth, sm).Mount(srv)
 	url, c := apitest.Serve(t, srv.Handler())
 
 	var got apitypes.Allocation
@@ -105,6 +129,25 @@ func TestTheTargetsOverHTTP(t *testing.T) {
 	}
 	if r := apitest.Do(t, c, "GET", url+"/api/v1/allocation/topup?amount_minor=0", ""); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("a top-up of nothing = %d, want 400", r.StatusCode)
+	}
+
+	// Bought and sold to 50/40/10: a sixth of the shares goes, 100 000, which
+	// bought for 83 333,33 gains 16 666,67 — 13 % of it in tax, the lot being
+	// under three years old.
+	var re apitypes.AllocationRebalance
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/allocation/rebalance", ""), &re)
+	if re.WorthAfterMinor != 1_000_000_00 || len(re.Kinds) != 3 || re.Kinds[0].ChangeMinor != -100_000_00 || re.Kinds[1].ChangeMinor != 0 || re.Kinds[2].ChangeMinor != 100_000_00 {
+		t.Fatalf("rebalance = %+v", re)
+	}
+	sale := re.Kinds[0].Sale.MustGet()
+	if !sale.Known || sale.GainMinor != 1_666_667 || sale.FreeMinor != 0 || re.TaxMinor.MustGet() != 216_667 || re.TaxRate.MustGet() != "13" || re.LongHoldingYears != 3 {
+		t.Errorf("the estimate = %+v, tax %v at %v", sale, re.TaxMinor, re.TaxRate)
+	}
+	if !re.Kinds[2].Sale.IsNull() {
+		t.Errorf("a kind bought has no sale: %+v", re.Kinds[2])
+	}
+	if r := apitest.Do(t, c, "GET", url+"/api/v1/allocation/rebalance?amount_minor=-1", ""); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("new money below zero = %d, want 400", r.StatusCode)
 	}
 
 	// Taken back: no targets, the rows as held.

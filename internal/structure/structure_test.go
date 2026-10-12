@@ -144,6 +144,11 @@ func TestTheWorthComesApart(t *testing.T) {
 	if full.Assets != 610_000_00+45_000_00 || full.Unpriced != 0 {
 		t.Errorf("full = %d, unpriced %d; want the frozen fund at $500 too", full.Assets, full.Unpriced)
 	}
+	// In, yet not to be sold now (a rebalance keeps it, Р-37 В); at the liquid
+	// valuation it is not in at all.
+	if len(full.Unsellable) != 1 || full.Unsellable[0].Key != "funds" || full.Unsellable[0].Minor != 45_000_00 || len(s.Unsellable) != 0 {
+		t.Errorf("unsellable: full %+v, liquid %+v", full.Unsellable, s.Unsellable)
+	}
 	if _, err := svc.Of(t.Context(), uuid.New(), "market"); err == nil {
 		t.Error("an unknown valuation was accepted")
 	}

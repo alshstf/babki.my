@@ -121,6 +121,10 @@ type Structure struct {
 	ByKind            []Slice
 	ByTargetCurrency  []Slice
 	Everyday, Unsplit int64
+	// Unsellable is, by kind, what of the targets' worth cannot be sold now:
+	// papers valued in full that have no price to sell at (decision Р-11).
+	// Empty at the liquid valuation, which leaves them out.
+	Unsellable []Slice
 }
 
 type accounts interface {
@@ -147,14 +151,16 @@ func NewService(acc accounts, pos positions, sp spaces, rates marketdata.RateSou
 	return &Service{accounts: acc, positions: pos, spaces: sp, rates: rates}
 }
 
-// piece is one holding, before conversion.
+// piece is one holding, before conversion; unsellable, a paper valued in
+// full with no price to sell it at now.
 type piece struct {
-	class    Class
-	kind     Kind
-	currency string
-	account  uuid.UUID
-	country  string
-	minor    int64
+	class      Class
+	kind       Kind
+	currency   string
+	account    uuid.UUID
+	country    string
+	minor      int64
+	unsellable bool
 }
 
 // Of is the space's structure today, papers at valuation.
@@ -214,6 +220,7 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 			continue
 		}
 		value, currency := p.LiquidValueMinor, p.Currency
+		unsellable := !p.LiquidValueMinor.IsSpecified() || p.LiquidValueMinor.IsNull()
 		if valuation == Full {
 			value = p.MarketValueMinor
 			if p.MarketValueCurrency.IsSpecified() && !p.MarketValueCurrency.IsNull() {
@@ -227,7 +234,7 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 		class := paperClass(instrument.Type(p.Instrument.Type))
 		got = append(got, piece{
 			class: class, kind: paperKind(class), currency: currency, account: a.ID,
-			country: issuerCountry(p.Instrument.Isin), minor: value.MustGet(),
+			country: issuerCountry(p.Instrument.Isin), minor: value.MustGet(), unsellable: unsellable,
 		})
 	}
 	cashClass := ClassBrokerCash
@@ -263,6 +270,10 @@ func paperClass(t instrument.Type) Class {
 	}
 	return ClassOther
 }
+
+// PaperKind is the kind a paper of type t is for the targets — as the
+// structure counts it.
+func PaperKind(t instrument.Type) Kind { return paperKind(paperClass(t)) }
 
 // paperKind is the kind a paper of class c is for the targets.
 func paperKind(c Class) Kind {
@@ -333,7 +344,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	memo := marketdata.NewRateMemo(s.rates)
 	today := time.Now().UTC()
 	missing := map[string]bool{}
-	sums := map[string]map[string]int64{"class": {}, "currency": {}, "account": {}, "country": {}, "kind": {}, "targetCurrency": {}}
+	sums := map[string]map[string]int64{"class": {}, "currency": {}, "account": {}, "country": {}, "kind": {}, "targetCurrency": {}, "unsellable": {}}
 	for _, p := range pieces {
 		inBase := p.minor
 		if p.currency != out.BaseCurrency {
@@ -365,6 +376,9 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 			out.Targets += inBase
 			sums["kind"][string(p.kind)] += inBase
 			sums["targetCurrency"][p.currency] += inBase
+			if p.unsellable {
+				sums["unsellable"][string(p.kind)] += inBase
+			}
 		}
 		sums["class"][string(p.class)] += inBase
 		sums["currency"][p.currency] += inBase
@@ -378,6 +392,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	out.ByClass, out.ByCurrency = slicesOf(sums["class"]), slicesOf(sums["currency"])
 	out.ByAccount, out.ByCountry = slicesOf(sums["account"]), slicesOf(sums["country"])
 	out.ByKind, out.ByTargetCurrency = slicesOf(sums["kind"]), slicesOf(sums["targetCurrency"])
+	out.Unsellable = slicesOf(sums["unsellable"])
 	return nil
 }
 
