@@ -179,7 +179,8 @@
     "deposit": "вклад",
     "credit_card": "кредитка",
     "loan": "кредит",
-    "cash": "наличные"
+    "cash": "наличные",
+    "valuables": "ценности"
   },
   "positions": {
     "title": "Позиции",

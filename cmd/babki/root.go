@@ -52,6 +52,7 @@ import (
 	"babki.my/babki/internal/receipt"
 	"babki.my/babki/internal/recurring"
 	"babki.my/babki/internal/structure"
+	"babki.my/babki/internal/valuables"
 	"babki.my/babki/web"
 )
 
@@ -129,6 +130,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore)
 	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
+	// Bars and coins of precious metal on valuables accounts (decisions Р-39, Р-40).
+	valuables.NewHandler(valuables.NewService(r.pool, accStore, mdStore), famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)

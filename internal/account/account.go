@@ -19,11 +19,14 @@ const (
 	TypeCreditCard Type = "credit_card"
 	TypeLoan       Type = "loan"
 	TypeCash       Type = "cash"
+	// TypeValuables is where bars and coins of precious metal are kept
+	// (decision Р-39): its worth is theirs, valued by internal/valuables.
+	TypeValuables Type = "valuables"
 )
 
 var validTypes = map[Type]bool{
 	TypeBrokerage: true, TypeChecking: true, TypeSavings: true, TypeDeposit: true,
-	TypeCreditCard: true, TypeLoan: true, TypeCash: true,
+	TypeCreditCard: true, TypeLoan: true, TypeCash: true, TypeValuables: true,
 }
 
 func (t Type) Valid() bool { return validTypes[t] }
