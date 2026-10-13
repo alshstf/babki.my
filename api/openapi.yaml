@@ -5,6 +5,7 @@ info:
 tags:
   - { name: family, description: "Setup, sign-in and sessions, the space, its members and roles (internal/family)." }
   - { name: accounts, description: "Accounts, balance marks, the family's total and capital (internal/account)." }
+  - { name: goals, description: "Savings goals: a sum by a date on the money that stands for it (internal/goals, decision Р-44)." }
   - { name: valuables, description: "Bars and coins of precious metal on valuables accounts, and where they are kept (internal/valuables)." }
   - { name: taxyear, description: "The family's income tax for a year, an estimate (internal/taxyear)." }
   - { name: instruments, description: "The catalog of papers (internal/instrument)." }
@@ -1478,6 +1479,54 @@ paths:
       responses:
         "200": { description: The catalog, content: { application/json: { schema: { $ref: "#/components/schemas/Intermediaries" } } } }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/goals:
+    get:
+      tags: [goals]
+      operationId: listGoals
+      description: >-
+        The family's savings goals, each against its target (decision Р-44): what its funds — whole accounts
+        or a sum out of one — come to as «Итого» values them; with a date, what the plan comes to by it at the
+        expected yield, compounded monthly, and the contribution a month that reaches the target; without a
+        date but with a contribution, the month it gets there.
+      responses:
+        "200": { description: The goals, content: { application/json: { schema: { $ref: "#/components/schemas/Goals" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [goals]
+      operationId: createGoal
+      description: A new goal, last in the order. 400 for a name empty or too long, a sum not above zero, a yield off 0–100, an account twice, a debt as a fund; 404 for an account not of the space.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/GoalInput" } } } }
+      responses:
+        "200": { description: The goals, content: { application/json: { schema: { $ref: "#/components/schemas/Goals" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/goals/{goalId}:
+    put:
+      tags: [goals]
+      operationId: updateGoal
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: States a goal anew, its funds too. 400 as on create; 404 for no such goal.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/GoalInput" } } } }
+      responses:
+        "200": { description: The goals, content: { application/json: { schema: { $ref: "#/components/schemas/Goals" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [goals]
+      operationId: deleteGoal
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: Takes a goal away; the money stays where it is.
+      responses:
+        "200": { description: The goals, content: { application/json: { schema: { $ref: "#/components/schemas/Goals" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts:
     get:
       tags: [accounts]
@@ -3210,6 +3259,56 @@ components:
         owner_user_id: { type: string, format: uuid, nullable: true }
         trades_abroad: { type: boolean, description: "See AccountWithBalance.trades_abroad. Omitted, false." }
         foreign_broker: { type: boolean, description: "See AccountWithBalance.foreign_broker. Omitted, false." }
+    Goals:
+      type: object
+      required: [base_currency, goals]
+      properties:
+        base_currency: { type: string }
+        goals: { type: array, items: { $ref: "#/components/schemas/Goal" } }
+    Goal:
+      type: object
+      required: [id, name, target_minor, target_on, monthly_minor, yield_percent, funds, saved_minor, percent, status, projected_minor, short_minor, needed_minor, reach_on, months, overdrawn]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        target_minor: { type: integer, format: int64, nullable: true, description: "In the base currency" }
+        target_on: { type: string, nullable: true, description: "Date YYYY-MM-DD" }
+        monthly_minor: { type: integer, format: int64, nullable: true }
+        yield_percent: { type: string, description: "The family's expected yield a year, decimal percent; 0 by default" }
+        funds: { type: array, items: { $ref: "#/components/schemas/GoalFund" } }
+        saved_minor: { type: integer, format: int64, description: "What the funds come to now" }
+        status: { type: string, enum: [done, ahead, on_track, at_risk, none] }
+        percent: { type: integer, description: "Saved as a whole percent of the target, 0–100; 0 without a target" }
+        projected_minor: { type: integer, format: int64, nullable: true, description: "With a date: what saved and the contribution come to by it at the yield" }
+        short_minor: { type: integer, format: int64, nullable: true, description: "At risk: what the plan falls short of the target by" }
+        needed_minor: { type: integer, format: int64, nullable: true, description: "With a date: the contribution a month that reaches the target" }
+        reach_on: { type: string, nullable: true, description: "With a contribution and no date, or a date missed: the earliest first of a month, YYYY-MM-DD, that as the date is on track" }
+        months: { type: integer, description: "Months to the date, or to reach_on" }
+        overdrawn: { type: array, items: { type: string, format: uuid }, description: "Accounts whose sums across the goals come to more than they hold" }
+    GoalFund:
+      type: object
+      required: [account_id, amount_minor, value_minor]
+      properties:
+        account_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64, nullable: true, description: "A sum out of the account in the base currency; null: the whole account" }
+        value_minor: { type: integer, format: int64, description: "What it comes to for the goal now" }
+    GoalInput:
+      type: object
+      required: [name, target_minor, target_on, monthly_minor, yield_percent, funds]
+      properties:
+        name: { type: string, maxLength: 100 }
+        target_minor: { type: integer, format: int64, nullable: true }
+        target_on: { type: string, nullable: true, description: "Date YYYY-MM-DD" }
+        monthly_minor: { type: integer, format: int64, nullable: true }
+        yield_percent: { type: string }
+        funds:
+          type: array
+          items:
+            type: object
+            required: [account_id, amount_minor]
+            properties:
+              account_id: { type: string, format: uuid }
+              amount_minor: { type: integer, format: int64, nullable: true }
     Intermediaries:
       type: object
       required: [checked_on, intermediaries]

@@ -547,6 +547,33 @@ func (e FullValuation) Valid() bool {
 	}
 }
 
+// Defines values for GoalStatus.
+const (
+	GoalStatusAhead   GoalStatus = "ahead"
+	GoalStatusAtRisk  GoalStatus = "at_risk"
+	GoalStatusDone    GoalStatus = "done"
+	GoalStatusNone    GoalStatus = "none"
+	GoalStatusOnTrack GoalStatus = "on_track"
+)
+
+// Valid indicates whether the value is a known member of the GoalStatus enum.
+func (e GoalStatus) Valid() bool {
+	switch e {
+	case GoalStatusAhead:
+		return true
+	case GoalStatusAtRisk:
+		return true
+	case GoalStatusDone:
+		return true
+	case GoalStatusNone:
+		return true
+	case GoalStatusOnTrack:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ImportField.
 const (
 	ImportFieldAmount       ImportField = "amount"
@@ -3790,6 +3817,83 @@ type ForecastEventKind string
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.
 type FullValuation string
 
+// Goal defines model for Goal.
+type Goal struct {
+	Funds        []GoalFund               `json:"funds"`
+	Id           openapi_types.UUID       `json:"id"`
+	MonthlyMinor nullable.Nullable[int64] `json:"monthly_minor"`
+
+	// Months Months to the date, or to reach_on
+	Months int    `json:"months"`
+	Name   string `json:"name"`
+
+	// NeededMinor With a date: the contribution a month that reaches the target
+	NeededMinor nullable.Nullable[int64] `json:"needed_minor"`
+
+	// Overdrawn Accounts whose sums across the goals come to more than they hold
+	Overdrawn []openapi_types.UUID `json:"overdrawn"`
+
+	// Percent Saved as a whole percent of the target, 0–100; 0 without a target
+	Percent int `json:"percent"`
+
+	// ProjectedMinor With a date: what saved and the contribution come to by it at the yield
+	ProjectedMinor nullable.Nullable[int64] `json:"projected_minor"`
+
+	// ReachOn With a contribution and no date, or a date missed: the earliest first of a month, YYYY-MM-DD, that as the date is on track
+	ReachOn nullable.Nullable[string] `json:"reach_on"`
+
+	// SavedMinor What the funds come to now
+	SavedMinor int64 `json:"saved_minor"`
+
+	// ShortMinor At risk: what the plan falls short of the target by
+	ShortMinor nullable.Nullable[int64] `json:"short_minor"`
+	Status     GoalStatus               `json:"status"`
+
+	// TargetMinor In the base currency
+	TargetMinor nullable.Nullable[int64] `json:"target_minor"`
+
+	// TargetOn Date YYYY-MM-DD
+	TargetOn nullable.Nullable[string] `json:"target_on"`
+
+	// YieldPercent The family's expected yield a year, decimal percent; 0 by default
+	YieldPercent string `json:"yield_percent"`
+}
+
+// GoalStatus defines model for Goal.Status.
+type GoalStatus string
+
+// GoalFund defines model for GoalFund.
+type GoalFund struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor A sum out of the account in the base currency; null: the whole account
+	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+
+	// ValueMinor What it comes to for the goal now
+	ValueMinor int64 `json:"value_minor"`
+}
+
+// GoalInput defines model for GoalInput.
+type GoalInput struct {
+	Funds []struct {
+		AccountId   openapi_types.UUID       `json:"account_id"`
+		AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+	} `json:"funds"`
+	MonthlyMinor nullable.Nullable[int64] `json:"monthly_minor"`
+	Name         string                   `json:"name"`
+	TargetMinor  nullable.Nullable[int64] `json:"target_minor"`
+
+	// TargetOn Date YYYY-MM-DD
+	TargetOn     nullable.Nullable[string] `json:"target_on"`
+	YieldPercent string                    `json:"yield_percent"`
+}
+
+// Goals defines model for Goals.
+type Goals struct {
+	BaseCurrency string `json:"base_currency"`
+	Goals        []Goal `json:"goals"`
+}
+
 // ImportAddedPaper defines model for ImportAddedPaper.
 type ImportAddedPaper struct {
 	// Code The code as the table named the paper
@@ -6487,6 +6591,12 @@ type ReorderCategoryRulesJSONRequestBody = ReorderCategoryRulesRequest
 
 // UpdateCategoryRuleJSONRequestBody defines body for UpdateCategoryRule for application/json ContentType.
 type UpdateCategoryRuleJSONRequestBody = UpdateCategoryRuleRequest
+
+// CreateGoalJSONRequestBody defines body for CreateGoal for application/json ContentType.
+type CreateGoalJSONRequestBody = GoalInput
+
+// UpdateGoalJSONRequestBody defines body for UpdateGoal for application/json ContentType.
+type UpdateGoalJSONRequestBody = GoalInput
 
 // AddImportPapersJSONRequestBody defines body for AddImportPapers for application/json ContentType.
 type AddImportPapersJSONRequestBody AddImportPapersJSONBody

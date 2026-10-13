@@ -1051,6 +1051,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/goals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The family's savings goals, each against its target (decision Р-44): what its funds — whole accounts or a sum out of one — come to as «Итого» values them; with a date, what the plan comes to by it at the expected yield, compounded monthly, and the contribution a month that reaches the target; without a date but with a contribution, the month it gets there. */
+        get: operations["listGoals"];
+        put?: never;
+        /** @description A new goal, last in the order. 400 for a name empty or too long, a sum not above zero, a yield off 0–100, an account twice, a debt as a fund; 404 for an account not of the space. */
+        post: operations["createGoal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/goals/{goalId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description States a goal anew, its funds too. 400 as on create; 404 for no such goal. */
+        put: operations["updateGoal"];
+        post?: never;
+        /** @description Takes a goal away; the money stays where it is. */
+        delete: operations["deleteGoal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts": {
         parameters: {
             query?: never;
@@ -2201,6 +2237,87 @@ export interface components {
             trades_abroad?: boolean;
             /** @description See AccountWithBalance.foreign_broker. Omitted, false. */
             foreign_broker?: boolean;
+        };
+        Goals: {
+            base_currency: string;
+            goals: components["schemas"]["Goal"][];
+        };
+        Goal: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description In the base currency
+             */
+            target_minor: number | null;
+            /** @description Date YYYY-MM-DD */
+            target_on: string | null;
+            /** Format: int64 */
+            monthly_minor: number | null;
+            /** @description The family's expected yield a year, decimal percent; 0 by default */
+            yield_percent: string;
+            funds: components["schemas"]["GoalFund"][];
+            /**
+             * Format: int64
+             * @description What the funds come to now
+             */
+            saved_minor: number;
+            /** @enum {string} */
+            status: "done" | "ahead" | "on_track" | "at_risk" | "none";
+            /** @description Saved as a whole percent of the target, 0–100; 0 without a target */
+            percent: number;
+            /**
+             * Format: int64
+             * @description With a date: what saved and the contribution come to by it at the yield
+             */
+            projected_minor: number | null;
+            /**
+             * Format: int64
+             * @description At risk: what the plan falls short of the target by
+             */
+            short_minor: number | null;
+            /**
+             * Format: int64
+             * @description With a date: the contribution a month that reaches the target
+             */
+            needed_minor: number | null;
+            /** @description With a contribution and no date, or a date missed: the earliest first of a month, YYYY-MM-DD, that as the date is on track */
+            reach_on: string | null;
+            /** @description Months to the date, or to reach_on */
+            months: number;
+            /** @description Accounts whose sums across the goals come to more than they hold */
+            overdrawn: string[];
+        };
+        GoalFund: {
+            /** Format: uuid */
+            account_id: string;
+            /**
+             * Format: int64
+             * @description A sum out of the account in the base currency; null: the whole account
+             */
+            amount_minor: number | null;
+            /**
+             * Format: int64
+             * @description What it comes to for the goal now
+             */
+            value_minor: number;
+        };
+        GoalInput: {
+            name: string;
+            /** Format: int64 */
+            target_minor: number | null;
+            /** @description Date YYYY-MM-DD */
+            target_on: string | null;
+            /** Format: int64 */
+            monthly_minor: number | null;
+            yield_percent: string;
+            funds: {
+                /** Format: uuid */
+                account_id: string;
+                /** Format: int64 */
+                amount_minor: number | null;
+            }[];
         };
         Intermediaries: {
             /** @description Date YYYY-MM-DD the banks were checked against the Bank of Russia's register */
@@ -7867,6 +7984,110 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    listGoals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The goals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Goals"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    createGoal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalInput"];
+            };
+        };
+        responses: {
+            /** @description The goals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Goals"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateGoal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                goalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalInput"];
+            };
+        };
+        responses: {
+            /** @description The goals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Goals"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteGoal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                goalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The goals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Goals"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listAccounts: {
