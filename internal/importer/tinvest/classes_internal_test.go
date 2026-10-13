@@ -1,6 +1,7 @@
 package tinvest
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"testing"
@@ -42,7 +43,7 @@ func TestPapersAreClassifiedByTheBrokersPassports(t *testing.T) {
 	newClient := func(token string) (*Client, error) {
 		return NewClient(qf.broker.srv.Client(), qf.broker.srv.URL, token, log), nil
 	}
-	w := NewClassesWorker(qf.store, cat, qf.sealer, newClient, log, func() time.Time { return qf.now })
+	w := NewClassesWorker(qf.store, cat, nil, qf.sealer, newClient, log, func() time.Time { return qf.now })
 	run := func() {
 		t.Helper()
 		if err := w.Work(qf.ctx, &river.Job[RefreshClassesArgs]{JobRow: &rivertype.JobRow{ID: 1}, Args: RefreshClassesArgs{}}); err != nil {
@@ -67,5 +68,65 @@ func TestPapersAreClassifiedByTheBrokersPassports(t *testing.T) {
 	run()
 	if again := qf.broker.callCount("InstrumentsService/FindInstrument"); again != asked {
 		t.Errorf("fresh classes asked again: %d → %d", asked, again)
+	}
+}
+
+// fakeSectors is Yahoo's sector search by ISIN.
+type fakeSectors map[string]string
+
+func (f fakeSectors) SectorFor(_ context.Context, isin string) (string, bool, error) {
+	s, ok := f[isin]
+	return s, ok, nil
+}
+
+// A share the broker does not know takes its sector from Yahoo, without a
+// country; with no connection active, every share does, and a bond is
+// recorded empty.
+func TestASectorFallsBackToYahoo(t *testing.T) {
+	qf := newQuotesFixture(t)
+	cat := instrument.NewStore(qf.pool)
+	mk := func(kind instrument.Type, name, isin string) instrument.Instrument {
+		i, err := cat.Create(qf.ctx, instrument.Instrument{Type: kind, Name: name, Ticker: name, ISIN: isin, Currency: "USD"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return i
+	}
+	aapl := mk(instrument.TypeShare, "AAPL", "US0378331005")
+	qf.broker.answer("InstrumentsService/FindInstrument", http.StatusOK, `{"instruments":[]}`)
+	log := slog.New(&logtest.Capture{})
+	newClient := func(token string) (*Client, error) {
+		return NewClient(qf.broker.srv.Client(), qf.broker.srv.URL, token, log), nil
+	}
+	sectors := fakeSectors{"US0378331005": "Technology", "US5949181045": "Technology"}
+	w := NewClassesWorker(qf.store, cat, sectors, qf.sealer, newClient, log, func() time.Time { return qf.now })
+	run := func() {
+		t.Helper()
+		if err := w.Work(qf.ctx, &river.Job[RefreshClassesArgs]{JobRow: &rivertype.JobRow{ID: 1}, Args: RefreshClassesArgs{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run()
+	got, _ := cat.Classes(qf.ctx, []uuid.UUID{aapl.ID})
+	if c := got[aapl.ID]; c.Source != instrument.ClassFromYahoo || c.Sector != instrument.SectorIT || c.Country != "" || c.Raw != "Technology" {
+		t.Errorf("AAPL with the broker = %+v", c)
+	}
+
+	if err := qf.store.UpdateConnectionStatus(qf.ctx, qf.conn.ID, StatusTokenRevoked); err != nil {
+		t.Fatal(err)
+	}
+	msft := mk(instrument.TypeShare, "MSFT", "US5949181045")
+	bond := mk(instrument.TypeBond, "BOND", "XS0000000001")
+	asked := qf.broker.callCount("InstrumentsService/FindInstrument")
+	run()
+	got, _ = cat.Classes(qf.ctx, []uuid.UUID{msft.ID, bond.ID})
+	if c := got[msft.ID]; c.Source != instrument.ClassFromYahoo || c.Sector != instrument.SectorIT {
+		t.Errorf("MSFT without a connection = %+v", c)
+	}
+	if c, ok := got[bond.ID]; !ok || c.Source != instrument.ClassFromYahoo || c.Sector != instrument.SectorUnknown {
+		t.Errorf("bond without a connection = %+v, %v", c, ok)
+	}
+	if again := qf.broker.callCount("InstrumentsService/FindInstrument"); again != asked {
+		t.Errorf("the broker was asked without a connection: %d → %d", asked, again)
 	}
 }

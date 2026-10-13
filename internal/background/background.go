@@ -61,13 +61,16 @@ const (
 // ReferenceSources are the feeds beyond the exchange and the broker: the full
 // valuation's reference prices (decision Р-11), the dividend calendar of
 // papers no broker's calendar covers (Р-14), foreign papers' splits and
-// cryptocurrencies' prices (Р-20). A nil one is not fetched.
+// cryptocurrencies' prices (Р-20), shares' sectors (Р-46). A nil one is not
+// fetched.
 type ReferenceSources struct {
 	NAV       []marketdata.NAVProvider
 	Foreign   marketdata.ForeignQuoteProvider
 	Dividends marketdata.DividendFeed
 	Splits    corporateaction.ForeignSplitsProvider
 	Crypto    marketdata.CryptoQuoteProvider
+	// Sectors names a share's sector where the broker's passport does not.
+	Sectors tinvest.SectorFeed
 }
 
 // TinvestDeps is what the T-Invest workers need. Clients are made per token
@@ -137,7 +140,7 @@ func NewWorkers(
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	// Papers' country of risk and sector, from the broker's passports (Р-46).
 	river.AddWorker(workers, tinvest.NewClassesWorker(tinvestDeps.Store, instrument.NewStore(pool),
-		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
+		references.Sectors, tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	// The corporate-actions registry. The refresh worker is registered only
 	// when the quote provider can also answer about splits — the same rule the
 	// gold worker follows above and for the same reason: the interface is the
