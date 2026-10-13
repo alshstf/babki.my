@@ -135,13 +135,23 @@ func (c Catalog) ByID(id string) (Intermediary, bool) {
 }
 
 // Match is the intermediary of this kind an account's «bank or broker» names,
-// by its name or a former one, case, quotes, «ё» and legal forms aside.
+// by its name or a former one, case, quotes, «ё» and legal forms aside. A
+// broker's account named by its bank — «Т-Банк» for Т-Инвестиции, as people
+// write it — is the bank's broker.
 func (c Catalog) Match(name string, kind Kind) (Intermediary, bool) {
-	i, ok := c.byName[fold(name)+"|"+string(kind)]
-	if !ok {
-		return Intermediary{}, false
+	if i, ok := c.byName[fold(name)+"|"+string(kind)]; ok {
+		return c.All[i], true
 	}
-	return c.All[i], true
+	if kind == Broker {
+		if b, ok := c.byName[fold(name)+"|"+string(Bank)]; ok {
+			for _, i := range c.All {
+				if i.Kind == Broker && i.BankID == c.All[b].ID {
+					return i, true
+				}
+			}
+		}
+	}
+	return Intermediary{}, false
 }
 
 var (

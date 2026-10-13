@@ -37,6 +37,8 @@ func TestAnAccountsIntermediaryIsMatched(t *testing.T) {
 		{"Freedom Finance", Broker, "freedom"},
 		{"Банк «Санкт-Петербург»", Bank, "bspb"},
 		{"Альфа-Банк", Bank, "alfa"},
+		{"Т-Банк", Broker, "tinvest"},
+		{"Сбер", Broker, "sberinvest"},
 	} {
 		got, ok := c.Match(tc.name, tc.kind)
 		if !ok || got.ID != tc.want {
