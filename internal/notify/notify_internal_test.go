@@ -12,6 +12,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/platform/secretbox"
 	"babki.my/babki/internal/valuables"
 )
@@ -198,5 +199,49 @@ func TestStorageReminders(t *testing.T) {
 	}
 	if !strings.HasPrefix(got[1].Body, "Срок аренды или хранения истёк 01.10") || !strings.HasSuffix(got[1].Key, ":over") {
 		t.Errorf("over = %+v", got[1])
+	}
+}
+
+// The note's family (Р-44) on 1 November: the holiday short of its July date
+// is reminded of once in the month, by what a month would do; the first
+// payment ahead is not; on its date the cushion is reached, the gift is not —
+// both say so; a goal without a date never calls.
+func TestGoalReminders(t *testing.T) {
+	today := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	ptr := func(v int64) *int64 { return &v }
+	on := func(s string) *time.Time {
+		d, _ := time.Parse(time.DateOnly, s)
+		return &d
+	}
+	goal := func(name string, target int64, date *time.Time, monthly *int64, p goals.Progress) goals.Valued {
+		return goals.Valued{Goal: goals.Goal{ID: uuid.New(), Name: name, Target: &target, TargetOn: date, Monthly: monthly}, Progress: p}
+	}
+	list := []goals.Valued{
+		goal("Отпуск", 250_000_00, on("2027-07-01"), ptr(20_000_00),
+			goals.Progress{Saved: 90_000_00, Status: goals.AtRisk, Projected: ptr(230_000_00), Needed: ptr(22_858_00)}),
+		goal("Первый взнос", 2_000_000_00, on("2029-09-01"), ptr(30_000_00),
+			goals.Progress{Saved: 800_000_00, Status: goals.Ahead, Projected: ptr(2_234_000_00), Needed: ptr(25_000_00)}),
+		goal("Подушка", 570_000_00, on("2026-11-01"), nil, goals.Progress{Saved: 600_000_00, Status: goals.Done}),
+		goal("Подарок", 50_000_00, on("2026-11-01"), nil,
+			goals.Progress{Saved: 42_000_00, Status: goals.AtRisk, Projected: ptr(42_000_00), Needed: ptr(8_000_00)}),
+		goal("Машина", 1_000_000_00, nil, ptr(50_000_00), goals.Progress{Saved: 100_000_00, Status: goals.NoStatus}),
+	}
+	got := GoalReminders(list, "RUB", today)
+	if len(got) != 3 {
+		t.Fatalf("reminders = %+v", got)
+	}
+	// Amounts keep their groups together with no-break spaces.
+	for i := range got {
+		got[i].Body = strings.ReplaceAll(got[i].Body, "\u00a0", " ")
+	}
+	if got[0].Body != "Не успеваете к 01.07.2027: при взносе 20 000,00 ₽ в месяц будет 230 000,00 ₽ из 250 000,00 ₽. Чтобы успеть — 22 858,00 ₽ в месяц." ||
+		!strings.HasSuffix(got[0].Key, ":risk:2026-11") || got[0].URL != "/money" || got[0].Owner != nil {
+		t.Errorf("at risk = %+v", got[0])
+	}
+	if got[1].Body != "Срок цели — сегодня, и она достигнута: накоплено 600 000,00 ₽ из 570 000,00 ₽." || !strings.HasSuffix(got[1].Key, ":due:2026-11-01") {
+		t.Errorf("reached = %+v", got[1])
+	}
+	if got[2].Body != "Срок цели — сегодня: накоплено 42 000,00 ₽ из 50 000,00 ₽, не хватает 8 000,00 ₽. Перенесите срок или поменяйте сумму." {
+		t.Errorf("missed = %+v", got[2])
 	}
 }

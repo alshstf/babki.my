@@ -19,6 +19,7 @@ import (
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/mailbox"
@@ -27,7 +28,9 @@ import (
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/secretbox"
+	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/structure"
 	"babki.my/babki/internal/valuables"
 )
 
@@ -191,11 +194,17 @@ func NewWorkers(
 	receipts := receipt.NewService(pool, operations, accounts, category.NewStore(pool), operation.NewService(operations))
 	river.AddWorker(workers, mailbox.NewWorker(mailbox.NewService(pool, tinvestDeps.Box, mailbox.IMAP{}, receipts, log), log))
 	report := cashflow.NewService(operations, accounts, category.NewStore(pool), spaces, marketdata.NewConverter(mdStore))
-	// The bars' storages too: a safe box's rent ending (physical metals).
-	river.AddWorker(workers, notify.WithStorages(notify.NewRemindersWorker(notify.NewStore(pool),
+	// The bars' storages too: a safe box's rent ending (physical metals). And
+	// the savings goals (Р-44), valued as the screens value them: positions at
+	// their prices, the bars, the papers' classes.
+	converter := marketdata.NewConverter(mdStore)
+	worth := valuables.NewService(pool, accounts, mdStore).WithWorth(spaces, mdStore, converter)
+	positions := portfolio.NewService(operations, instruments, mdStore, converter, spaces).WithAccounts(accounts)
+	structures := structure.NewService(accounts, positions, spaces, converter).WithValuables(worth).WithClasses(instruments).WithMembers(spaces)
+	reminders := notify.WithStorages(notify.NewRemindersWorker(notify.NewStore(pool),
 		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
-		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log),
-		valuables.NewService(pool, accounts, mdStore)))
+		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log), worth)
+	river.AddWorker(workers, notify.WithGoals(reminders, goals.NewService(pool, structures, accounts)))
 	return workers
 }
 
