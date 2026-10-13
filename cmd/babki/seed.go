@@ -456,6 +456,28 @@ func seedInstrumentsAndOperations(
 		}
 		instIDs[is.key] = created.ID
 	}
+	// Country of risk and sector as the broker's passports and Yahoo give
+	// them (decision Р-46): the demo papers have no ISIN to look them up by.
+	for key, c := range map[string]instrument.Class{
+		"SBER":         {Country: "RU", Sector: instrument.SectorFinancials, Source: instrument.ClassFromTInvest, Raw: "financial"},
+		"LKOH":         {Country: "RU", Sector: instrument.SectorEnergy, Source: instrument.ClassFromTInvest, Raw: "energy"},
+		"SU26238RMFS4": {Country: "RU", Sector: instrument.SectorGovernment, Source: instrument.ClassFromTInvest, Raw: "government"},
+		"FXUS":         {Country: "US", Sector: instrument.SectorFundsEquity, Source: instrument.ClassFromTInvest, Raw: "other equity"},
+		"AAPL":         {Country: "US", Sector: instrument.SectorIT, Source: instrument.ClassFromTInvest, Raw: "it"},
+		"MSFT":         {Country: "US", Sector: instrument.SectorIT, Source: instrument.ClassFromTInvest, Raw: "it"},
+		"TSLA":         {Country: "US", Sector: instrument.SectorConsumer, Source: instrument.ClassFromTInvest, Raw: "consumer"},
+		"NVDA":         {Country: "US", Sector: instrument.SectorIT, Source: instrument.ClassFromTInvest, Raw: "it"},
+		"GOOGL":        {Country: "US", Sector: instrument.SectorTelecom, Source: instrument.ClassFromTInvest, Raw: "telecom"},
+		"KAZ32EUR":     {Country: "KZ", Sector: instrument.SectorGovernment, Source: instrument.ClassFromTInvest, Raw: "government"},
+		"WEWKQ":        {Sector: instrument.SectorRealEstate, Source: instrument.ClassFromYahoo, Raw: "Real Estate"},
+		"INTC":         {Country: "US", Sector: instrument.SectorIT, Source: instrument.ClassFromTInvest, Raw: "it"},
+		"AMZN":         {Country: "US", Sector: instrument.SectorConsumer, Source: instrument.ClassFromTInvest, Raw: "consumer"},
+	} {
+		c.FetchedAt = time.Now().UTC()
+		if err := instStore.SetClass(ctx, instIDs[key], c); err != nil {
+			return fmt.Errorf("seed class of %q: %w", key, err)
+		}
+	}
 
 	inst := func(key string) *uuid.UUID {
 		id := instIDs[key]

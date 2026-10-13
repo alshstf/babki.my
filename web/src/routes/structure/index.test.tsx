@@ -62,8 +62,8 @@ describe("StructurePage", () => {
     const sectors = within(screen.getByTestId("structure-sector")).getAllByTestId("structure-slice");
     expect(sectors.map((x) => x.textContent?.split(/\d/)[0])).toEqual(["Финансы", "Фонды облигаций", "Отрасль неизвестна"]);
     const held = within(screen.getByTestId("structure-holding")).getAllByTestId("structure-slice");
-    expect(held[0]).toHaveTextContent(/Российские бумаги у российских брокеров.*420\s000.*82 %/);
-    expect(held[1]).toHaveTextContent(/Иностранный брокер.*90\s000.*18 %/);
+    expect(held[0]).toHaveTextContent(/Российские бумаги в России.*420\s000.*82 %/);
+    expect(held[1]).toHaveTextContent(/У иностранного брокера.*90\s000.*18 %/);
     expect(screen.getByText(/Бумаг без цены не учтено: 1/)).toBeTruthy();
 
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Оценка бумаг" }), { key: "Enter" });

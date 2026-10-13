@@ -229,7 +229,7 @@ function Breakdown({
   if (slices.length === 0) return null;
   const share = (minor: number) => (total > 0 ? (minor / total) * 100 : 0);
   return (
-    <Card data-testid={testId}>
+    <Card data-testid={testId} className="min-w-0">
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{title}</CardTitle>
       </CardHeader>
@@ -237,7 +237,7 @@ function Breakdown({
         {slices.map((s) => (
           <div key={s.key} className="grid gap-1" data-testid="structure-slice">
             <div className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="min-w-0 truncate">{name(s.key)}</span>
+              <span className="min-w-0 break-words">{name(s.key)}</span>
               <span className="shrink-0 tabular-nums">
                 {formatMinorCompact(s.minor, currency)}{" "}
                 <span className="text-muted-foreground">
