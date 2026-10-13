@@ -25,7 +25,7 @@ import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import { currencyName, kindName } from "@/lib/allocation-names";
 import { countryName } from "@/lib/country";
 import { isCurrencyCode } from "@/lib/currencies";
-import { formatDate } from "@/lib/dates";
+import { formatDateTime } from "@/lib/dates";
 import { formatMinor, formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { percent } from "@/lib/percent";
 import { sectorName } from "@/lib/sectors";
@@ -79,10 +79,14 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
   const [ops, setOps] = useState<Planned[]>([]);
   const [draft, setDraft] = useState<{ planned: Planned; pending?: number } | null>(null);
   const [pending, setPending] = useState<Suggested[]>([]);
-  const [opened, setOpened] = useState<{ name: string; savedAt: string } | null>(null);
+  // The saved plan on the card: opened (valued anew at today's prices) or
+  // just saved.
+  const [opened, setOpened] = useState<{ name: string; savedAt: string; justSaved?: boolean } | null>(null);
   const active = (accounts.data ?? []).filter((a) => a.status === "active");
   const nameOf = (id: string) => active.find((a) => a.id === id)?.name ?? "";
-  const broker = active.find((a) => a.type === "brokerage") ?? active[0];
+  // A broker's account in the base currency first: the suggestion's sums are
+  // in it.
+  const broker = active.find((a) => a.type === "brokerage" && a.currency === baseCurrency) ?? active.find((a) => a.type === "brokerage") ?? active[0];
   const start = () =>
     setDraft({ planned: { kind: "buy", accountId: broker?.id ?? "", toAccountId: "", instrument: null, currency: broker?.currency ?? "RUB", amount: "" } });
   const evaluate = (list: Planned[]) => {
@@ -122,7 +126,9 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
       <CardContent className="grid gap-4">
         {opened && (
           <p className="text-xs text-muted-foreground" data-testid="plan-opened">
-            {t("plan.opened", { name: opened.name, date: formatDate(opened.savedAt.slice(0, 10)) })}
+            {opened.justSaved
+              ? t("plan.savedNow", { name: opened.name })
+              : t("plan.opened", { name: opened.name, date: formatDateTime(opened.savedAt) })}
           </p>
         )}
         {ops.length > 0 && (
@@ -185,7 +191,7 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
           </Alert>
         )}
         {whatIf.data && ops.length > 0 && <Result data={whatIf.data} />}
-        {canEdit && ops.length > 0 && <SavePlan key={opened?.name ?? ""} ops={ops} name={opened?.name ?? ""} onSaved={(p) => setOpened({ name: p.name, savedAt: p.saved_at })} />}
+        {canEdit && ops.length > 0 && <SavePlan key={opened?.name ?? ""} ops={ops} name={opened?.name ?? ""} onSaved={(p) => setOpened({ name: p.name, savedAt: p.saved_at, justSaved: true })} />}
         <SavedPlans canEdit={canEdit} onOpen={open} />
       </CardContent>
     </Card>
@@ -306,7 +312,7 @@ function SavedPlans({ canEdit, onOpen }: { canEdit: boolean; onOpen: (plan: Allo
         <div key={p.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm" data-testid="plan-saved-row">
           <span className="min-w-0 break-words">
             {p.name}
-            <span className="text-xs text-muted-foreground"> · {t("plan.savedOn", { date: formatDate(p.saved_at.slice(0, 10)), count: p.operations.length })}</span>
+            <span className="text-xs text-muted-foreground"> · {t("plan.savedOn", { date: formatDateTime(p.saved_at), count: p.operations.length })}</span>
           </span>
           <span className="flex gap-3">
             <Button variant="link" className="h-auto p-0 text-xs" onClick={() => onOpen(p, papers)}>

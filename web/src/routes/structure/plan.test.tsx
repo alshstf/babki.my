@@ -138,9 +138,9 @@ describe("PlanCard", () => {
   it("opens a saved plan valued anew and keeps it again under its name", async () => {
     show("owner", [october]);
     const row = await screen.findByTestId("plan-saved-row");
-    expect(norm(row.textContent)).toMatch(/Октябрь · сохранён 13\.10\.2026, операций: 1/);
+    expect(norm(row.textContent)).toMatch(/Октябрь · сохранён 13\.10\.2026, \d\d:\d\d, операций: 1/);
     fireEvent.click(within(row).getByRole("button", { name: "открыть" }));
-    expect(norm((await screen.findByTestId("plan-opened")).textContent)).toBe("План «Октябрь» сохранён 13.10.2026 — пересчитан по сегодняшним ценам.");
+    expect(norm((await screen.findByTestId("plan-opened")).textContent)).toMatch(/^План «Октябрь» сохранён 13\.10\.2026, \d\d:\d\d — пересчитан по сегодняшним ценам\.$/);
     await waitFor(() => expect(norm(screen.getByTestId("plan-ops").textContent)).toMatch(/Freedom: купить Invesco NASDAQ 100 на 1 000,00 \$/));
     expect(await screen.findByTestId("plan-result")).toBeTruthy();
 
@@ -150,6 +150,7 @@ describe("PlanCard", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "POST" && new URL((r as Request).url).pathname.endsWith("/allocation/plans"))).toBe(true));
     const saved = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST" && new URL(r.url).pathname.endsWith("/allocation/plans"))!;
     expect(await saved.json()).toEqual({ name: "Октябрь", operations: october.operations });
+    await waitFor(() => expect(norm(screen.getByTestId("plan-opened").textContent)).toBe("План «Октябрь» сохранён."));
   });
 
   it("lets a viewer open a saved plan but neither keep nor forget one", async () => {
