@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/valuables"
 )
@@ -55,6 +56,9 @@ type Service struct {
 	categories categories
 	// For the bars and coins sold (WithProperty).
 	property soldPieces
+	// For the wages written by hand (WithEntries).
+	db  db.Executor
+	ops operations
 }
 
 type soldPieces interface {
@@ -126,6 +130,9 @@ type Person struct {
 	// a band the sum crosses.
 	Employers                                            []Employer
 	WagesNet, Wages, WagesTax, WagesWithheld, WagesToPay int64
+	// WagePayments are the wage payments one by one, each with its gross
+	// and withheld tax written by hand or reckoned.
+	WagePayments []WagePayment
 	// PropertySold and PropertyGain are what the bars and coins sold in the
 	// year brought and gained, those held long enough left out; PropertyBase
 	// what of it is taxed — the gain, or the proceeds less the year's
@@ -242,6 +249,10 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	if err != nil {
 		return Year{}, err
 	}
+	entered, err := s.Entries(ctx, spaceID)
+	if err != nil {
+		return Year{}, err
+	}
 	// Bars and coins sold: the owner of the piece, else the account's person.
 	if s.property != nil {
 		sold, err := s.property.SoldIn(ctx, spaceID, year)
@@ -318,7 +329,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		p.ByNotice = p.Tax - family.Banded(rules.InvestmentBands[:], invested, rules.TaxUnitMinor)
 		due := max(p.Tax-p.ByNotice-p.Credit, 0)
 		p.ToPay, p.Refund = max(due-p.ByAgents, 0), max(p.ByAgents-due, 0)
-		p.Employers = wagesOf(rules.MainBands[:], rules.TaxUnitMinor, wages[who])
+		p.Employers, p.WagePayments = wagesOf(rules.MainBands[:], rules.TaxUnitMinor, wages[who], entered)
 		for _, e := range p.Employers {
 			p.WagesNet += e.Net
 			p.Wages += e.Gross

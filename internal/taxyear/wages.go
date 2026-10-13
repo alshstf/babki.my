@@ -35,9 +35,22 @@ type Employer struct {
 	Net, Gross, Withheld int64
 }
 
-// earning is one earning row, or part of one, filed under a marked category;
-// unvalued when it is not in the tax currency.
+// WagePayment is one wage payment: what reached the account, and its gross
+// and the tax withheld — written by hand from the payslip (Entered) or
+// reckoned by the program.
+type WagePayment struct {
+	OperationID          uuid.UUID
+	On                   time.Time
+	Employer             string
+	Net, Gross, Withheld int64
+	Entered              bool
+}
+
+// earning is a row's money filed under one marked category, its parts there
+// summed; unvalued when it is not in the tax currency.
 type earning struct {
+	op       uuid.UUID
+	on       time.Time
 	person   uuid.UUID
 	mark     category.TaxMark
 	employer string
@@ -88,16 +101,26 @@ func (s *Service) earnings(ctx context.Context, spaceID uuid.UUID, year int, cur
 		case o.CategoryID != nil:
 			pieces = append(pieces, piece{*o.CategoryID, o.AmountMinor})
 		}
+		// One earning per mark: a payment's wage is entered as a whole.
+		at := map[category.TaxMark]int{}
 		for _, p := range pieces {
 			mark, ok := marks[p.cat]
 			if !ok {
+				continue
+			}
+			if i, ok := at[mark]; ok {
+				out[i].minor += p.minor
 				continue
 			}
 			who := whose(accounts[o.AccountID], owner)
 			if o.MemberID != nil {
 				who = *o.MemberID
 			}
-			out = append(out, earning{person: who, mark: mark, employer: strings.TrimSpace(o.Counterparty), minor: p.minor, unvalued: o.Currency != currency})
+			at[mark] = len(out)
+			out = append(out, earning{
+				op: o.ID, on: o.OccurredOn, person: who, mark: mark, employer: strings.TrimSpace(o.Counterparty),
+				minor: p.minor, unvalued: o.Currency != currency,
+			})
 		}
 	}
 	return out, nil
@@ -119,12 +142,16 @@ func grossOf(bands []family.TaxBand, before, net int64) int64 {
 	return lo
 }
 
-// wagesOf sums a person's wages by employer, in the order they came; what
-// each employer withheld is its tax on what it paid, in whole units as the
-// tax is.
-func wagesOf(bands []family.TaxBand, unit int64, rows []earning) []Employer {
+// wagesOf sums a person's wages by employer, in the order they came, and
+// lists the payments. A payment's gross and withheld tax are its payslip's
+// when written, else reckoned from what reached the account on top of what
+// the employer paid before it. What an employer withheld on the reckoned
+// payments is in whole units as the tax is.
+func wagesOf(bands []family.TaxBand, unit int64, rows []earning, entered map[uuid.UUID]Entry) ([]Employer, []WagePayment) {
 	var out []Employer
+	var payments []WagePayment
 	at := map[string]int{}
+	reckoned := map[int]int64{}
 	for _, r := range rows {
 		i, ok := at[r.employer]
 		if !ok {
@@ -133,11 +160,22 @@ func wagesOf(bands []family.TaxBand, unit int64, rows []earning) []Employer {
 			out = append(out, Employer{Name: r.employer})
 		}
 		e := &out[i]
-		e.Gross += grossOf(bands, e.Gross, r.minor)
+		pay := WagePayment{OperationID: r.op, On: r.on, Employer: r.employer, Net: r.minor}
+		if x, ok := entered[r.op]; ok {
+			pay.Gross, pay.Withheld, pay.Entered = x.Gross, x.Withheld, true
+			e.Withheld += x.Withheld
+		} else {
+			pay.Gross = grossOf(bands, e.Gross, r.minor)
+			pay.Withheld = pay.Gross - r.minor
+			reckoned[i] += pay.Withheld
+		}
+		e.Gross += pay.Gross
 		e.Net += r.minor
+		payments = append(payments, pay)
 	}
+	step := max(unit, 1)
 	for i := range out {
-		out[i].Withheld = family.Banded(bands, out[i].Gross, unit)
+		out[i].Withheld += (reckoned[i] + step/2) / step * step
 	}
-	return out
+	return out, payments
 }

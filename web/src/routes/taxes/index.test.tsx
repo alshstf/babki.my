@@ -24,7 +24,7 @@ const year: TaxYear = {
     {
       user_id: "u-alex", name: "Алекс", base_minor: 4_000_000_00, tax_minor: 552_000_00, by_agents_minor: 520_000_00, withheld_minor: 6_500_00,
       credit_minor: 0, to_pay_minor: 32_000_00, refund_minor: 0, unvalued: 2, interest_minor: 400_000_00, interest_free_minor: 210_000_00, by_notice_minor: 28_500_00,
-      wages_net_minor: 0, wages_minor: 0, wages_tax_minor: 0, wages_withheld_minor: 0, wages_to_pay_minor: 0, employers: [],
+      wages_net_minor: 0, wages_minor: 0, wages_tax_minor: 0, wages_withheld_minor: 0, wages_to_pay_minor: 0, employers: [], wage_payments: [],
       property_sold_minor: 0, property_gain_minor: 0, property_base_minor: 0, property_free: 0,
       accounts: [
         { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2 },
@@ -37,6 +37,7 @@ const year: TaxYear = {
       credit_minor: 0, to_pay_minor: 0, refund_minor: 8_000_00, unvalued: 0, accounts: [], interest_minor: 0, interest_free_minor: 210_000_00, by_notice_minor: 0,
       wages_net_minor: 87_000_00, wages_minor: 100_000_00, wages_tax_minor: 13_000_00, wages_withheld_minor: 13_000_00, wages_to_pay_minor: 0,
       employers: [{ name: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00 }],
+      wage_payments: [{ operation_id: "op-1", on: "2026-03-05", employer: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00, entered: false }],
       property_sold_minor: 525_000_00, property_gain_minor: 115_000_00, property_base_minor: 115_000_00, property_free: 1,
     },
   ],
@@ -56,6 +57,7 @@ function answer(y: TaxYear) {
     if (path.endsWith("/members")) return json([{ id: "u-alex", username: "a", display_name: "Алекс", role: "owner" }, { id: "u-maria", username: "m", display_name: "Мария", role: "editor" }]);
     if (path.endsWith("/auth/me")) return json({ user: { id: "u-alex", username: "a", display_name: "Алекс" }, role: "owner", space: { id: "s", name: "S", base_currency: "RUB" } });
     if (input.method === "PATCH") return json(shared);
+    if (path.includes("/tax-year/wages/")) return Promise.resolve(new Response(null, { status: 204 }));
     return json(null);
   });
 }
@@ -106,6 +108,44 @@ describe("TaxesPage", () => {
     expect(norm(within(people[1]).getByTestId("tax-property").textContent)).toBe(
       "Продажа слитков и монет: выручка 525 000,00 ₽, прибыль 115 000,00 ₽; к налогу 115 000,00 ₽ — меньшее из прибыли и выручки без вычета 250 000 ₽. Банк налог не удерживает — по декларации. Проданных после трёх лет владения — без налога: 1.",
     );
+  });
+
+  it("writes a wage payment's payslip, accepts the reckoning, or drops it", async () => {
+    answer(year);
+    show();
+    const people = await screen.findAllByTestId("tax-person");
+    fireEvent.click(within(people[1]).getByRole("button", { name: "Выплаты и суммы из расчётных листков (1)" }));
+    const row = within(people[1]).getByTestId("tax-wage-payment");
+    expect(norm(row.textContent)).toMatch(/05\.03\.2026 · ООО «Ромашка»: на руки 87 000,00 ₽, до налога 100 000,00 ₽, удержано 13 000,00 ₽· расчёт программы/);
+    fireEvent.click(within(row).getByRole("button", { name: "Вписать из листка" }));
+    fireEvent.change(within(row).getByLabelText("До налога, ₽"), { target: { value: "115 000" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Сохранить" }));
+    const sent = async (method: string) => {
+      await waitFor(() => expect(fetchMock.mock.calls.map(([r]) => r as Request).some((r) => r.method === method)).toBe(true));
+      return fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === method)!;
+    };
+    const put = await sent("PUT");
+    expect(put.url).toMatch(/\/tax-year\/wages\/op-1$/);
+    expect(await put.json()).toEqual({ gross_minor: 115_000_00, withheld_minor: 13_000_00 });
+    fetchMock.mockClear();
+    fireEvent.click(within(row).getByRole("button", { name: "Принять расчёт" }));
+    expect(await (await sent("PUT")).json()).toEqual({ gross_minor: 100_000_00, withheld_minor: 13_000_00 });
+  });
+
+  it("says a payslip is in, and drops it", async () => {
+    const p = year.people[1];
+    answer({ ...year, people: [year.people[0], { ...p, wage_payments: [{ ...p.wage_payments[0], gross_minor: 115_000_00, entered: true }] }] });
+    show();
+    const people = await screen.findAllByTestId("tax-person");
+    expect(norm(within(people[1]).getByTestId("tax-wages").textContent)).toMatch(/— по расчётным листкам\./);
+    fireEvent.click(within(people[1]).getByRole("button", { name: "Выплаты и суммы из расчётных листков (1)" }));
+    const row = within(people[1]).getByTestId("tax-wage-payment");
+    expect(norm(row.textContent)).toMatch(/до налога 115 000,00 ₽.*· из листка/);
+    fireEvent.click(within(row).getByRole("button", { name: "Вернуть расчёт программы" }));
+    await waitFor(() => {
+      const del = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "DELETE");
+      expect(del?.url).toMatch(/\/tax-year\/wages\/op-1$/);
+    });
   });
 
   it("asks whose a shared broker's account is for tax", async () => {

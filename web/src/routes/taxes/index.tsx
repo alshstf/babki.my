@@ -2,16 +2,19 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAccounts, useUpdateAccount } from "@/api/accounts";
 import { useMembers } from "@/api/members";
 import { useSession } from "@/api/session";
-import { useTaxYear, type TaxYear, type TaxYearPerson } from "@/api/tax-year";
+import { useTaxYear, useWageEntry, type TaxYear, type TaxYearPerson, type TaxYearWagePayment } from "@/api/tax-year";
 import { QueryGate } from "@/components/query-notice";
 import { queryState } from "@/lib/query-state";
-import { formatMinor } from "@/lib/money";
+import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 
 // TaxesPage is the family's income tax for a year, an estimate (decisions
@@ -102,11 +105,16 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
             .join(" · ")}
         </p>
         {p.wages_minor > 0 && (
-          <div className="grid gap-1 text-sm" data-testid="tax-wages">
-            <p>
+          <div className="grid gap-1 text-sm">
+            <p data-testid="tax-wages">
               {t("taxes.wages", {
                 net: formatMinor(p.wages_net_minor, c),
                 gross: formatMinor(p.wages_minor, c),
+                how: p.wage_payments.every((w) => w.entered)
+                  ? t("taxes.wagesHowEntered")
+                  : p.wage_payments.some((w) => w.entered)
+                    ? t("taxes.wagesHowMixed")
+                    : t("taxes.wagesHowReckoned"),
                 tax: formatMinor(p.wages_tax_minor, c),
                 withheld: formatMinor(p.wages_withheld_minor, c),
               })}
@@ -123,6 +131,7 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
                 ))}
               </ul>
             )}
+            <WagePayments payments={p.wage_payments} currency={c} />
           </div>
         )}
         {(p.property_sold_minor > 0 || p.property_free > 0) && (
@@ -191,6 +200,104 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// WagePayments lists a person's wage payments under a fold, each with its
+// gross and withheld tax and where they come from; an editor writes them from
+// the payslip, or fixes the program's reckoning as it is (decision Р-41).
+function WagePayments({ payments, currency }: { payments: TaxYearWagePayment[]; currency: string }) {
+  const { t } = useTranslation();
+  const { data: session } = useSession();
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const entry = useWageEntry();
+  const canEdit = session?.role === "owner" || session?.role === "editor";
+  if (payments.length === 0) return null;
+  return (
+    <div className="grid gap-2" data-testid="tax-wage-payments">
+      <Button variant="link" className="h-auto justify-start p-0 text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {t("taxes.wagePayments", { count: payments.length })}
+      </Button>
+      {open && (
+        <ul className="grid gap-2 text-xs">
+          <li className="text-muted-foreground">{t("taxes.wageHint")}</li>
+          {payments.map((w) => (
+            <li key={w.operation_id} className="grid gap-1" data-testid="tax-wage-payment">
+              <div className="flex flex-wrap items-center gap-x-2">
+                <span>
+                  {t("taxes.wagePayment", {
+                    date: formatDate(w.on),
+                    employer: w.employer || t("taxes.noEmployer"),
+                    net: formatMinor(w.net_minor, currency),
+                    gross: formatMinor(w.gross_minor, currency),
+                    withheld: formatMinor(w.withheld_minor, currency),
+                  })}
+                </span>
+                <span className="text-muted-foreground">· {w.entered ? t("taxes.wageEntered") : t("taxes.wageReckoned")}</span>
+                {canEdit && editing !== w.operation_id && (
+                  <>
+                    <Button variant="link" className="h-auto p-0 text-xs" onClick={() => setEditing(w.operation_id)}>
+                      {t("taxes.wageEnter")}
+                    </Button>
+                    {w.entered ? (
+                      <Button variant="link" className="h-auto p-0 text-xs" disabled={entry.isPending}
+                        onClick={() => entry.mutate({ operationId: w.operation_id, entry: null })}>
+                        {t("taxes.wageUnenter")}
+                      </Button>
+                    ) : (
+                      <Button variant="link" className="h-auto p-0 text-xs" disabled={entry.isPending}
+                        onClick={() => entry.mutate({ operationId: w.operation_id, entry: { gross_minor: w.gross_minor, withheld_minor: w.withheld_minor } })}>
+                        {t("taxes.wageAccept")}
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
+              {editing === w.operation_id && <WageForm payment={w} onDone={() => setEditing(null)} />}
+            </li>
+          ))}
+          {entry.isError && <li className="text-destructive">{t("taxes.wageFailed")}</li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function WageForm({ payment, onDone }: { payment: TaxYearWagePayment; onDone: () => void }) {
+  const { t } = useTranslation();
+  const [gross, setGross] = useState(minorToInput(payment.gross_minor));
+  const [withheld, setWithheld] = useState(minorToInput(payment.withheld_minor));
+  const entry = useWageEntry();
+  const g = parseToMinor(gross);
+  const w = parseToMinor(withheld);
+  const ok = g !== null && w !== null && g > 0 && w >= 0 && w <= g;
+  const id = payment.operation_id;
+  return (
+    <form
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (ok) entry.mutate({ operationId: id, entry: { gross_minor: g, withheld_minor: w } }, { onSuccess: onDone });
+      }}
+    >
+      <div className="grid gap-1">
+        <Label htmlFor={`wage-gross-${id}`}>{t("taxes.wageGross")}</Label>
+        <Input id={`wage-gross-${id}`} inputMode="decimal" className="w-36" value={gross} onChange={(e) => setGross(e.target.value)} />
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor={`wage-withheld-${id}`}>{t("taxes.wageWithheld")}</Label>
+        <Input id={`wage-withheld-${id}`} inputMode="decimal" className="w-36" value={withheld} onChange={(e) => setWithheld(e.target.value)} />
+      </div>
+      <Button type="submit" size="sm" disabled={!ok || entry.isPending}>
+        {t("common.save")}
+      </Button>
+      <Button type="button" size="sm" variant="outline" onClick={onDone}>
+        {t("common.cancel")}
+      </Button>
+      {!ok && <p className="basis-full text-destructive">{t("taxes.wageBad")}</p>}
+      {entry.isError && <p className="basis-full text-destructive">{t("taxes.wageFailed")}</p>}
+    </form>
   );
 }
 

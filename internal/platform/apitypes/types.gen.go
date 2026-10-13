@@ -3222,6 +3222,9 @@ type ExportCategory struct {
 	Name     string                                `json:"name"`
 	ParentId nullable.Nullable[openapi_types.UUID] `json:"parent_id"`
 	Position int                                   `json:"position"`
+
+	// TaxMark wages or interest: what the earning category means for tax
+	TaxMark nullable.Nullable[string] `json:"tax_mark"`
 }
 
 // ExportInstrument defines model for ExportInstrument.
@@ -3372,6 +3375,13 @@ type ExportValuablesItem struct {
 
 	// Weight Decimal, grams
 	Weight string `json:"weight"`
+}
+
+// ExportWageEntry defines model for ExportWageEntry.
+type ExportWageEntry struct {
+	GrossMinor    int64              `json:"gross_minor"`
+	OperationId   openapi_types.UUID `json:"operation_id"`
+	WithheldMinor int64              `json:"withheld_minor"`
 }
 
 // ExportWithheldStated defines model for ExportWithheldStated.
@@ -4693,6 +4703,9 @@ type SpaceExport struct {
 
 	// Version 1. Raised when a field changes meaning or goes away; new fields may appear without it.
 	Version int `json:"version"`
+
+	// WageEntries Wage payments' gross and withheld tax written from their payslips; operation_id names the row
+	WageEntries []ExportWageEntry `json:"wage_entries"`
 }
 
 // SpaceExportFormat defines model for SpaceExport.Format.
@@ -4891,7 +4904,7 @@ type TaxYearAccount struct {
 
 // TaxYearEmployer defines model for TaxYearEmployer.
 type TaxYearEmployer struct {
-	// GrossMinor Before tax, as the program reckons it
+	// GrossMinor Before tax: the payslips' where written, else as the program reckons it
 	GrossMinor int64 `json:"gross_minor"`
 
 	// Name The earning rows' counterparty; empty when they name none
@@ -4953,7 +4966,10 @@ type TaxYearPerson struct {
 	Unvalued int                `json:"unvalued"`
 	UserId   openapi_types.UUID `json:"user_id"`
 
-	// WagesMinor Wages before tax: earnings under categories marked wages, each employer's reckoned from what reached the account by the wages' scale over the year
+	// WagePayments The wage payments one by one, in the order they came
+	WagePayments []TaxYearWagePayment `json:"wage_payments"`
+
+	// WagesMinor Wages before tax: earnings under categories marked wages, a payment's as its payslip says where written, else reckoned from what reached the account by the wages' scale over the employer's year
 	WagesMinor int64 `json:"wages_minor"`
 
 	// WagesNetMinor Wages as they reached the accounts
@@ -4970,6 +4986,34 @@ type TaxYearPerson struct {
 
 	// WithheldMinor The tax the journals of those brokers' accounts show already taken this year
 	WithheldMinor int64 `json:"withheld_minor"`
+}
+
+// TaxYearWageEntry defines model for TaxYearWageEntry.
+type TaxYearWageEntry struct {
+	GrossMinor int64 `json:"gross_minor"`
+
+	// WithheldMinor At most gross_minor
+	WithheldMinor int64 `json:"withheld_minor"`
+}
+
+// TaxYearWagePayment defines model for TaxYearWagePayment.
+type TaxYearWagePayment struct {
+	// Employer The row's counterparty; empty when it names none
+	Employer string `json:"employer"`
+
+	// Entered True when the gross and the tax withheld were written from the payslip; false when the program reckoned them from net_minor by the scale over the employer's year
+	Entered bool `json:"entered"`
+
+	// GrossMinor Before tax
+	GrossMinor int64 `json:"gross_minor"`
+
+	// NetMinor What reached the account
+	NetMinor int64 `json:"net_minor"`
+
+	// On Date YYYY-MM-DD
+	On            string             `json:"on"`
+	OperationId   openapi_types.UUID `json:"operation_id"`
+	WithheldMinor int64              `json:"withheld_minor"`
 }
 
 // TinvestAccountPick defines model for TinvestAccountPick.
@@ -6107,6 +6151,9 @@ type PerformSetupJSONRequestBody = SetupRequest
 
 // UpdateSpaceJSONRequestBody defines body for UpdateSpace for application/json ContentType.
 type UpdateSpaceJSONRequestBody = UpdateSpaceRequest
+
+// EnterTaxYearWageJSONRequestBody defines body for EnterTaxYearWage for application/json ContentType.
+type EnterTaxYearWageJSONRequestBody = TaxYearWageEntry
 
 // CreateTinvestConnectionJSONRequestBody defines body for CreateTinvestConnection for application/json ContentType.
 type CreateTinvestConnectionJSONRequestBody = CreateTinvestConnectionRequest
