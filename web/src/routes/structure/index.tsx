@@ -18,6 +18,62 @@ import { countryName } from "@/lib/country";
 import { cn } from "@/lib/utils";
 import { TargetsCard } from "./targets";
 
+// The words for each sector (decision Р-46) and each place papers are held;
+// switches with literal keys for scripts/check-i18n.mjs.
+function sectorName(t: (key: string) => string, key: string): string {
+  switch (key) {
+    case "financials":
+      return t("structure.sectors.financials");
+    case "energy":
+      return t("structure.sectors.energy");
+    case "it":
+      return t("structure.sectors.it");
+    case "consumer":
+      return t("structure.sectors.consumer");
+    case "telecom":
+      return t("structure.sectors.telecom");
+    case "utilities":
+      return t("structure.sectors.utilities");
+    case "materials":
+      return t("structure.sectors.materials");
+    case "industrials":
+      return t("structure.sectors.industrials");
+    case "health_care":
+      return t("structure.sectors.healthCare");
+    case "real_estate":
+      return t("structure.sectors.realEstate");
+    case "government":
+      return t("structure.sectors.government");
+    case "municipal":
+      return t("structure.sectors.municipal");
+    case "funds_equity":
+      return t("structure.sectors.fundsEquity");
+    case "funds_bonds":
+      return t("structure.sectors.fundsBonds");
+    case "funds_money":
+      return t("structure.sectors.fundsMoney");
+    case "funds_gold":
+      return t("structure.sectors.fundsGold");
+    case "funds_mixed":
+      return t("structure.sectors.fundsMixed");
+    default:
+      return t("structure.sectors.unknown");
+  }
+}
+
+function holdingName(t: (key: string) => string, key: string): string {
+  switch (key) {
+    case "domestic":
+      return t("structure.holdings.domestic");
+    case "foreign_paper":
+      return t("structure.holdings.foreignPaper");
+    case "foreign_broker":
+      return t("structure.holdings.foreignBroker");
+    default:
+      return key;
+  }
+}
+
 // The words for each kind of asset; a switch with literal keys for
 // scripts/check-i18n.mjs.
 function className(t: (key: string) => string, key: string): string {
@@ -118,12 +174,31 @@ export function StructurePage() {
             <Breakdown title={t("structure.byAccount")} slices={data.by_account} total={data.assets_minor} currency={data.base_currency} name={accountName} testId="structure-account" />
             <Breakdown
               title={t("structure.byCountry")}
-              slices={data.by_country}
-              total={data.assets_minor}
+              slices={data.by_country.filter((s) => s.key !== "")}
+              total={data.papers_minor}
               currency={data.base_currency}
-              name={(k) => (k === "" ? t("structure.notPapers") : k === "-" ? t("structure.noIsin") : countryName(k))}
+              name={(k) => (k === "-" ? t("structure.noIsin") : countryName(k))}
+              extra={(s) => (s.by_isin_minor ? t("structure.byIsin", { amount: formatMinorCompact(s.by_isin_minor, data.base_currency) }) : null)}
               testId="structure-country"
               note={t("structure.countryNote")}
+            />
+            <Breakdown
+              title={t("structure.bySector")}
+              slices={data.by_sector.filter((s) => s.key !== "")}
+              total={data.papers_minor}
+              currency={data.base_currency}
+              name={(k) => sectorName(t, k)}
+              testId="structure-sector"
+              note={t("structure.sectorNote")}
+            />
+            <Breakdown
+              title={t("structure.byHolding")}
+              slices={data.by_holding.filter((s) => s.key !== "")}
+              total={data.at_brokers_minor}
+              currency={data.base_currency}
+              name={(k) => holdingName(t, k)}
+              testId="structure-holding"
+              note={t("structure.holdingNote")}
             />
           </div>
         </>
@@ -140,6 +215,7 @@ function Breakdown({
   name,
   testId,
   note,
+  extra,
 }: {
   title: string;
   slices: StructureSlice[];
@@ -148,7 +224,9 @@ function Breakdown({
   name: (key: string) => string;
   testId: string;
   note?: string;
+  extra?: (slice: StructureSlice) => string | null;
 }) {
+  if (slices.length === 0) return null;
   const share = (minor: number) => (total > 0 ? (minor / total) * 100 : 0);
   return (
     <Card data-testid={testId}>
@@ -170,6 +248,7 @@ function Breakdown({
             <div className="h-2 overflow-hidden rounded bg-muted">
               <div className="h-full rounded bg-bar" style={{ width: `${share(s.minor)}%` }} />
             </div>
+            {extra?.(s) && <p className="text-xs text-muted-foreground">{extra(s)}</p>}
           </div>
         ))}
         {note && <p className="text-xs text-muted-foreground">{note}</p>}

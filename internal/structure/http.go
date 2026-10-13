@@ -41,7 +41,11 @@ func (h *Handler) handleStructure(w http.ResponseWriter, r *http.Request) {
 	slicesAPI := func(in []Slice) []apitypes.StructureSlice {
 		out := make([]apitypes.StructureSlice, 0, len(in))
 		for _, x := range in {
-			out = append(out, apitypes.StructureSlice{Key: x.Key, Minor: x.Minor})
+			slice := apitypes.StructureSlice{Key: x.Key, Minor: x.Minor}
+			if x.ByISIN != 0 {
+				slice.ByIsinMinor = &x.ByISIN
+			}
+			out = append(out, slice)
 		}
 		return out
 	}
@@ -50,6 +54,8 @@ func (h *Handler) handleStructure(w http.ResponseWriter, r *http.Request) {
 		AssetsMinor: s.Assets, DebtsMinor: s.Debts,
 		ByClass: slicesAPI(s.ByClass), ByCurrency: slicesAPI(s.ByCurrency),
 		ByAccount: slicesAPI(s.ByAccount), ByCountry: slicesAPI(s.ByCountry),
+		BySector: slicesAPI(s.BySector), ByHolding: slicesAPI(s.ByHolding),
+		PapersMinor: s.Papers, AtBrokersMinor: s.AtBrokers,
 		Unpriced: s.Unpriced, MissingRates: s.MissingRates,
 	})
 }
