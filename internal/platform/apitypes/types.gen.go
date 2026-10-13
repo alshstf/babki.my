@@ -2309,6 +2309,25 @@ type AllocationSale struct {
 	Known bool `json:"known"`
 }
 
+// AllocationSavePlan defines model for AllocationSavePlan.
+type AllocationSavePlan struct {
+	Name       string                    `json:"name"`
+	Operations []AllocationPlanOperation `json:"operations"`
+}
+
+// AllocationSavedPlan defines model for AllocationSavedPlan.
+type AllocationSavedPlan struct {
+	Id         openapi_types.UUID        `json:"id"`
+	Name       string                    `json:"name"`
+	Operations []AllocationPlanOperation `json:"operations"`
+	SavedAt    time.Time                 `json:"saved_at"`
+}
+
+// AllocationSavedPlans defines model for AllocationSavedPlans.
+type AllocationSavedPlans struct {
+	Plans []AllocationSavedPlan `json:"plans"`
+}
+
 // AllocationTarget defines model for AllocationTarget.
 type AllocationTarget struct {
 	Key string `json:"key"`
@@ -6570,6 +6589,9 @@ type SetValuablesStorageJSONRequestBody = ValuablesStorage
 
 // SetAllocationModeJSONRequestBody defines body for SetAllocationMode for application/json ContentType.
 type SetAllocationModeJSONRequestBody SetAllocationModeJSONBody
+
+// SaveAllocationPlanJSONRequestBody defines body for SaveAllocationPlan for application/json ContentType.
+type SaveAllocationPlanJSONRequestBody = AllocationSavePlan
 
 // SetAllocationTargetsJSONRequestBody defines body for SetAllocationTargets for application/json ContentType.
 type SetAllocationTargetsJSONRequestBody = AllocationTargets

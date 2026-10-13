@@ -32,6 +32,7 @@ var owners = map[string]string{
 	"budget_limits":               "internal/budget",
 	"allocation_targets":          "internal/allocation",
 	"allocation_settings":         "internal/allocation",
+	"allocation_plans":            "internal/allocation",
 	"valuables_storages":          "internal/valuables",
 	"valuables_items":             "internal/valuables",
 	"valuables_bank_prices":       "internal/valuables",

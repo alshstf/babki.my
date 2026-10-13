@@ -52,18 +52,22 @@ export function useTopUp(money: TopUpMoney | null, valuation: "liquid" | "full")
 // What to sell and buy to the targets (GET /api/v1/allocation/rebalance,
 // variant В of Р-37), with new money or none; null asks nothing.
 export function useRebalance(fresh: number | null, valuation: "liquid" | "full") {
-  return useQuery({
+  return useQuery({ ...rebalanceQuery(fresh ?? 0, valuation), enabled: fresh !== null, placeholderData: keepPreviousData });
+}
+
+// rebalanceQuery is the rebalance with fresh new money, for useRebalance
+// and for a one-off fetch (the what-if plan filled from it).
+export function rebalanceQuery(fresh: number, valuation: "liquid" | "full") {
+  return {
     queryKey: ["allocation", valuation, "rebalance", fresh],
-    enabled: fresh !== null,
-    placeholderData: keepPreviousData,
     queryFn: async (): Promise<AllocationRebalance> => {
       const { data, error, response } = await api.GET("/api/v1/allocation/rebalance", {
-        params: { query: { amount_minor: fresh ?? 0, valuation } },
+        params: { query: { amount_minor: fresh, valuation } },
       });
       if (!data) throw apiError(response, error);
       return data;
     },
-  });
+  };
 }
 
 // States the targets of a dimension anew; none clears them.
@@ -108,5 +112,46 @@ export function useWhatIf(valuation: "liquid" | "full") {
       if (!data) throw apiError(response, error);
       return data;
     },
+  });
+}
+
+export type AllocationSavedPlan = components["schemas"]["AllocationSavedPlan"];
+
+// The what-if plans the family kept (decision Р-48, step 3).
+export function useSavedPlans() {
+  return useQuery({
+    queryKey: ["allocation-plans"],
+    queryFn: async (): Promise<AllocationSavedPlan[]> => {
+      const { data, error, response } = await api.GET("/api/v1/allocation/plans");
+      if (!data) throw apiError(response, error);
+      return data.plans;
+    },
+  });
+}
+
+// Keeps a plan under a name, replacing one of the same name; the answer is
+// the whole list, put straight into the cache.
+export function useSavePlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { name: string; operations: AllocationPlanOperation[] }): Promise<AllocationSavedPlan[]> => {
+      const { data, error, response } = await api.POST("/api/v1/allocation/plans", { body });
+      if (!data) throw apiError(response, error);
+      return data.plans;
+    },
+    onSuccess: (plans) => queryClient.setQueryData(["allocation-plans"], plans),
+  });
+}
+
+// Forgets a saved plan.
+export function useDeletePlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string): Promise<AllocationSavedPlan[]> => {
+      const { data, error, response } = await api.DELETE("/api/v1/allocation/plans/{planId}", { params: { path: { planId: id } } });
+      if (!data) throw apiError(response, error);
+      return data.plans;
+    },
+    onSuccess: (plans) => queryClient.setQueryData(["allocation-plans"], plans),
   });
 }

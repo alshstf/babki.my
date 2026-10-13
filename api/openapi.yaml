@@ -274,6 +274,40 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/allocation/plans:
+    get:
+      tags: [allocation]
+      operationId: listAllocationPlans
+      description: The what-if plans the family saved (decision Р-48, step 3), the latest saved first; each is valued again, at today's prices, by POST /allocation/what-if.
+      responses:
+        "200": { description: The saved plans, content: { application/json: { schema: { $ref: "#/components/schemas/AllocationSavedPlans" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [allocation]
+      operationId: saveAllocationPlan
+      description: >-
+        Keeps a plan under a name; one saved under the same name before is replaced, its day too. The
+        operations are checked for their form only — accounts and papers are looked up when the plan is
+        valued. 400 for a name empty or over 100 characters, no operations or more than 50, an operation
+        the what-if would not take.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AllocationSavePlan" } } } }
+      responses:
+        "200": { description: The saved plans, content: { application/json: { schema: { $ref: "#/components/schemas/AllocationSavedPlans" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/allocation/plans/{planId}:
+    delete:
+      tags: [allocation]
+      operationId: deleteAllocationPlan
+      parameters:
+        - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: Forgets a saved plan.
+      responses:
+        "200": { description: The saved plans, content: { application/json: { schema: { $ref: "#/components/schemas/AllocationSavedPlans" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/allocation/rebalance:
     get:
       tags: [allocation]
@@ -3996,6 +4030,25 @@ components:
         instrument_id: { type: string, format: uuid, nullable: true, description: "The paper bought or sold" }
         currency: { type: string, description: "The sum's currency" }
         amount_minor: { type: integer, format: int64, minimum: 1, description: "The sum bought, sold, put in, taken out or moved" }
+    AllocationSavePlan:
+      type: object
+      required: [name, operations]
+      properties:
+        name: { type: string, maxLength: 100 }
+        operations: { type: array, minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/AllocationPlanOperation" } }
+    AllocationSavedPlans:
+      type: object
+      required: [plans]
+      properties:
+        plans: { type: array, items: { $ref: "#/components/schemas/AllocationSavedPlan" } }
+    AllocationSavedPlan:
+      type: object
+      required: [id, name, saved_at, operations]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        saved_at: { type: string, format: date-time }
+        operations: { type: array, items: { $ref: "#/components/schemas/AllocationPlanOperation" } }
     AllocationWhatIf:
       type: object
       required: [base_currency, cuts, uninsured, sales, tax_minor, tax_rate, missing_rates]

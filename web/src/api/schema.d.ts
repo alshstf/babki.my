@@ -211,6 +211,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/allocation/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The what-if plans the family saved (decision Р-48, step 3), the latest saved first; each is valued again, at today's prices, by POST /allocation/what-if. */
+        get: operations["listAllocationPlans"];
+        put?: never;
+        /** @description Keeps a plan under a name; one saved under the same name before is replaced, its day too. The operations are checked for their form only — accounts and papers are looked up when the plan is valued. 400 for a name empty or over 100 characters, no operations or more than 50, an operation the what-if would not take. */
+        post: operations["saveAllocationPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/allocation/plans/{planId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Forgets a saved plan. */
+        delete: operations["deleteAllocationPlan"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/rebalance": {
         parameters: {
             query?: never;
@@ -3128,6 +3163,21 @@ export interface components {
              * @description The sum bought, sold, put in, taken out or moved
              */
             amount_minor: number;
+        };
+        AllocationSavePlan: {
+            name: string;
+            operations: components["schemas"]["AllocationPlanOperation"][];
+        };
+        AllocationSavedPlans: {
+            plans: components["schemas"]["AllocationSavedPlan"][];
+        };
+        AllocationSavedPlan: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            saved_at: string;
+            operations: components["schemas"]["AllocationPlanOperation"][];
         };
         AllocationWhatIf: {
             base_currency: string;
@@ -6304,6 +6354,79 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listAllocationPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved plans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationSavedPlans"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    saveAllocationPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AllocationSavePlan"];
+            };
+        };
+        responses: {
+            /** @description The saved plans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationSavedPlans"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    deleteAllocationPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved plans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationSavedPlans"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

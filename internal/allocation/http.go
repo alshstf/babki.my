@@ -36,6 +36,12 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleRebalance)))))
 	srv.Mount("POST /api/v1/allocation/what-if", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleWhatIf)))))
+	srv.Mount("GET /api/v1/allocation/plans", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handlePlans)))))
+	srv.Mount("POST /api/v1/allocation/plans", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleSavePlan)))))
+	srv.Mount("DELETE /api/v1/allocation/plans/{planId}", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleDeletePlan)))))
 	srv.Mount("PUT /api/v1/allocation/targets", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleTargets)))))
 	srv.Mount("PUT /api/v1/allocation/mode", h.sm.LoadAndSave(h.auth.RequireAuth(
@@ -117,14 +123,10 @@ func (h *Handler) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, out)
 }
 
-func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {
-	p, _ := family.PrincipalFromContext(r.Context())
-	var req apitypes.AllocationPlan
-	if httpjson.Decode(w, r, &req) != nil {
-		return
-	}
-	plan := make([]Op, 0, len(req.Operations))
-	for _, o := range req.Operations {
+// opsOf reads a plan's operations as the API writes them.
+func opsOf(list []apitypes.AllocationPlanOperation) []Op {
+	plan := make([]Op, 0, len(list))
+	for _, o := range list {
 		op := Op{Kind: OpKind(o.Kind), Account: o.AccountId, Currency: o.Currency, Minor: o.AmountMinor}
 		if o.ToAccountId.IsSpecified() && !o.ToAccountId.IsNull() {
 			to := o.ToAccountId.MustGet()
@@ -136,6 +138,75 @@ func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {
 		}
 		plan = append(plan, op)
 	}
+	return plan
+}
+
+func (h *Handler) handlePlans(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	h.writePlans(w, r, p.SpaceID)
+}
+
+func (h *Handler) handleSavePlan(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.AllocationSavePlan
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	if err := h.svc.SavePlan(r.Context(), p.SpaceID, req.Name, opsOf(req.Operations)); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	h.writePlans(w, r, p.SpaceID)
+}
+
+func (h *Handler) handleDeletePlan(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("planId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "planId must be a uuid")
+		return
+	}
+	if err := h.svc.DeletePlan(r.Context(), p.SpaceID, id); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	h.writePlans(w, r, p.SpaceID)
+}
+
+func (h *Handler) writePlans(w http.ResponseWriter, r *http.Request, spaceID uuid.UUID) {
+	plans, err := h.svc.Plans(r.Context(), spaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.AllocationSavedPlans{Plans: make([]apitypes.AllocationSavedPlan, 0, len(plans))}
+	for _, p := range plans {
+		sp := apitypes.AllocationSavedPlan{Id: p.ID, Name: p.Name, SavedAt: p.SavedAt, Operations: make([]apitypes.AllocationPlanOperation, 0, len(p.Ops))}
+		for _, op := range p.Ops {
+			o := apitypes.AllocationPlanOperation{
+				Kind: apitypes.AllocationPlanOperationKind(op.Kind), AccountId: op.Account, Currency: op.Currency, AmountMinor: op.Minor,
+				ToAccountId: nullable.NewNullNullable[uuid.UUID](), InstrumentId: nullable.NewNullNullable[uuid.UUID](),
+			}
+			if op.To != nil {
+				o.ToAccountId = nullable.NewNullableWithValue(*op.To)
+			}
+			if op.Instrument != nil {
+				o.InstrumentId = nullable.NewNullableWithValue(*op.Instrument)
+			}
+			sp.Operations = append(sp.Operations, o)
+		}
+		out.Plans = append(out.Plans, sp)
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.AllocationPlan
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	plan := opsOf(req.Operations)
 	wi, err := h.svc.WhatIf(r.Context(), p.SpaceID, valuationOf(r), plan)
 	if err != nil {
 		family.WriteError(w, err)
