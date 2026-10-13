@@ -83,6 +83,23 @@ const (
 	UnknownCountry = "-"
 )
 
+// A paper's sector key is its instrument.Sector; NotPapers for what is not a
+// paper, UnknownSector for a paper of no known sector.
+const (
+	NotPapers     = ""
+	UnknownSector = "-"
+)
+
+// Where a paper is held (decision Р-46): a Russian paper at a Russian broker,
+// a foreign one there — whose blocking is the risk — or anything at a broker
+// abroad; NotAtBroker for what is not at a broker.
+const (
+	HeldDomestic      = "domestic"
+	HeldForeignPaper  = "foreign_paper"
+	HeldForeignBroker = "foreign_broker"
+	NotAtBroker       = ""
+)
+
 // Valuation picks the worth a paper is struck at (decision Р-11).
 type Valuation string
 
@@ -92,10 +109,12 @@ const (
 )
 
 // Slice is one part of the worth: its key in the breakdown and what it comes
-// to in the base currency.
+// to in the base currency. ByISIN, in the breakdown by country, is what of it
+// has its country only by the ISIN, the broker not knowing the paper.
 type Slice struct {
-	Key   string
-	Minor int64
+	Key    string
+	Minor  int64
+	ByISIN int64
 }
 
 // Structure is the family's worth taken apart. Each breakdown adds up to
@@ -108,7 +127,13 @@ type Structure struct {
 	ByClass      []Slice
 	ByCurrency   []Slice
 	ByAccount    []Slice
-	ByCountry    []Slice
+	// ByCountry is by the country of risk (decision Р-46), BySector by the
+	// sector, ByHolding by where a paper is held; Papers is what the papers
+	// come to, AtBrokers what the brokers hold.
+	ByCountry         []Slice
+	BySector          []Slice
+	ByHolding         []Slice
+	Papers, AtBrokers int64
 	// Unpriced counts the papers left out for want of a price; MissingRates
 	// the currencies left out for want of a rate.
 	Unpriced     int
@@ -150,6 +175,18 @@ type Service struct {
 	spaces    spaces
 	rates     marketdata.RateSource
 	valuables worths
+	classes   classes
+}
+
+type classes interface {
+	Classes(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Class, error)
+}
+
+// WithClasses lets the structure tell papers by their country of risk and
+// sector (decision Р-46); without, by the ISIN's country, of no sector.
+func (s *Service) WithClasses(c classes) *Service {
+	s.classes = c
+	return s
 }
 
 // WithValuables lets the structure take valuables accounts apart: their bars
@@ -173,6 +210,12 @@ type piece struct {
 	country    string
 	minor      int64
 	unsellable bool
+	// paper is the instrument a paper's piece is, nil for money; byISIN says
+	// its country is the ISIN's; sector and held as the keys above.
+	paper  *uuid.UUID
+	byISIN bool
+	sector string
+	held   string
 }
 
 // Of is the space's structure today, papers at valuation.
@@ -210,7 +253,46 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation
 			currency: a.Currency, account: a.ID, country: NoCountry, minor: a.Balance.AmountMinor,
 		})
 	}
+	if err := s.classify(ctx, pieces); err != nil {
+		return Structure{}, err
+	}
 	return out, s.lay(ctx, &out, pieces)
+}
+
+// classify gives each paper its country of risk and sector from its class;
+// a paper with no country known keeps its ISIN's, marked so.
+func (s *Service) classify(ctx context.Context, pieces []piece) error {
+	ids := []uuid.UUID{}
+	for _, p := range pieces {
+		if p.paper != nil {
+			ids = append(ids, *p.paper)
+		}
+	}
+	known := map[uuid.UUID]instrument.Class{}
+	if s.classes != nil && len(ids) > 0 {
+		var err error
+		if known, err = s.classes.Classes(ctx, ids); err != nil {
+			return err
+		}
+	}
+	for i := range pieces {
+		p := &pieces[i]
+		if p.paper == nil {
+			p.sector = NotPapers
+			continue
+		}
+		c := known[*p.paper]
+		if c.Country != "" {
+			p.country = c.Country
+		} else {
+			p.byISIN = p.country != UnknownCountry
+		}
+		p.sector = string(c.Sector)
+		if p.sector == "" {
+			p.sector = UnknownSector
+		}
+	}
+	return nil
 }
 
 // accountPieces is an account counted by its journal, taken apart; byJournal
@@ -247,9 +329,11 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 			continue
 		}
 		class := paperClass(instrument.Type(p.Instrument.Type))
+		paper := p.Instrument.Id
 		got = append(got, piece{
 			class: class, kind: paperKind(class), currency: currency, account: a.ID,
 			country: issuerCountry(p.Instrument.Isin), minor: value.MustGet(), unsellable: unsellable,
+			paper: &paper, held: heldAt(a, p.Instrument.Isin),
 		})
 	}
 	cashClass := ClassBrokerCash
@@ -261,6 +345,7 @@ func (s *Service) accountPieces(ctx context.Context, spaceID uuid.UUID, a accoun
 			got = append(got, piece{
 				class: cashClass, kind: moneyKind(a.Type, c.Currency, base, true),
 				currency: c.Currency, account: a.ID, country: NoCountry, minor: c.AmountMinor,
+				held: heldAt(a, ""),
 			})
 		}
 	}
@@ -368,6 +453,21 @@ func balanceClass(t account.Type) Class {
 	return ClassMoney
 }
 
+// heldAt is where a paper of this ISIN (money: none) on the account is held:
+// anything at a broker abroad is there; at a Russian broker, a paper issued
+// elsewhere is foreign; what is not at a broker is not.
+func heldAt(a account.WithBalance, isin string) string {
+	switch {
+	case a.Type != account.TypeBrokerage:
+		return NotAtBroker
+	case a.ForeignBroker:
+		return HeldForeignBroker
+	case isin != "" && issuerCountry(isin) != "RU":
+		return HeldForeignPaper
+	}
+	return HeldDomestic
+}
+
 // issuerCountry is the country an ISIN's first two letters name;
 // UnknownCountry without one. An ISIN's prefix is where the paper was issued, which for a
 // depositary receipt is the depositary's country, not the company's.
@@ -385,7 +485,10 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	memo := marketdata.NewRateMemo(s.rates)
 	today := time.Now().UTC()
 	missing := map[string]bool{}
-	sums := map[string]map[string]int64{"class": {}, "currency": {}, "account": {}, "country": {}, "kind": {}, "targetCurrency": {}, "unsellable": {}}
+	sums := map[string]map[string]int64{
+		"class": {}, "currency": {}, "account": {}, "country": {}, "kind": {}, "targetCurrency": {}, "unsellable": {},
+		"sector": {}, "holding": {}, "countryByISIN": {},
+	}
 	for _, p := range pieces {
 		inBase := p.minor
 		if p.currency != out.BaseCurrency {
@@ -425,6 +528,17 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 		sums["currency"][p.currency] += inBase
 		sums["account"][p.account.String()] += inBase
 		sums["country"][p.country] += inBase
+		if p.byISIN {
+			sums["countryByISIN"][p.country] += inBase
+		}
+		sums["sector"][p.sector] += inBase
+		sums["holding"][p.held] += inBase
+		if p.paper != nil {
+			out.Papers += inBase
+		}
+		if p.held != NotAtBroker {
+			out.AtBrokers += inBase
+		}
 	}
 	for c := range missing {
 		out.MissingRates = append(out.MissingRates, c)
@@ -432,6 +546,10 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	slices.Sort(out.MissingRates)
 	out.ByClass, out.ByCurrency = slicesOf(sums["class"]), slicesOf(sums["currency"])
 	out.ByAccount, out.ByCountry = slicesOf(sums["account"]), slicesOf(sums["country"])
+	for i := range out.ByCountry {
+		out.ByCountry[i].ByISIN = sums["countryByISIN"][out.ByCountry[i].Key]
+	}
+	out.BySector, out.ByHolding = slicesOf(sums["sector"]), slicesOf(sums["holding"])
 	out.ByKind, out.ByTargetCurrency = slicesOf(sums["kind"]), slicesOf(sums["targetCurrency"])
 	out.Unsellable = slicesOf(sums["unsellable"])
 	return nil

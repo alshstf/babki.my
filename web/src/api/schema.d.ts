@@ -2757,13 +2757,18 @@ export interface components {
             currency: string;
         };
         StructureSlice: {
-            /** @description The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN */
+            /** @description The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, the two-letter country of risk — empty for what is not a paper, «-» for a paper with no ISIN and no known country —, the sector (financials, energy, it, consumer, telecom, utilities, materials, industrials, health_care, real_estate, government, municipal, funds_equity, funds_bonds, funds_money, funds_gold, funds_mixed; empty for what is not a paper, «-» for an unknown sector), or where it is held (domestic, foreign_paper, foreign_broker; empty for what is not at a broker) */
             key: string;
             /**
              * Format: int64
              * @description In minor units of the base currency
              */
             minor: number;
+            /**
+             * Format: int64
+             * @description In by_country only: what of minor has its country by the ISIN, the broker not knowing the paper's country of risk
+             */
+            by_isin_minor?: number;
         };
         /**
          * @description topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
@@ -3325,7 +3330,21 @@ export interface components {
             by_class: components["schemas"]["StructureSlice"][];
             by_currency: components["schemas"]["StructureSlice"][];
             by_account: components["schemas"]["StructureSlice"][];
+            /** @description By the country of risk (decision Р-46): the broker's passport's, else the ISIN's */
             by_country: components["schemas"]["StructureSlice"][];
+            by_sector: components["schemas"]["StructureSlice"][];
+            /** @description Papers and money at brokers by where they are held */
+            by_holding: components["schemas"]["StructureSlice"][];
+            /**
+             * Format: int64
+             * @description What the papers come to: the base of the shares by country and sector
+             */
+            papers_minor: number;
+            /**
+             * Format: int64
+             * @description What the brokers hold: the base of the shares by holding
+             */
+            at_brokers_minor: number;
             /** @description Papers left out for want of a price */
             unpriced: number;
             /** @description Currencies left out for want of today's rate */

@@ -4743,20 +4743,32 @@ type StatedPurchase struct {
 
 // Structure defines model for Structure.
 type Structure struct {
-	AssetsMinor  int64            `json:"assets_minor"`
-	BaseCurrency string           `json:"base_currency"`
-	ByAccount    []StructureSlice `json:"by_account"`
+	AssetsMinor int64 `json:"assets_minor"`
+
+	// AtBrokersMinor What the brokers hold: the base of the shares by holding
+	AtBrokersMinor int64            `json:"at_brokers_minor"`
+	BaseCurrency   string           `json:"base_currency"`
+	ByAccount      []StructureSlice `json:"by_account"`
 
 	// ByClass Largest first
-	ByClass    []StructureSlice `json:"by_class"`
+	ByClass []StructureSlice `json:"by_class"`
+
+	// ByCountry By the country of risk (decision Р-46): the broker's passport's, else the ISIN's
 	ByCountry  []StructureSlice `json:"by_country"`
 	ByCurrency []StructureSlice `json:"by_currency"`
+
+	// ByHolding Papers and money at brokers by where they are held
+	ByHolding []StructureSlice `json:"by_holding"`
+	BySector  []StructureSlice `json:"by_sector"`
 
 	// DebtsMinor Negative or zero
 	DebtsMinor int64 `json:"debts_minor"`
 
 	// MissingRates Currencies left out for want of today's rate
 	MissingRates []string `json:"missing_rates"`
+
+	// PapersMinor What the papers come to: the base of the shares by country and sector
+	PapersMinor int64 `json:"papers_minor"`
 
 	// Unpriced Papers left out for want of a price
 	Unpriced  int                `json:"unpriced"`
@@ -4768,7 +4780,10 @@ type StructureValuation string
 
 // StructureSlice defines model for StructureSlice.
 type StructureSlice struct {
-	// Key The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, or the two-letter country — empty for what was not issued anywhere, «-» for a paper with no ISIN
+	// ByIsinMinor In by_country only: what of minor has its country by the ISIN, the broker not knowing the paper's country of risk
+	ByIsinMinor *int64 `json:"by_isin_minor,omitempty"`
+
+	// Key The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, the two-letter country of risk — empty for what is not a paper, «-» for a paper with no ISIN and no known country —, the sector (financials, energy, it, consumer, telecom, utilities, materials, industrials, health_care, real_estate, government, municipal, funds_equity, funds_bonds, funds_money, funds_gold, funds_mixed; empty for what is not a paper, «-» for an unknown sector), or where it is held (domestic, foreign_paper, foreign_broker; empty for what is not at a broker)
 	Key string `json:"key"`
 
 	// Minor In minor units of the base currency

@@ -11,6 +11,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/structure"
@@ -249,5 +250,74 @@ func TestBarsAreMetals(t *testing.T) {
 		if len(s.ByClass) != 1 || s.ByClass[0].Key != "metals" {
 			t.Errorf("%s: classes %+v", valuation, s.ByClass)
 		}
+	}
+}
+
+type fakeClasses map[uuid.UUID]instrument.Class
+
+func (f fakeClasses) Classes(context.Context, []uuid.UUID) (map[uuid.UUID]instrument.Class, error) {
+	return f, nil
+}
+
+// Papers by their country of risk, sector and where they are held (decision
+// Р-46): Сбербанк — Russia, financials; FinEx's American fund — the United
+// States, though Irish by ISIN; Apple, which the broker does not know — the
+// ISIN's United States, marked so, of no sector; a fund at a broker abroad.
+// The shares are of the papers and of what the brokers hold, not the worth.
+func TestPapersComeApartByCountrySectorAndHolding(t *testing.T) {
+	broker, abroad, card := uuid.New(), uuid.New(), uuid.New()
+	sber, fxus, aapl, kz := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	paper := func(id uuid.UUID, typ apitypes.InstrumentType, isin, currency string, minor int64) apitypes.Position {
+		p := position(typ, isin, currency, of(minor), of(minor))
+		p.Instrument.Id = id
+		return p
+	}
+	accounts := fakeAccounts{
+		{Account: account.Account{ID: broker, Type: account.TypeBrokerage, Currency: "RUB", Status: account.StatusActive}},
+		{Account: account.Account{ID: abroad, Type: account.TypeBrokerage, Currency: "USD", Status: account.StatusActive, ForeignBroker: true}},
+		{Account: account.Account{ID: card, Type: account.TypeChecking, Currency: "RUB", Status: account.StatusActive}, Balance: &account.BalancePoint{AmountMinor: 50_000_00}},
+	}
+	positions := fakePositions{
+		broker: {
+			Positions: []apitypes.Position{
+				paper(sber, apitypes.InstrumentTypeShare, "RU0009029540", "RUB", 300_000_00),
+				paper(fxus, apitypes.InstrumentTypeEtf, "IE00BD3QHZ91", "RUB", 100_000_00),
+			},
+			Cash: []apitypes.CashPosition{{Currency: "RUB", AmountMinor: 20_000_00}},
+		},
+		abroad: {Positions: []apitypes.Position{
+			paper(aapl, apitypes.InstrumentTypeShare, "US0378331005", "USD", 1_000_00),
+			paper(kz, apitypes.InstrumentTypeEtf, "KZ0000000001", "USD", 1_000_00),
+		}},
+	}
+	classes := fakeClasses{
+		sber: {Country: "RU", Sector: instrument.SectorFinancials},
+		fxus: {Country: "US", Sector: instrument.SectorFundsEquity},
+		kz:   {Country: "KZ", Sector: instrument.SectorFundsEquity},
+	}
+	s, err := structure.NewService(accounts, positions, fakeSpaces{}, fakeRates{}).WithClasses(classes).Of(t.Context(), uuid.New(), structure.Liquid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := func(list []structure.Slice) map[string]structure.Slice {
+		m := map[string]structure.Slice{}
+		for _, x := range list {
+			m[x.Key] = x
+		}
+		return m
+	}
+	countries, sectors, held := got(s.ByCountry), got(s.BySector), got(s.ByHolding)
+	if countries["RU"].Minor != 300_000_00 || countries["US"].Minor != 100_000_00+90_000_00 || countries["US"].ByISIN != 90_000_00 ||
+		countries["KZ"].Minor != 90_000_00 || countries[""].Minor != 50_000_00+20_000_00 {
+		t.Errorf("by country = %+v", s.ByCountry)
+	}
+	if sectors["financials"].Minor != 300_000_00 || sectors["funds_equity"].Minor != 190_000_00 || sectors["-"].Minor != 90_000_00 || sectors[""].Minor != 70_000_00 {
+		t.Errorf("by sector = %+v", s.BySector)
+	}
+	if held["domestic"].Minor != 320_000_00 || held["foreign_paper"].Minor != 100_000_00 || held["foreign_broker"].Minor != 180_000_00 || held[""].Minor != 50_000_00 {
+		t.Errorf("by holding = %+v", s.ByHolding)
+	}
+	if s.Papers != 580_000_00 || s.AtBrokers != 600_000_00 {
+		t.Errorf("papers %d, at brokers %d", s.Papers, s.AtBrokers)
 	}
 }

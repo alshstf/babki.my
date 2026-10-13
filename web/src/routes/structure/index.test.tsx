@@ -24,7 +24,10 @@ fetchMock.mockImplementation(async (input: Request) => {
       by_class: [{ key: "shares", minor: 390_000_00 }, { key: "money", minor: 100_000_00 }, { key: "bonds", minor: 100_000_00 }, { key: "broker_cash", minor: 20_000_00 }],
       by_currency: [{ key: "RUB", minor: 520_000_00 }, { key: "USD", minor: 90_000_00 }],
       by_account: [{ key: "a-1", minor: 510_000_00 }, { key: "a-2", minor: 100_000_00 }],
-      by_country: [{ key: "RU", minor: 400_000_00 }, { key: "", minor: 120_000_00 }, { key: "US", minor: 90_000_00 }],
+      by_country: [{ key: "RU", minor: 400_000_00 }, { key: "", minor: 120_000_00 }, { key: "US", minor: 90_000_00, by_isin_minor: 90_000_00 }],
+      by_sector: [{ key: "financials", minor: 300_000_00 }, { key: "", minor: 120_000_00 }, { key: "funds_bonds", minor: 100_000_00 }, { key: "-", minor: 90_000_00 }],
+      by_holding: [{ key: "domestic", minor: 420_000_00 }, { key: "", minor: 100_000_00 }, { key: "foreign_broker", minor: 90_000_00 }],
+      papers_minor: 490_000_00, at_brokers_minor: 510_000_00,
       unpriced: 1, missing_rates: [],
     });
   }
@@ -50,7 +53,17 @@ describe("StructurePage", () => {
     const classes = within(screen.getByTestId("structure-class")).getAllByTestId("structure-slice");
     expect(classes[0]).toHaveTextContent(/Акции и расписки.*390\s000.*64 %/);
     expect(within(screen.getByTestId("structure-account")).getByText("Карта")).toBeTruthy();
-    expect(within(screen.getByTestId("structure-country")).getByText(/Не бумаги/)).toBeTruthy();
+    // Countries, sectors and holdings are shares of the papers and of what
+    // the brokers hold; what is not a paper is not a row there.
+    const countries = within(screen.getByTestId("structure-country")).getAllByTestId("structure-slice");
+    expect(countries).toHaveLength(2);
+    expect(countries[0]).toHaveTextContent(/Россия.*400\s000.*82 %/);
+    expect(countries[1]).toHaveTextContent(/Соединенные Штаты.*90\s000.*18 %.*из них 90\s000 ₽ — страна по ISIN/);
+    const sectors = within(screen.getByTestId("structure-sector")).getAllByTestId("structure-slice");
+    expect(sectors.map((x) => x.textContent?.split(/\d/)[0])).toEqual(["Финансы", "Фонды облигаций", "Отрасль неизвестна"]);
+    const held = within(screen.getByTestId("structure-holding")).getAllByTestId("structure-slice");
+    expect(held[0]).toHaveTextContent(/Российские бумаги в России.*420\s000.*82 %/);
+    expect(held[1]).toHaveTextContent(/У иностранного брокера.*90\s000.*18 %/);
     expect(screen.getByText(/Бумаг без цены не учтено: 1/)).toBeTruthy();
 
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Оценка бумаг" }), { key: "Enter" });
