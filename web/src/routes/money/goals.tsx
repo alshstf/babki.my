@@ -268,7 +268,7 @@ function GoalDialog({ goal, currency, onClose }: { goal?: Goal; currency: string
           <div className="grid gap-2">
             <Label>{t("goals.funds")}</Label>
             {funds.map((f, i) => (
-              <div key={i} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_9rem_8rem_auto]" data-testid="goal-fund">
+              <div key={i} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_10.5rem_7rem_auto]" data-testid="goal-fund">
                 <Select value={f.account} onValueChange={(v) => setFund(i, { account: v })}>
                   <SelectTrigger className="w-full min-w-0" aria-label={t("goals.account")}>
                     <SelectValue placeholder={t("goals.pickAccount")} />
