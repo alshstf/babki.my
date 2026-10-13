@@ -57,14 +57,15 @@ const october = {
   operations: [{ kind: "buy", account_id: "a-broker", to_account_id: null, instrument_id: "i-qqqm", currency: "USD", amount_minor: 1000_00 }],
 };
 
-function show(role = "viewer", plans: unknown[] = []) {
+// brokerCurrency: the broker's account's; the family's base is the rouble.
+function show(role = "viewer", plans: unknown[] = [], brokerCurrency = "RUB") {
   fetchMock.mockImplementation((input: Request) => {
     const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     const url = new URL(input.url);
-    if (url.pathname.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space: { id: "s", name: "S", base_currency: "RUB" } });
+    if (url.pathname.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space_id: "s", space_name: "S", base_currency: "RUB" });
     if (url.pathname.endsWith("/allocation/plans")) return json({ plans });
     if (url.pathname.endsWith("/allocation/rebalance")) return json(rebalance);
-    if (url.pathname.endsWith("/accounts")) return json([account("a-card", "Карта", "checking"), account("a-broker", "Freedom", "brokerage")]);
+    if (url.pathname.endsWith("/accounts")) return json([account("a-card", "Карта", "checking"), { ...account("a-broker", "Freedom", "brokerage"), currency: brokerCurrency }]);
     if (url.pathname.endsWith("/instruments")) return json({ instruments: [qqqm], has_more: false });
     if (url.pathname.endsWith("/what-if")) return json(answer);
     if (url.pathname.endsWith("/members")) return json([{ id: "u-maria", username: "m", display_name: "Мария", role: "editor" }]);
@@ -113,7 +114,7 @@ describe("PlanCard", () => {
   });
 
   it("fills the plan from the suggestion, sales first, the sum kept in roubles", async () => {
-    show();
+    show("viewer", [], "USD");
     fireEvent.click(await screen.findByRole("button", { name: "Заполнить из подсказки" }));
     const pending = await screen.findByTestId("plan-pending");
     const lines = within(pending).getAllByRole("listitem").map((l) => norm(l.textContent));

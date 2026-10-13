@@ -74,6 +74,8 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
   const whatIf = useWhatIf(valuation);
   const { data: session } = useSession();
   const canEdit = session?.role === "owner" || session?.role === "editor";
+  // The suggestion's sums are in the family's base currency.
+  const baseCurrency = session?.base_currency ?? "RUB";
   const [ops, setOps] = useState<Planned[]>([]);
   const [draft, setDraft] = useState<{ planned: Planned; pending?: number } | null>(null);
   const [pending, setPending] = useState<Suggested[]>([]);
@@ -139,7 +141,7 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
           <ul className="grid gap-1 text-sm" data-testid="plan-pending">
             {pending.map((p, i) => (
               <li key={`${p.kind}-${p.key}`} className="flex flex-wrap items-baseline justify-between gap-2 text-muted-foreground">
-                <span>{pendingLine(t, p, base(whatIf.data, broker?.currency))}</span>
+                <span>{pendingLine(t, p, baseCurrency)}</span>
                 <span className="flex gap-3">
                   <Button
                     variant="link"
@@ -147,7 +149,7 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
                     onClick={() =>
                       setDraft({
                         pending: i,
-                        planned: { kind: p.kind, accountId: broker?.id ?? "", toAccountId: "", instrument: null, currency: base(whatIf.data, broker?.currency), amount: minorToInput(p.minor), suggested: true },
+                        planned: { kind: p.kind, accountId: broker?.id ?? "", toAccountId: "", instrument: null, currency: baseCurrency, amount: minorToInput(p.minor), suggested: true },
                       })
                     }
                   >
@@ -193,12 +195,6 @@ export function PlanCard({ valuation }: { valuation: "liquid" | "full" }) {
 function pendingLine(t: (key: string, v?: Record<string, unknown>) => string, p: Suggested, currency: string): string {
   const v = { kind: kindName(t, p.key, currency), amount: formatMinorCompact(p.minor, currency) };
   return p.kind === "buy" ? t("plan.pendingBuy", v) : t("plan.pendingSell", v);
-}
-
-// The base currency the suggestion's sums are in: the plan's, once valued,
-// else the broker's account's.
-function base(data: AllocationWhatIf | undefined, fallback: string | undefined): string {
-  return data?.base_currency ?? fallback ?? "RUB";
 }
 
 function toOperation(o: Planned): AllocationPlanOperation {
