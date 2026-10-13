@@ -129,6 +129,11 @@ describe("TargetsCard", () => {
     expect(norm(offer.textContent)).toBe("Взнос целей на брокерских счетах — 30 000 ₽ в месяцПодставить");
     fireEvent.click(within(offer).getByRole("button", { name: "Подставить" }));
     expect(norm((await screen.findByTestId("allocation-topup-total")).textContent)).toBe("К вложению: 30 000 ₽.");
+    cleanup();
+    answer("viewer", { ...allocation, mode: "rebalance" }, 30_000_00);
+    show();
+    fireEvent.click(within(await screen.findByTestId("allocation-topup-goals")).getByRole("button", { name: "Подставить" }));
+    expect((screen.getByLabelText("Новые деньги, RUB — если есть") as HTMLInputElement).value).toBe("30000");
   });
 
   it("shows on the kinds where a top-up goes, the brokers' free money moved in", async () => {

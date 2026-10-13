@@ -362,6 +362,22 @@ function Legend({ items }: { items: { swatch: "held" | "in" | "out" | "still" | 
 // (variant В of Р-37), with new money or none: the kinds above sell down,
 // the money buys the kinds below, deposits wait for their end, frozen papers
 // stay. What it moves shows on the kinds' bars, the sales' tax under them.
+// GoalsTopUp offers the savings goals' contributions on brokerage accounts
+// (Р-44) as the new money: a top-up the family has already planned.
+function GoalsTopUp({ currency, onUse }: { currency: string; onUse: (amount: string) => void }) {
+  const { t } = useTranslation();
+  const toBrokers = useGoals().data?.broker_monthly_minor ?? 0;
+  if (toBrokers <= 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground" data-testid="allocation-topup-goals">
+      {t("goals.topUpGoals", { amount: formatMinorCompact(toBrokers, currency) })}
+      <Button type="button" size="sm" variant="link" className="h-auto p-0 text-xs" onClick={() => onUse(minorToInput(toBrokers))}>
+        {t("goals.topUpGoalsUse")}
+      </Button>
+    </div>
+  );
+}
+
 function Rebalance({
   allocation,
   valuation,
@@ -422,6 +438,7 @@ function Rebalance({
           aria-invalid={!valid}
         />
       </div>
+      <GoalsTopUp currency={c} onUse={setFresh} />
       {counted && (
         <Legend
           items={[
@@ -489,9 +506,6 @@ function TopUp({
   const { t } = useTranslation();
   const c = allocation.base_currency;
   const free = allocation.kinds.find((r) => r.key === "broker_cash")?.minor ?? 0;
-  // The savings goals' contributions on brokerage accounts (Р-44): a top-up
-  // the family has already planned.
-  const toBrokers = useGoals().data?.broker_monthly_minor ?? 0;
   const [fresh, setFresh] = useState("");
   const [useFree, setUseFree] = useState(false);
   const [fromBrokers, setFromBrokers] = useState(minorToInput(free));
@@ -530,14 +544,7 @@ function TopUp({
           <Label htmlFor="allocation-topup">{t("allocation.topUpAmount", { currency: c })}</Label>
           <Input id="allocation-topup" inputMode="decimal" className="w-40" value={fresh} onChange={(e) => setFresh(e.target.value)} />
         </div>
-        {toBrokers > 0 && (
-          <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground" data-testid="allocation-topup-goals">
-            {t("goals.topUpGoals", { amount: formatMinorCompact(toBrokers, c) })}
-            <Button type="button" size="sm" variant="link" className="h-auto p-0 text-xs" onClick={() => setFresh(minorToInput(toBrokers))}>
-              {t("goals.topUpGoalsUse")}
-            </Button>
-          </div>
-        )}
+        <GoalsTopUp currency={c} onUse={setFresh} />
         {free > 0 && (
           <div className="grid gap-1">
             <Label htmlFor="allocation-use-free" className="flex items-center gap-2 font-normal">
