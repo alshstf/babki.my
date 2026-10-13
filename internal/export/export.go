@@ -331,6 +331,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	doc.Allocation.Mode = apitypes.AllocationMode(targets.Mode)
 	doc.Allocation.Kinds, doc.Allocation.Currencies = allocation.TargetsAPI(targets.Kinds), allocation.TargetsAPI(targets.Currencies)
 	doc.Allocation.Countries, doc.Allocation.Sectors = allocation.TargetsAPI(targets.Countries), allocation.TargetsAPI(targets.Sectors)
+	doc.Allocation.Brokers, doc.Allocation.Banks = allocation.TargetsAPI(targets.Brokers), allocation.TargetsAPI(targets.Banks)
 	return doc, nil
 }
 

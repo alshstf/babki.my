@@ -19,9 +19,13 @@ type Dimension string
 const (
 	ByKind     Dimension = "kind"
 	ByCurrency Dimension = "currency"
-	// ByCountry and BySector set ceilings, not shares adding up to 100.
+	// ByCountry and BySector set ceilings, not shares adding up to 100, on
+	// the papers; ByBroker and ByBank on what the brokers and banks hold
+	// (decision Р-47).
 	ByCountry Dimension = "country"
 	BySector  Dimension = "sector"
+	ByBroker  Dimension = "broker"
+	ByBank    Dimension = "bank"
 )
 
 // Mode is how the family brings its worth to the targets: by top-ups only
@@ -65,6 +69,10 @@ type View struct {
 	// what the papers come to.
 	Countries, Sectors []Row
 	Papers             int64
+	// Brokers and Banks are what each holds against its ceiling, AtBrokers
+	// and AtBanks their bases.
+	Brokers, Banks     []Row
+	AtBrokers, AtBanks int64
 	// Unsellable is, by kind, what cannot be sold now (structure.Unsellable).
 	Unsellable   map[string]int64
 	Unpriced     int
@@ -122,11 +130,15 @@ func rows(worth int64, slices []structure.Slice, targets []Target, order []strin
 	return out
 }
 
-// withCeilings lays the papers against the ceilings by country and sector.
-func withCeilings(v View, s structure.Structure, countries, sectors []Target) View {
-	v.Countries = rows(s.Papers, papersOnly(s.ByCountry), countries, nil)
-	v.Sectors = rows(s.Papers, papersOnly(s.BySector), sectors, nil)
+// withCeilings lays the papers against the ceilings by country and sector,
+// what the brokers and banks hold against theirs.
+func withCeilings(v View, s structure.Structure, set Settings) View {
+	v.Countries = rows(s.Papers, papersOnly(s.ByCountry), set.Countries, nil)
+	v.Sectors = rows(s.Papers, papersOnly(s.BySector), set.Sectors, nil)
 	v.Papers = s.Papers
+	v.Brokers = rows(s.AtBrokers, s.ByBroker, set.Brokers, nil)
+	v.Banks = rows(s.AtBanks, s.ByBank, set.Banks, nil)
+	v.AtBrokers, v.AtBanks = s.AtBrokers, s.AtBanks
 	return v
 }
 

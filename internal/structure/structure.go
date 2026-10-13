@@ -19,6 +19,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/intermediary"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/money"
@@ -129,11 +130,16 @@ type Structure struct {
 	ByAccount    []Slice
 	// ByCountry is by the country of risk (decision Р-46), BySector by the
 	// sector, ByHolding by where a paper is held; Papers is what the papers
-	// come to, AtBrokers what the brokers hold.
+	// come to, AtBrokers what the brokers hold. ByBroker and ByBank are what
+	// each broker and each bank holds (decision Р-47), by the catalog's id —
+	// UnknownHolder for one the catalog does not know; AtBanks what the banks
+	// hold: what is on cards, current and savings accounts and deposits.
 	ByCountry         []Slice
 	BySector          []Slice
 	ByHolding         []Slice
 	Papers, AtBrokers int64
+	ByBroker, ByBank  []Slice
+	AtBanks           int64
 	// Unpriced counts the papers left out for want of a price; MissingRates
 	// the currencies left out for want of a rate.
 	Unpriced     int
@@ -216,6 +222,10 @@ type piece struct {
 	byISIN bool
 	sector string
 	held   string
+	// holder is the catalog's id of the bank or broker holding the account,
+	// UnknownHolder when not known; holderKind which, empty for neither.
+	holder     string
+	holderKind intermediary.Kind
 	// change is a planned change's piece: negative is less of what is held,
 	// not a debt.
 	change bool
@@ -281,10 +291,37 @@ func (s *Service) OfWith(ctx context.Context, spaceID uuid.UUID, valuation Valua
 		}
 		pieces = append(pieces, p)
 	}
+	holders(list, pieces)
 	if err := s.classify(ctx, spaceID, pieces); err != nil {
 		return Structure{}, err
 	}
 	return out, s.lay(ctx, &out, pieces)
+}
+
+// UnknownHolder is a bank or broker the catalog does not know.
+const UnknownHolder = "-"
+
+// holders gives each piece the bank or broker holding its account: a broker
+// for a brokerage account, a bank for any other but cash and valuables.
+func holders(list []account.WithBalance, pieces []piece) {
+	byID := map[uuid.UUID]account.Account{}
+	for _, a := range list {
+		byID[a.ID] = a.Account
+	}
+	for i := range pieces {
+		a, ok := byID[pieces[i].account]
+		if !ok || a.Type == account.TypeCash || a.Type == account.TypeValuables {
+			continue
+		}
+		pieces[i].holderKind = intermediary.Bank
+		if a.Type == account.TypeBrokerage {
+			pieces[i].holderKind = intermediary.Broker
+		}
+		pieces[i].holder = UnknownHolder
+		if found, _, ok := account.IntermediaryOf(a); ok {
+			pieces[i].holder = found.ID
+		}
+	}
 }
 
 // classify gives each paper its country of risk and sector from its class;
@@ -544,7 +581,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	missing := map[string]bool{}
 	sums := map[string]map[string]int64{
 		"class": {}, "currency": {}, "account": {}, "country": {}, "kind": {}, "targetCurrency": {}, "unsellable": {},
-		"sector": {}, "holding": {}, "countryByISIN": {},
+		"sector": {}, "holding": {}, "countryByISIN": {}, "broker": {}, "bank": {},
 	}
 	for _, p := range pieces {
 		inBase := p.minor
@@ -596,6 +633,13 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 		if p.held != NotAtBroker {
 			out.AtBrokers += inBase
 		}
+		switch p.holderKind {
+		case intermediary.Broker:
+			sums["broker"][p.holder] += inBase
+		case intermediary.Bank:
+			sums["bank"][p.holder] += inBase
+			out.AtBanks += inBase
+		}
 	}
 	for c := range missing {
 		out.MissingRates = append(out.MissingRates, c)
@@ -607,6 +651,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 		out.ByCountry[i].ByISIN = sums["countryByISIN"][out.ByCountry[i].Key]
 	}
 	out.BySector, out.ByHolding = slicesOf(sums["sector"]), slicesOf(sums["holding"])
+	out.ByBroker, out.ByBank = slicesOf(sums["broker"]), slicesOf(sums["bank"])
 	out.ByKind, out.ByTargetCurrency = slicesOf(sums["kind"]), slicesOf(sums["targetCurrency"])
 	out.Unsellable = slicesOf(sums["unsellable"])
 	return nil

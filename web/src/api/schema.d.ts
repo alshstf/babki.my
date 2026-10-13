@@ -2459,6 +2459,10 @@ export interface components {
                 countries: components["schemas"]["AllocationTarget"][];
                 /** @description Ceilings by sector */
                 sectors: components["schemas"]["AllocationTarget"][];
+                /** @description Ceilings by broker */
+                brokers: components["schemas"]["AllocationTarget"][];
+                /** @description Ceilings by bank */
+                banks: components["schemas"]["AllocationTarget"][];
             };
             /** @description The cash receipts, by their time; operation_id names the row each completes */
             receipts: components["schemas"]["Receipt"][];
@@ -2937,6 +2941,14 @@ export interface components {
              * @description What the papers come to: the ceilings' base
              */
             papers_minor: number;
+            /** @description What each broker holds against its ceiling (decision Р-47); shares of at_brokers_minor */
+            brokers: components["schemas"]["AllocationRow"][];
+            /** @description What each bank holds against its ceiling; shares of at_banks_minor */
+            banks: components["schemas"]["AllocationRow"][];
+            /** Format: int64 */
+            at_brokers_minor: number;
+            /** Format: int64 */
+            at_banks_minor: number;
             /** @description Papers left out for want of a price */
             unpriced: number;
             missing_rates: string[];
@@ -2969,7 +2981,7 @@ export interface components {
         };
         AllocationWhatIf: {
             base_currency: string;
-            /** @description kind, currency, country, sector — in that order */
+            /** @description kind, currency, country, sector, broker, bank — in that order */
             cuts: components["schemas"]["AllocationCut"][];
             sales: components["schemas"]["AllocationPaperSale"][];
             /**
@@ -2983,7 +2995,7 @@ export interface components {
         };
         AllocationCut: {
             /** @enum {string} */
-            dimension: "kind" | "currency" | "country" | "sector";
+            dimension: "kind" | "currency" | "country" | "sector" | "broker" | "bank";
             rows: components["schemas"]["AllocationCutRow"][];
         };
         AllocationCutRow: {
@@ -3510,10 +3522,10 @@ export interface components {
         };
         AllocationTargets: {
             /**
-             * @description kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own
+             * @description kind and currency: shares adding up to 100; country (two letters), sector, broker and bank (catalog ids): ceilings, each on its own
              * @enum {string}
              */
-            dimension: "kind" | "currency" | "country" | "sector";
+            dimension: "kind" | "currency" | "country" | "sector" | "broker" | "bank";
             targets: components["schemas"]["AllocationTarget"][];
         };
         Structure: {
@@ -3543,9 +3555,18 @@ export interface components {
             papers_minor: number;
             /**
              * Format: int64
-             * @description What the brokers hold: the base of the shares by holding
+             * @description What the brokers hold: the base of the shares by holding and by broker
              */
             at_brokers_minor: number;
+            /** @description What each broker holds, by its id in GET /intermediaries; «-» for one the catalog does not know (decision Р-47) */
+            by_broker: components["schemas"]["StructureSlice"][];
+            /** @description What each bank holds — cards, current and savings accounts, deposits — by its id in GET /intermediaries; «-» for one not known */
+            by_bank: components["schemas"]["StructureSlice"][];
+            /**
+             * Format: int64
+             * @description What the banks hold: the base of the shares by bank
+             */
+            at_banks_minor: number;
             /** @description Papers left out for want of a price */
             unpriced: number;
             /** @description Currencies left out for want of today's rate */

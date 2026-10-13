@@ -54,6 +54,10 @@ func (fakeStructures) Of(_ context.Context, _ uuid.UUID, valuation structure.Val
 		Papers:           1_000_000_00,
 		ByCountry:        []structure.Slice{{Key: "RU", Minor: 750_000_00}, {Key: "US", Minor: 250_000_00}, {Key: "", Minor: 100_000_00}},
 		BySector:         []structure.Slice{{Key: "it", Minor: 350_000_00}, {Key: "government", Minor: 400_000_00}, {Key: "financials", Minor: 250_000_00}},
+		AtBrokers:        1_000_000_00,
+		ByBroker:         []structure.Slice{{Key: "tinvest", Minor: 700_000_00}, {Key: "freedom", Minor: 300_000_00}},
+		AtBanks:          2_000_000_00,
+		ByBank:           []structure.Slice{{Key: "tbank", Minor: 1_900_000_00}, {Key: "sber", Minor: 100_000_00}},
 	}
 	if valuation == structure.Full {
 		s.Targets += 500_000_00
@@ -243,6 +247,50 @@ func TestCeilingsOverHTTP(t *testing.T) {
 		`{"dimension":"country","targets":[{"key":"USA","percent":"20"}]}`,
 		`{"dimension":"sector","targets":[{"key":"banks","percent":"20"}]}`,
 		`{"dimension":"sector","targets":[{"key":"it","percent":"120"}]}`,
+	} {
+		if r := put(bad); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, r.StatusCode)
+		}
+	}
+}
+
+// Ceilings by broker and bank (decision Р-47): what each holds against its
+// ceiling, of what the brokers or the banks hold; a bank's id as a broker's,
+// or one not in the catalog, is refused.
+func TestBrokerAndBankCeilingsOverHTTP(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	allocation.NewHandler(allocation.NewService(pool, fakeStructures{}), auth, sm).Mount(srv)
+	url, c := apitest.Serve(t, srv.Handler())
+	put := func(body string) *http.Response {
+		return apitest.Do(t, c, "PUT", url+"/api/v1/allocation/targets", body)
+	}
+	for _, body := range []string{
+		`{"dimension":"broker","targets":[{"key":"tinvest","percent":"50"}]}`,
+		`{"dimension":"bank","targets":[{"key":"tbank","percent":"70"}]}`,
+	} {
+		if r := put(body); r.StatusCode >= 300 {
+			t.Fatalf("%s = %d", body, r.StatusCode)
+		}
+	}
+	var got apitypes.Allocation
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/allocation", ""), &got)
+	if got.AtBrokersMinor != 1_000_000_00 || got.AtBanksMinor != 2_000_000_00 || len(got.Brokers) != 2 || len(got.Banks) != 2 {
+		t.Fatalf("brokers %+v, banks %+v", got.Brokers, got.Banks)
+	}
+	if b := got.Brokers[0]; b.Key != "tinvest" || b.Share != "70.00" || b.OffMinor.MustGet() != 200_000_00 {
+		t.Errorf("tinvest = %+v", b)
+	}
+	if b := got.Banks[0]; b.Key != "tbank" || b.Share != "95.00" || b.OffMinor.MustGet() != 500_000_00 {
+		t.Errorf("tbank = %+v", b)
+	}
+	for _, bad := range []string{
+		`{"dimension":"broker","targets":[{"key":"tbank","percent":"50"}]}`,
+		`{"dimension":"bank","targets":[{"key":"nobank","percent":"50"}]}`,
 	} {
 		if r := put(bad); r.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s = %d, want 400", bad, r.StatusCode)

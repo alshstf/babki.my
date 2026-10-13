@@ -34,7 +34,7 @@ const allocation: Allocation = {
     row("broker_cash", 300_000_00, "10.00", "0.00", "10.00", 300_000_00),
   ],
   currencies: [row("RUB", 2_100_000_00, "70.00"), row("USD", 900_000_00, "30.00")],
-  countries: [], sectors: [], papers_minor: 0,
+  countries: [], sectors: [], papers_minor: 0, brokers: [], banks: [], at_brokers_minor: 0, at_banks_minor: 0,
   unpriced: 0, missing_rates: [],
 };
 

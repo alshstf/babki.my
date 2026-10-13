@@ -108,6 +108,8 @@ func (e AccountWithBalanceCountedBy) Valid() bool {
 
 // Defines values for AllocationCutDimension.
 const (
+	AllocationCutDimensionBank     AllocationCutDimension = "bank"
+	AllocationCutDimensionBroker   AllocationCutDimension = "broker"
 	AllocationCutDimensionCountry  AllocationCutDimension = "country"
 	AllocationCutDimensionCurrency AllocationCutDimension = "currency"
 	AllocationCutDimensionKind     AllocationCutDimension = "kind"
@@ -117,6 +119,10 @@ const (
 // Valid indicates whether the value is a known member of the AllocationCutDimension enum.
 func (e AllocationCutDimension) Valid() bool {
 	switch e {
+	case AllocationCutDimensionBank:
+		return true
+	case AllocationCutDimensionBroker:
+		return true
 	case AllocationCutDimensionCountry:
 		return true
 	case AllocationCutDimensionCurrency:
@@ -201,6 +207,8 @@ func (e AllocationPlanOperationKind) Valid() bool {
 
 // Defines values for AllocationTargetsDimension.
 const (
+	AllocationTargetsDimensionBank     AllocationTargetsDimension = "bank"
+	AllocationTargetsDimensionBroker   AllocationTargetsDimension = "broker"
 	AllocationTargetsDimensionCountry  AllocationTargetsDimension = "country"
 	AllocationTargetsDimensionCurrency AllocationTargetsDimension = "currency"
 	AllocationTargetsDimensionKind     AllocationTargetsDimension = "kind"
@@ -210,6 +218,10 @@ const (
 // Valid indicates whether the value is a known member of the AllocationTargetsDimension enum.
 func (e AllocationTargetsDimension) Valid() bool {
 	switch e {
+	case AllocationTargetsDimensionBank:
+		return true
+	case AllocationTargetsDimensionBroker:
+		return true
 	case AllocationTargetsDimensionCountry:
 		return true
 	case AllocationTargetsDimensionCurrency:
@@ -834,16 +846,16 @@ func (e InstrumentType) Valid() bool {
 
 // Defines values for IntermediaryKind.
 const (
-	Bank   IntermediaryKind = "bank"
-	Broker IntermediaryKind = "broker"
+	IntermediaryKindBank   IntermediaryKind = "bank"
+	IntermediaryKindBroker IntermediaryKind = "broker"
 )
 
 // Valid indicates whether the value is a known member of the IntermediaryKind enum.
 func (e IntermediaryKind) Valid() bool {
 	switch e {
-	case Bank:
+	case IntermediaryKindBank:
 		return true
-	case Broker:
+	case IntermediaryKindBroker:
 		return true
 	default:
 		return false
@@ -2065,7 +2077,15 @@ type AccountWithBalanceCountedBy string
 
 // Allocation defines model for Allocation.
 type Allocation struct {
-	BaseCurrency string `json:"base_currency"`
+	AtBanksMinor   int64 `json:"at_banks_minor"`
+	AtBrokersMinor int64 `json:"at_brokers_minor"`
+
+	// Banks What each bank holds against its ceiling; shares of at_banks_minor
+	Banks        []AllocationRow `json:"banks"`
+	BaseCurrency string          `json:"base_currency"`
+
+	// Brokers What each broker holds against its ceiling (decision Р-47); shares of at_brokers_minor
+	Brokers []AllocationRow `json:"brokers"`
 
 	// Countries The papers by country of risk against their ceilings (decision Р-46): target is the ceiling, off_minor positive what is above it; shares of papers_minor
 	Countries []AllocationRow `json:"countries"`
@@ -2272,12 +2292,12 @@ type AllocationTarget struct {
 
 // AllocationTargets defines model for AllocationTargets.
 type AllocationTargets struct {
-	// Dimension kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own
+	// Dimension kind and currency: shares adding up to 100; country (two letters), sector, broker and bank (catalog ids): ceilings, each on its own
 	Dimension AllocationTargetsDimension `json:"dimension"`
 	Targets   []AllocationTarget         `json:"targets"`
 }
 
-// AllocationTargetsDimension kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own
+// AllocationTargetsDimension kind and currency: shares adding up to 100; country (two letters), sector, broker and bank (catalog ids): ceilings, each on its own
 type AllocationTargetsDimension string
 
 // AllocationTopUp defines model for AllocationTopUp.
@@ -2299,7 +2319,7 @@ type AllocationTopUp struct {
 type AllocationWhatIf struct {
 	BaseCurrency string `json:"base_currency"`
 
-	// Cuts kind, currency, country, sector — in that order
+	// Cuts kind, currency, country, sector, broker, bank — in that order
 	Cuts         []AllocationCut       `json:"cuts"`
 	MissingRates []string              `json:"missing_rates"`
 	Sales        []AllocationPaperSale `json:"sales"`
@@ -4982,6 +5002,12 @@ type SpaceExport struct {
 
 	// Allocation The target shares of the worth and how the family comes to them (decision Р-37)
 	Allocation struct {
+		// Banks Ceilings by bank
+		Banks []AllocationTarget `json:"banks"`
+
+		// Brokers Ceilings by broker
+		Brokers []AllocationTarget `json:"brokers"`
+
 		// Countries Ceilings by country of risk
 		Countries  []AllocationTarget `json:"countries"`
 		Currencies []AllocationTarget `json:"currencies"`
@@ -5057,10 +5083,19 @@ type StatedPurchase struct {
 type Structure struct {
 	AssetsMinor int64 `json:"assets_minor"`
 
-	// AtBrokersMinor What the brokers hold: the base of the shares by holding
+	// AtBanksMinor What the banks hold: the base of the shares by bank
+	AtBanksMinor int64 `json:"at_banks_minor"`
+
+	// AtBrokersMinor What the brokers hold: the base of the shares by holding and by broker
 	AtBrokersMinor int64            `json:"at_brokers_minor"`
 	BaseCurrency   string           `json:"base_currency"`
 	ByAccount      []StructureSlice `json:"by_account"`
+
+	// ByBank What each bank holds — cards, current and savings accounts, deposits — by its id in GET /intermediaries; «-» for one not known
+	ByBank []StructureSlice `json:"by_bank"`
+
+	// ByBroker What each broker holds, by its id in GET /intermediaries; «-» for one the catalog does not know (decision Р-47)
+	ByBroker []StructureSlice `json:"by_broker"`
 
 	// ByClass Largest first
 	ByClass []StructureSlice `json:"by_class"`

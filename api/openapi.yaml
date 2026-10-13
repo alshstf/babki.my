@@ -3493,13 +3493,15 @@ components:
         allocation:
           description: "The target shares of the worth and how the family comes to them (decision Р-37)"
           type: object
-          required: [mode, kinds, currencies, countries, sectors]
+          required: [mode, kinds, currencies, countries, sectors, brokers, banks]
           properties:
             mode: { $ref: "#/components/schemas/AllocationMode" }
             kinds: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
             currencies: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
             countries: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" }, description: "Ceilings by country of risk" }
             sectors: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" }, description: "Ceilings by sector" }
+            brokers: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" }, description: "Ceilings by broker" }
+            banks: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" }, description: "Ceilings by bank" }
         receipts:
           type: array
           description: "The cash receipts, by their time; operation_id names the row each completes"
@@ -3850,7 +3852,7 @@ components:
         off_minor: { type: integer, format: int64, nullable: true, description: "What its part is above (positive) or below its target, in the base currency; null without a target" }
     Allocation:
       type: object
-      required: [base_currency, mode, worth_minor, everyday_minor, unsplit_minor, kinds, currencies, countries, sectors, papers_minor, unpriced, missing_rates]
+      required: [base_currency, mode, worth_minor, everyday_minor, unsplit_minor, kinds, currencies, countries, sectors, papers_minor, brokers, banks, at_brokers_minor, at_banks_minor, unpriced, missing_rates]
       properties:
         base_currency: { type: string }
         mode: { $ref: "#/components/schemas/AllocationMode" }
@@ -3862,6 +3864,10 @@ components:
         countries: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "The papers by country of risk against their ceilings (decision Р-46): target is the ceiling, off_minor positive what is above it; shares of papers_minor" }
         sectors: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "The papers by sector against their ceilings, as countries" }
         papers_minor: { type: integer, format: int64, description: "What the papers come to: the ceilings' base" }
+        brokers: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "What each broker holds against its ceiling (decision Р-47); shares of at_brokers_minor" }
+        banks: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "What each bank holds against its ceiling; shares of at_banks_minor" }
+        at_brokers_minor: { type: integer, format: int64 }
+        at_banks_minor: { type: integer, format: int64 }
         unpriced: { type: integer, description: "Papers left out for want of a price" }
         missing_rates: { type: array, items: { type: string } }
     AllocationPlan:
@@ -3884,7 +3890,7 @@ components:
       required: [base_currency, cuts, sales, tax_minor, tax_rate, missing_rates]
       properties:
         base_currency: { type: string }
-        cuts: { type: array, items: { $ref: "#/components/schemas/AllocationCut" }, description: "kind, currency, country, sector — in that order" }
+        cuts: { type: array, items: { $ref: "#/components/schemas/AllocationCut" }, description: "kind, currency, country, sector, broker, bank — in that order" }
         sales: { type: array, items: { $ref: "#/components/schemas/AllocationPaperSale" } }
         tax_minor: { type: integer, format: int64, nullable: true, description: "The sales' tax at the rules' rate on the gain not freed, gains and losses offset; null when a sale's gain is not known or the rules estimate none" }
         tax_rate: { type: string, nullable: true, description: "Decimal percent" }
@@ -3893,7 +3899,7 @@ components:
       type: object
       required: [dimension, rows]
       properties:
-        dimension: { type: string, enum: [kind, currency, country, sector] }
+        dimension: { type: string, enum: [kind, currency, country, sector, broker, bank] }
         rows: { type: array, items: { $ref: "#/components/schemas/AllocationCutRow" } }
     AllocationCutRow:
       type: object
@@ -4154,11 +4160,11 @@ components:
       type: object
       required: [dimension, targets]
       properties:
-        dimension: { type: string, enum: [kind, currency, country, sector], description: "kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own" }
+        dimension: { type: string, enum: [kind, currency, country, sector, broker, bank], description: "kind and currency: shares adding up to 100; country (two letters), sector, broker and bank (catalog ids): ceilings, each on its own" }
         targets: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
     Structure:
       type: object
-      required: [base_currency, valuation, assets_minor, debts_minor, by_class, by_currency, by_account, by_country, by_sector, by_holding, papers_minor, at_brokers_minor, unpriced, missing_rates]
+      required: [base_currency, valuation, assets_minor, debts_minor, by_class, by_currency, by_account, by_country, by_sector, by_holding, papers_minor, at_brokers_minor, by_broker, by_bank, at_banks_minor, unpriced, missing_rates]
       properties:
         base_currency: { type: string }
         valuation: { type: string, enum: [liquid, full] }
@@ -4171,7 +4177,10 @@ components:
         by_sector: { type: array, items: { $ref: "#/components/schemas/StructureSlice" } }
         by_holding: { type: array, items: { $ref: "#/components/schemas/StructureSlice" }, description: "Papers and money at brokers by where they are held" }
         papers_minor: { type: integer, format: int64, description: "What the papers come to: the base of the shares by country and sector" }
-        at_brokers_minor: { type: integer, format: int64, description: "What the brokers hold: the base of the shares by holding" }
+        at_brokers_minor: { type: integer, format: int64, description: "What the brokers hold: the base of the shares by holding and by broker" }
+        by_broker: { type: array, items: { $ref: "#/components/schemas/StructureSlice" }, description: "What each broker holds, by its id in GET /intermediaries; «-» for one the catalog does not know (decision Р-47)" }
+        by_bank: { type: array, items: { $ref: "#/components/schemas/StructureSlice" }, description: "What each bank holds — cards, current and savings accounts, deposits — by its id in GET /intermediaries; «-» for one not known" }
+        at_banks_minor: { type: integer, format: int64, description: "What the banks hold: the base of the shares by bank" }
         unpriced: { type: integer, description: "Papers left out for want of a price" }
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
     LoanTerms:
