@@ -37,3 +37,19 @@ export function useWageEntry() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["tax-year"] }),
   });
 }
+
+export type TaxYearForeign = components["schemas"]["TaxYearForeign"];
+export type TaxYearForeignAccount = components["schemas"]["TaxYearForeignAccount"];
+
+// The year of each account at a broker abroad line by line, as the tax
+// return lists it (GET /api/v1/tax-year/foreign, decision Р-45).
+export function useTaxYearForeign(year: number) {
+  return useQuery({
+    queryKey: ["tax-year", year, "foreign"],
+    queryFn: async (): Promise<TaxYearForeign> => {
+      const { data, error, response } = await api.GET("/api/v1/tax-year/foreign", { params: { query: { year } } });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}

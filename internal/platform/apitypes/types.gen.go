@@ -5524,6 +5524,9 @@ type TaxYearForeignAccount struct {
 	// Country The broker's country, ISO 3166 alpha-2 — where the money is credited (line 011); empty when the program does not know the broker
 	Country string `json:"country"`
 
+	// CountryCode The same as ОКСМ's digital code, three digits; empty when unknown
+	CountryCode string `json:"country_code"`
+
 	// ExpensesBaseMinor Приложение 8, line 030: the lots' cost and the sales' fees
 	ExpensesBaseMinor int64 `json:"expenses_base_minor"`
 
@@ -5567,11 +5570,15 @@ type TaxYearForeignPayout struct {
 	// Country The issuer's country by its ISIN, ISO 3166 alpha-2 (line 010); empty without an ISIN
 	Country string `json:"country"`
 
-	// CreditMinor Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged
-	CreditMinor int64 `json:"credit_minor"`
+	// CountryCode Line 010 as ОКСМ writes it, three digits; empty without one — no ISIN, or an international one (XS)
+	CountryCode string `json:"country_code"`
 
-	// Currency Line 030
-	Currency     string                                `json:"currency"`
+	// CreditMinor Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged
+	CreditMinor int64  `json:"credit_minor"`
+	Currency    string `json:"currency"`
+
+	// CurrencyCode Line 030: ОКВ's digital code, three digits; empty for a currency the program has no code for
+	CurrencyCode string                                `json:"currency_code"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id"`
 	Isin         string                                `json:"isin"`
 
@@ -5601,7 +5608,10 @@ type TaxYearForeignPayoutType string
 
 // TaxYearForeignSale defines model for TaxYearForeignSale.
 type TaxYearForeignSale struct {
-	Currency     string             `json:"currency"`
+	Currency string `json:"currency"`
+
+	// CurrencyCode ОКВ's digital code; empty when unknown
+	CurrencyCode string             `json:"currency_code"`
 	FeeBaseMinor int64              `json:"fee_base_minor"`
 	FeeMinor     int64              `json:"fee_minor"`
 	InstrumentId openapi_types.UUID `json:"instrument_id"`

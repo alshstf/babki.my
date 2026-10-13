@@ -16,6 +16,7 @@ import { QueryGate } from "@/components/query-notice";
 import { queryState } from "@/lib/query-state";
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { ForeignReturn } from "./foreign";
 
 // TaxesPage is the family's income tax for a year, an estimate (decisions
 // Р-41, Р-42): per person, the tax on the year's investment incomes, what the
@@ -56,6 +57,7 @@ export function TaxesPage() {
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("taxes.empty", { year: data.year })}</div>
       )}
       {data && data.supported && data.people.map((p) => <PersonCard key={p.user_id} year={data} person={p} />)}
+      {data && data.supported && <ForeignReturn year={data.year} />}
       {data && data.supported && data.by_balance > 0 && (
         <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="tax-by-balance">{t("taxes.byBalance", { count: data.by_balance })}</p>
       )}
