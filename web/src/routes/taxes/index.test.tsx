@@ -100,6 +100,7 @@ describe("TaxesPage", () => {
     expect(rows).toHaveLength(2);
     expect(within(people[1]).queryByTestId("tax-interest")).toBeNull();
     expect(norm(screen.getByTestId("tax-by-balance").textContent)).toMatch(/ведутся остатком: 1 —/);
+    expect(screen.getByText(/НКД, уплаченный при покупке облигаций, здесь уменьшает налог при продаже или погашении/)).toBeTruthy();
     // Maria's wages, reckoned from what reached her account.
     expect(norm(within(people[1]).getByTestId("tax-wages").textContent)).toBe(
       "Зарплата: на руки 87 000,00 ₽, до налога ≈ 100 000,00 ₽ — расчёт программы по сумме на руки. Налог по шкале ≈ 13 000,00 ₽, работодатели удержали ≈ 13 000,00 ₽.",
