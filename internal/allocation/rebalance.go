@@ -128,31 +128,8 @@ func Estimating(moves []Move, held []portfolio.SaleLots, rules family.TaxRules, 
 		part := decimal.NewFromInt(-m.Minor).Div(decimal.NewFromInt(worth[m.Key]))
 		gain, free, ok := decimal.Zero, decimal.Zero, true
 		for _, h := range byKind[m.Key] {
-			left := h.Quantity.Mul(part)
-			perUnit := decimal.NewFromInt(*h.LiquidInBase).Div(h.Quantity)
-			for _, l := range h.Lots {
-				if !left.IsPositive() {
-					break
-				}
-				take := decimal.Min(left, l.Quantity)
-				left = left.Sub(take)
-				if !l.CostKnown {
-					ok = false
-					continue
-				}
-				cost := decimal.Zero
-				if l.Quantity.IsPositive() {
-					cost = decimal.NewFromInt(l.CostInBase).Mul(take).Div(l.Quantity)
-				}
-				g := perUnit.Mul(take).Sub(cost)
-				gain = gain.Add(g)
-				// A gain on a lot held long enough is free; a loss still offsets.
-				if g.IsPositive() && rules.LongHoldingYears > 0 && l.AcquiredOn != nil && l.AcquiredOn.Before(longAgo) {
-					free = free.Add(g)
-					continue
-				}
-				taxable = taxable.Add(g)
-			}
+			g, f, t, known := lotsGain(h, part, rules, longAgo)
+			gain, free, taxable, ok = gain.Add(g), free.Add(f), taxable.Add(t), ok && known
 		}
 		sale := Sale{Known: ok}
 		if ok {
@@ -166,4 +143,40 @@ func Estimating(moves []Move, held []portfolio.SaleLots, rules family.TaxRules, 
 		out.Tax = &tax
 	}
 	return out
+}
+
+// lotsGain is what selling part of a paper's holding gains, its earliest lots
+// first: all of it, the part free of tax — on lots held long enough — and the
+// part taxed, a loss still offsetting; known false when a lot's cost cannot
+// be struck.
+func lotsGain(h portfolio.SaleLots, part decimal.Decimal, rules family.TaxRules, longAgo time.Time) (gain, free, taxable decimal.Decimal, known bool) {
+	known = true
+	if h.LiquidInBase == nil || !h.Quantity.IsPositive() {
+		return gain, free, taxable, false
+	}
+	left := h.Quantity.Mul(part)
+	perUnit := decimal.NewFromInt(*h.LiquidInBase).Div(h.Quantity)
+	for _, l := range h.Lots {
+		if !left.IsPositive() {
+			break
+		}
+		take := decimal.Min(left, l.Quantity)
+		left = left.Sub(take)
+		if !l.CostKnown {
+			known = false
+			continue
+		}
+		cost := decimal.Zero
+		if l.Quantity.IsPositive() {
+			cost = decimal.NewFromInt(l.CostInBase).Mul(take).Div(l.Quantity)
+		}
+		g := perUnit.Mul(take).Sub(cost)
+		gain = gain.Add(g)
+		if g.IsPositive() && rules.LongHoldingYears > 0 && l.AcquiredOn != nil && l.AcquiredOn.Before(longAgo) {
+			free = free.Add(g)
+			continue
+		}
+		taxable = taxable.Add(g)
+	}
+	return gain, free, taxable, known
 }

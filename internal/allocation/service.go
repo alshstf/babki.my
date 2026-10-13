@@ -15,6 +15,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/structure"
@@ -22,6 +23,7 @@ import (
 
 type structures interface {
 	Of(ctx context.Context, spaceID uuid.UUID, valuation structure.Valuation) (structure.Structure, error)
+	OfWith(ctx context.Context, spaceID uuid.UUID, valuation structure.Valuation, changes []structure.Change) (structure.Structure, error)
 }
 
 type accounts interface {
@@ -40,9 +42,12 @@ type spaces interface {
 type Service struct {
 	db         db.Executor
 	structures structures
-	accounts   accounts
-	sales      sales
-	spaces     spaces
+	// For a plan's what-if (WithCatalog).
+	catalog  catalog
+	rates    marketdata.RateSource
+	accounts accounts
+	sales    sales
+	spaces   spaces
 }
 
 func NewService(x db.Executor, s structures) *Service {

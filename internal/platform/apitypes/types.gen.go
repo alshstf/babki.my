@@ -106,6 +106,54 @@ func (e AccountWithBalanceCountedBy) Valid() bool {
 	}
 }
 
+// Defines values for AllocationCutDimension.
+const (
+	AllocationCutDimensionCountry  AllocationCutDimension = "country"
+	AllocationCutDimensionCurrency AllocationCutDimension = "currency"
+	AllocationCutDimensionKind     AllocationCutDimension = "kind"
+	AllocationCutDimensionSector   AllocationCutDimension = "sector"
+)
+
+// Valid indicates whether the value is a known member of the AllocationCutDimension enum.
+func (e AllocationCutDimension) Valid() bool {
+	switch e {
+	case AllocationCutDimensionCountry:
+		return true
+	case AllocationCutDimensionCurrency:
+		return true
+	case AllocationCutDimensionKind:
+		return true
+	case AllocationCutDimensionSector:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AllocationCutRowVerdict.
+const (
+	AllocationCutRowVerdictCloser  AllocationCutRowVerdict = "closer"
+	AllocationCutRowVerdictFurther AllocationCutRowVerdict = "further"
+	AllocationCutRowVerdictNone    AllocationCutRowVerdict = "none"
+	AllocationCutRowVerdictSame    AllocationCutRowVerdict = "same"
+)
+
+// Valid indicates whether the value is a known member of the AllocationCutRowVerdict enum.
+func (e AllocationCutRowVerdict) Valid() bool {
+	switch e {
+	case AllocationCutRowVerdictCloser:
+		return true
+	case AllocationCutRowVerdictFurther:
+		return true
+	case AllocationCutRowVerdictNone:
+		return true
+	case AllocationCutRowVerdictSame:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AllocationMode.
 const (
 	Rebalance AllocationMode = "rebalance"
@@ -118,6 +166,33 @@ func (e AllocationMode) Valid() bool {
 	case Rebalance:
 		return true
 	case Topup:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AllocationPlanOperationKind.
+const (
+	AllocationPlanOperationKindBuy      AllocationPlanOperationKind = "buy"
+	AllocationPlanOperationKindDeposit  AllocationPlanOperationKind = "deposit"
+	AllocationPlanOperationKindSell     AllocationPlanOperationKind = "sell"
+	AllocationPlanOperationKindTransfer AllocationPlanOperationKind = "transfer"
+	AllocationPlanOperationKindWithdraw AllocationPlanOperationKind = "withdraw"
+)
+
+// Valid indicates whether the value is a known member of the AllocationPlanOperationKind enum.
+func (e AllocationPlanOperationKind) Valid() bool {
+	switch e {
+	case AllocationPlanOperationKindBuy:
+		return true
+	case AllocationPlanOperationKindDeposit:
+		return true
+	case AllocationPlanOperationKindSell:
+		return true
+	case AllocationPlanOperationKindTransfer:
+		return true
+	case AllocationPlanOperationKindWithdraw:
 		return true
 	default:
 		return false
@@ -1032,19 +1107,19 @@ func (e PayoutKind) Valid() bool {
 
 // Defines values for PayoutNetBy.
 const (
-	History PayoutNetBy = "history"
-	None    PayoutNetBy = "none"
-	Rule    PayoutNetBy = "rule"
+	PayoutNetByHistory PayoutNetBy = "history"
+	PayoutNetByNone    PayoutNetBy = "none"
+	PayoutNetByRule    PayoutNetBy = "rule"
 )
 
 // Valid indicates whether the value is a known member of the PayoutNetBy enum.
 func (e PayoutNetBy) Valid() bool {
 	switch e {
-	case History:
+	case PayoutNetByHistory:
 		return true
-	case None:
+	case PayoutNetByNone:
 		return true
-	case Rule:
+	case PayoutNetByRule:
 		return true
 	default:
 		return false
@@ -1756,6 +1831,24 @@ func (e GetAllocationTopUpParamsValuation) Valid() bool {
 	}
 }
 
+// Defines values for EvaluateAllocationPlanParamsValuation.
+const (
+	EvaluateAllocationPlanParamsValuationFull   EvaluateAllocationPlanParamsValuation = "full"
+	EvaluateAllocationPlanParamsValuationLiquid EvaluateAllocationPlanParamsValuation = "liquid"
+)
+
+// Valid indicates whether the value is a known member of the EvaluateAllocationPlanParamsValuation enum.
+func (e EvaluateAllocationPlanParamsValuation) Valid() bool {
+	switch e {
+	case EvaluateAllocationPlanParamsValuationFull:
+		return true
+	case EvaluateAllocationPlanParamsValuationLiquid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetCapitalParamsStep.
 const (
 	GetCapitalParamsStepMonth GetCapitalParamsStep = "month"
@@ -1992,6 +2085,35 @@ type AllocationChange struct {
 	ShareAfter string `json:"share_after"`
 }
 
+// AllocationCut defines model for AllocationCut.
+type AllocationCut struct {
+	Dimension AllocationCutDimension `json:"dimension"`
+	Rows      []AllocationCutRow     `json:"rows"`
+}
+
+// AllocationCutDimension defines model for AllocationCut.Dimension.
+type AllocationCutDimension string
+
+// AllocationCutRow defines model for AllocationCutRow.
+type AllocationCutRow struct {
+	AfterMinor  int64  `json:"after_minor"`
+	BeforeMinor int64  `json:"before_minor"`
+	Key         string `json:"key"`
+	ShareAfter  string `json:"share_after"`
+
+	// ShareBefore Decimal percent of the base: the worth for kinds and currencies, the papers for countries and sectors
+	ShareBefore string `json:"share_before"`
+
+	// Target The target — for countries and sectors the ceiling
+	Target nullable.Nullable[string] `json:"target"`
+
+	// Verdict Closer to the target or under the ceiling by more, further from it, the same, or no target
+	Verdict AllocationCutRowVerdict `json:"verdict"`
+}
+
+// AllocationCutRowVerdict Closer to the target or under the ceiling by more, further from it, the same, or no target
+type AllocationCutRowVerdict string
+
 // AllocationMode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 type AllocationMode string
 
@@ -2013,6 +2135,45 @@ type AllocationMove struct {
 	// ShareAfter Decimal: its share of the worth once done, percent, to hundredths
 	ShareAfter string `json:"share_after"`
 }
+
+// AllocationPaperSale defines model for AllocationPaperSale.
+type AllocationPaperSale struct {
+	// FreeMinor The part of a gain on lots held long enough to be free of tax
+	FreeMinor int64 `json:"free_minor"`
+
+	// GainMinor Signed, in the base currency
+	GainMinor    int64              `json:"gain_minor"`
+	InstrumentId openapi_types.UUID `json:"instrument_id"`
+
+	// Known False when a lot's cost cannot be struck, or the paper is not held there
+	Known bool `json:"known"`
+}
+
+// AllocationPlan defines model for AllocationPlan.
+type AllocationPlan struct {
+	Operations []AllocationPlanOperation `json:"operations"`
+}
+
+// AllocationPlanOperation defines model for AllocationPlanOperation.
+type AllocationPlanOperation struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor The sum bought, sold, put in, taken out or moved
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Currency The sum's currency
+	Currency string `json:"currency"`
+
+	// InstrumentId The paper bought or sold
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
+	Kind         AllocationPlanOperationKind           `json:"kind"`
+
+	// ToAccountId A transfer's other account
+	ToAccountId nullable.Nullable[openapi_types.UUID] `json:"to_account_id,omitempty"`
+}
+
+// AllocationPlanOperationKind defines model for AllocationPlanOperation.Kind.
+type AllocationPlanOperationKind string
 
 // AllocationRebalance defines model for AllocationRebalance.
 type AllocationRebalance struct {
@@ -2108,6 +2269,22 @@ type AllocationTopUp struct {
 
 	// WorthAfterMinor The worth with the money in
 	WorthAfterMinor int64 `json:"worth_after_minor"`
+}
+
+// AllocationWhatIf defines model for AllocationWhatIf.
+type AllocationWhatIf struct {
+	BaseCurrency string `json:"base_currency"`
+
+	// Cuts kind, currency, country, sector — in that order
+	Cuts         []AllocationCut       `json:"cuts"`
+	MissingRates []string              `json:"missing_rates"`
+	Sales        []AllocationPaperSale `json:"sales"`
+
+	// TaxMinor The sales' tax at the rules' rate on the gain not freed, gains and losses offset; null when a sale's gain is not known or the rules estimate none
+	TaxMinor nullable.Nullable[int64] `json:"tax_minor"`
+
+	// TaxRate Decimal percent
+	TaxRate nullable.Nullable[string] `json:"tax_rate"`
 }
 
 // Arrival defines model for Arrival.
@@ -5913,6 +6090,14 @@ type GetAllocationTopUpParams struct {
 // GetAllocationTopUpParamsValuation defines parameters for GetAllocationTopUp.
 type GetAllocationTopUpParamsValuation string
 
+// EvaluateAllocationPlanParams defines parameters for EvaluateAllocationPlan.
+type EvaluateAllocationPlanParams struct {
+	Valuation *EvaluateAllocationPlanParamsValuation `form:"valuation,omitempty" json:"valuation,omitempty"`
+}
+
+// EvaluateAllocationPlanParamsValuation defines parameters for EvaluateAllocationPlan.
+type EvaluateAllocationPlanParamsValuation string
+
 // GetBudgetParams defines parameters for GetBudget.
 type GetBudgetParams struct {
 	// Month The month, YYYY-MM
@@ -6139,6 +6324,9 @@ type SetAllocationModeJSONRequestBody SetAllocationModeJSONBody
 
 // SetAllocationTargetsJSONRequestBody defines body for SetAllocationTargets for application/json ContentType.
 type SetAllocationTargetsJSONRequestBody = AllocationTargets
+
+// EvaluateAllocationPlanJSONRequestBody defines body for EvaluateAllocationPlan for application/json ContentType.
+type EvaluateAllocationPlanJSONRequestBody = AllocationPlan
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest

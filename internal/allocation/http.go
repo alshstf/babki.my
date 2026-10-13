@@ -34,6 +34,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleTopUp)))))
 	srv.Mount("GET /api/v1/allocation/rebalance", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleRebalance)))))
+	srv.Mount("POST /api/v1/allocation/what-if", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleWhatIf)))))
 	srv.Mount("PUT /api/v1/allocation/targets", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleEditor, http.HandlerFunc(h.handleTargets)))))
 	srv.Mount("PUT /api/v1/allocation/mode", h.sm.LoadAndSave(h.auth.RequireAuth(
@@ -111,6 +113,64 @@ func (h *Handler) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range changes {
 		out.Kinds = append(out.Kinds, apitypes.AllocationChange{Key: c.Key, ChangeMinor: c.Minor, ShareAfter: c.ShareAfter.StringFixed(2)})
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.AllocationPlan
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	plan := make([]Op, 0, len(req.Operations))
+	for _, o := range req.Operations {
+		op := Op{Kind: OpKind(o.Kind), Account: o.AccountId, Currency: o.Currency, Minor: o.AmountMinor}
+		if o.ToAccountId.IsSpecified() && !o.ToAccountId.IsNull() {
+			to := o.ToAccountId.MustGet()
+			op.To = &to
+		}
+		if o.InstrumentId.IsSpecified() && !o.InstrumentId.IsNull() {
+			id := o.InstrumentId.MustGet()
+			op.Instrument = &id
+		}
+		plan = append(plan, op)
+	}
+	wi, err := h.svc.WhatIf(r.Context(), p.SpaceID, valuationOf(r), plan)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.AllocationWhatIf{
+		BaseCurrency: wi.BaseCurrency, Cuts: make([]apitypes.AllocationCut, 0, len(wi.Cuts)),
+		Sales: make([]apitypes.AllocationPaperSale, 0, len(wi.Sales)), MissingRates: wi.MissingRates,
+		TaxMinor: nullable.NewNullNullable[int64](), TaxRate: nullable.NewNullNullable[string](),
+	}
+	if out.MissingRates == nil {
+		out.MissingRates = []string{}
+	}
+	for _, c := range wi.Cuts {
+		cut := apitypes.AllocationCut{Dimension: apitypes.AllocationCutDimension(c.Dimension), Rows: make([]apitypes.AllocationCutRow, 0, len(c.Rows))}
+		for _, r := range c.Rows {
+			row := apitypes.AllocationCutRow{
+				Key: r.Key, BeforeMinor: r.Before, AfterMinor: r.After, ShareBefore: r.ShareBefore.StringFixed(2),
+				ShareAfter: r.ShareAfter.StringFixed(2), Target: nullable.NewNullNullable[string](), Verdict: apitypes.AllocationCutRowVerdict(r.Verdict),
+			}
+			if r.Target != nil {
+				row.Target = nullable.NewNullableWithValue(r.Target.StringFixed(2))
+			}
+			cut.Rows = append(cut.Rows, row)
+		}
+		out.Cuts = append(out.Cuts, cut)
+	}
+	for _, s := range wi.Sales {
+		out.Sales = append(out.Sales, apitypes.AllocationPaperSale{InstrumentId: s.Instrument, GainMinor: s.Gain, FreeMinor: s.Free, Known: s.Known})
+	}
+	if wi.Tax != nil {
+		out.TaxMinor = nullable.NewNullableWithValue(*wi.Tax)
+	}
+	if wi.TaxRate != nil {
+		out.TaxRate = nullable.NewNullableWithValue(wi.TaxRate.String())
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }

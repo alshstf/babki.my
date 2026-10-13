@@ -194,6 +194,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/allocation/what-if": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description What a plan of operations would do to the worth against the family's targets and ceilings (decision Р-48): buying or selling a sum of a paper on an account, putting money in, taking it out, moving it between accounts. Every cut — kinds, currencies, countries of risk, sectors — before and after, closer to the target, further from it or the same; what the sales are estimated to gain, earliest lots first, and the tax on it. Nothing is written. 400 for an operation that is not one of these, a sum not above zero, a paper that is not a share, bond or fund, an account not of the family. */
+        post: operations["evaluateAllocationPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/rebalance": {
         parameters: {
             query?: never;
@@ -2878,6 +2895,84 @@ export interface components {
             /** @description Papers left out for want of a price */
             unpriced: number;
             missing_rates: string[];
+        };
+        AllocationPlan: {
+            operations: components["schemas"]["AllocationPlanOperation"][];
+        };
+        AllocationPlanOperation: {
+            /** @enum {string} */
+            kind: "buy" | "sell" | "deposit" | "withdraw" | "transfer";
+            /** Format: uuid */
+            account_id: string;
+            /**
+             * Format: uuid
+             * @description A transfer's other account
+             */
+            to_account_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The paper bought or sold
+             */
+            instrument_id?: string | null;
+            /** @description The sum's currency */
+            currency: string;
+            /**
+             * Format: int64
+             * @description The sum bought, sold, put in, taken out or moved
+             */
+            amount_minor: number;
+        };
+        AllocationWhatIf: {
+            base_currency: string;
+            /** @description kind, currency, country, sector — in that order */
+            cuts: components["schemas"]["AllocationCut"][];
+            sales: components["schemas"]["AllocationPaperSale"][];
+            /**
+             * Format: int64
+             * @description The sales' tax at the rules' rate on the gain not freed, gains and losses offset; null when a sale's gain is not known or the rules estimate none
+             */
+            tax_minor: number | null;
+            /** @description Decimal percent */
+            tax_rate: string | null;
+            missing_rates: string[];
+        };
+        AllocationCut: {
+            /** @enum {string} */
+            dimension: "kind" | "currency" | "country" | "sector";
+            rows: components["schemas"]["AllocationCutRow"][];
+        };
+        AllocationCutRow: {
+            key: string;
+            /** Format: int64 */
+            before_minor: number;
+            /** Format: int64 */
+            after_minor: number;
+            /** @description Decimal percent of the base: the worth for kinds and currencies, the papers for countries and sectors */
+            share_before: string;
+            share_after: string;
+            /** @description The target — for countries and sectors the ceiling */
+            target: string | null;
+            /**
+             * @description Closer to the target or under the ceiling by more, further from it, the same, or no target
+             * @enum {string}
+             */
+            verdict: "closer" | "further" | "same" | "none";
+        };
+        AllocationPaperSale: {
+            /** Format: uuid */
+            instrument_id: string;
+            /**
+             * Format: int64
+             * @description Signed, in the base currency
+             */
+            gain_minor: number;
+            /**
+             * Format: int64
+             * @description The part of a gain on lots held long enough to be free of tax
+             */
+            free_minor: number;
+            /** @description False when a lot's cost cannot be struck, or the paper is not held there */
+            known: boolean;
         };
         AllocationTopUp: {
             /**
@@ -5935,6 +6030,35 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    evaluateAllocationPlan: {
+        parameters: {
+            query?: {
+                valuation?: "liquid" | "full";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AllocationPlan"];
+            };
+        };
+        responses: {
+            /** @description The plan against the targets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationWhatIf"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getAllocationRebalance: {

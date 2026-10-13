@@ -154,7 +154,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).
-	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore)
+	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore).WithCatalog(instStore, converter)
 	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
 	// The family's income tax for a year, an estimate (decisions Р-41, Р-42).
 	taxSvc := taxyear.NewService(accStore, positions, famStore, mdStore).WithEarnings(opStore, category.NewStore(r.pool)).
