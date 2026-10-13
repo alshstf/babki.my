@@ -16,6 +16,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 import { formatMinorCompact } from "@/lib/money";
 import { countryName } from "@/lib/country";
 import { sectorName } from "@/lib/sectors";
+import { useIntermediaries } from "@/api/intermediaries";
 import { cn } from "@/lib/utils";
 import { TargetsCard } from "./targets";
 import { CeilingsCard } from "./ceilings";
@@ -69,6 +70,9 @@ function className(t: (key: string) => string, key: string): string {
 // account and the country a paper was issued in; debts apart.
 export function StructurePage() {
   const { t } = useTranslation();
+  const intermediaries = useIntermediaries();
+  const holderName = (id: string) =>
+    id === "-" ? t("structure.unknownHolder") : (intermediaries.data?.find((i) => i.id === id)?.name ?? id);
   const [valuation, setValuation] = useState<StructureValuation>("liquid");
   const structure = useStructure(valuation);
   const accounts = useAccounts();
@@ -154,6 +158,24 @@ export function StructurePage() {
               name={(k) => sectorName(t, k)}
               testId="structure-sector"
               note={t("structure.sectorNote")}
+            />
+            <Breakdown
+              title={t("structure.byBroker")}
+              slices={data.by_broker}
+              total={data.at_brokers_minor}
+              currency={data.base_currency}
+              name={holderName}
+              testId="structure-broker"
+              note={t("structure.brokerNote")}
+            />
+            <Breakdown
+              title={t("structure.byBank")}
+              slices={data.by_bank}
+              total={data.at_banks_minor}
+              currency={data.base_currency}
+              name={holderName}
+              testId="structure-bank"
+              note={t("structure.bankNote")}
             />
             <Breakdown
               title={t("structure.byHolding")}

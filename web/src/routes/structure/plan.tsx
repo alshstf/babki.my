@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/api/accounts";
+import { useIntermediaries } from "@/api/intermediaries";
 import { useWhatIf, type AllocationPlanOperation, type AllocationWhatIf } from "@/api/allocation";
 import type { Instrument } from "@/api/instruments";
 import { currencyName, kindName } from "@/lib/allocation-names";
@@ -249,8 +250,20 @@ function Result({ data }: { data: AllocationWhatIf }) {
   const { t } = useTranslation();
   const [all, setAll] = useState(false);
   const c = data.base_currency;
+  const intermediaries = useIntermediaries();
   const title = (d: string) =>
-    d === "kind" ? t("plan.cuts.kind") : d === "currency" ? t("plan.cuts.currency") : d === "country" ? t("plan.cuts.country") : t("plan.cuts.sector");
+    d === "kind"
+      ? t("plan.cuts.kind")
+      : d === "currency"
+        ? t("plan.cuts.currency")
+        : d === "country"
+          ? t("plan.cuts.country")
+          : d === "sector"
+            ? t("plan.cuts.sector")
+            : d === "broker"
+              ? t("plan.cuts.broker")
+              : t("plan.cuts.bank");
+  const holder = (k: string) => (k === "-" ? t("structure.unknownHolder") : (intermediaries.data?.find((i) => i.id === k)?.name ?? k));
   const name = (d: string, k: string) =>
     d === "kind"
       ? kindName(t, k, c)
@@ -258,7 +271,9 @@ function Result({ data }: { data: AllocationWhatIf }) {
         ? currencyName(t, k)
         : d === "country"
           ? k === "-" ? t("structure.noIsin") : countryName(k)
-          : sectorName(t, k);
+          : d === "sector"
+            ? sectorName(t, k)
+            : holder(k);
   const verdict = (v: string) =>
     v === "closer" ? t("plan.verdicts.closer") : v === "further" ? t("plan.verdicts.further") : v === "same" ? t("plan.verdicts.same") : t("plan.verdicts.none");
   const short = data.cuts.find((x) => x.dimension === "kind")?.rows.find((r) => r.key === "broker_cash" && r.after_minor < 0);
@@ -278,7 +293,7 @@ function Result({ data }: { data: AllocationWhatIf }) {
                 <span className="col-span-2 text-xs text-muted-foreground tabular-nums">
                   {percent(r.share_before)} → {percent(r.share_after)}
                   {r.target !== null &&
-                    ` · ${cut.dimension === "country" || cut.dimension === "sector" ? t("plan.ceiling", { value: percent(r.target) }) : t("plan.target", { value: percent(r.target) })}`}
+                    ` · ${cut.dimension === "kind" || cut.dimension === "currency" ? t("plan.target", { value: percent(r.target) }) : t("plan.ceiling", { value: percent(r.target) })}`}
                 </span>
               </div>
             ))}

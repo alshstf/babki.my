@@ -21,7 +21,7 @@ const allocation: Allocation = {
   kinds: [], currencies: [],
   countries: [row("RU", 750_000_00, "75.00"), row("US", 250_000_00, "25.00", "20.00", 50_000_00)],
   sectors: [row("it", 350_000_00, "35.00"), row("government", 400_000_00, "40.00"), row("-", 250_000_00, "25.00")],
-  papers_minor: 1_000_000_00, unpriced: 0, missing_rates: [],
+  papers_minor: 1_000_000_00, brokers: [], banks: [], at_brokers_minor: 0, at_banks_minor: 0, unpriced: 0, missing_rates: [],
 };
 
 function show(role: "owner" | "viewer") {

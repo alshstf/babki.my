@@ -167,8 +167,8 @@ func (s *Service) WhatIf(ctx context.Context, spaceID uuid.UUID, valuation struc
 	if err != nil {
 		return WhatIf{}, err
 	}
-	vb := withCeilings(view(before, st.Mode, st.Kinds, st.Currencies), before, st.Countries, st.Sectors)
-	va := withCeilings(view(after, st.Mode, st.Kinds, st.Currencies), after, st.Countries, st.Sectors)
+	vb := withCeilings(view(before, st.Mode, st.Kinds, st.Currencies), before, st)
+	va := withCeilings(view(after, st.Mode, st.Kinds, st.Currencies), after, st)
 	out := WhatIf{
 		BaseCurrency: before.BaseCurrency, MissingRates: after.MissingRates,
 		Cuts: []Cut{
@@ -176,6 +176,8 @@ func (s *Service) WhatIf(ctx context.Context, spaceID uuid.UUID, valuation struc
 			{ByCurrency, cut(vb.Currencies, va.Currencies, false)},
 			{ByCountry, cut(vb.Countries, va.Countries, true)},
 			{BySector, cut(vb.Sectors, va.Sectors, true)},
+			{ByBroker, cut(vb.Brokers, va.Brokers, true)},
+			{ByBank, cut(vb.Banks, va.Banks, true)},
 		},
 	}
 	if len(sold) > 0 {

@@ -56,6 +56,7 @@ func (h *Handler) handleStructure(w http.ResponseWriter, r *http.Request) {
 		ByAccount: slicesAPI(s.ByAccount), ByCountry: slicesAPI(s.ByCountry),
 		BySector: slicesAPI(s.BySector), ByHolding: slicesAPI(s.ByHolding),
 		PapersMinor: s.Papers, AtBrokersMinor: s.AtBrokers,
+		ByBroker: slicesAPI(s.ByBroker), ByBank: slicesAPI(s.ByBank), AtBanksMinor: s.AtBanks,
 		Unpriced: s.Unpriced, MissingRates: s.MissingRates,
 	})
 }

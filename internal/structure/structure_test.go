@@ -352,3 +352,36 @@ func TestAPlanIsLaidOnTheWorth(t *testing.T) {
 		t.Error("a stranger's account was taken")
 	}
 }
+
+// What each broker and bank holds (decision Р-47): the card at «Тинькофф» is
+// Т-Банк's, the broker abroad Freedom's, a savings account at a bank the
+// catalog does not know «-»; cash and a credit card's debt are no bank's
+// assets.
+func TestTheWorthComesApartByBrokerAndBank(t *testing.T) {
+	card, saving, broker, cash, credit := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	bal := func(v int64) *account.BalancePoint { return &account.BalancePoint{AmountMinor: v} }
+	accounts := fakeAccounts{
+		{Account: account.Account{ID: card, Type: account.TypeChecking, Currency: "RUB", Status: account.StatusActive, Institution: "Тинькофф"}, Balance: bal(100_000_00)},
+		{Account: account.Account{ID: saving, Type: account.TypeSavings, Currency: "RUB", Status: account.StatusActive, Institution: "Свой банк"}, Balance: bal(300_000_00)},
+		{Account: account.Account{ID: broker, Type: account.TypeBrokerage, Currency: "RUB", Status: account.StatusActive, Institution: "Freedom Finance"}, Balance: bal(500_000_00)},
+		{Account: account.Account{ID: cash, Type: account.TypeCash, Currency: "RUB", Status: account.StatusActive}, Balance: bal(20_000_00)},
+		{Account: account.Account{ID: credit, Type: account.TypeCreditCard, Currency: "RUB", Status: account.StatusActive, Institution: "Альфа-Банк"}, Balance: bal(-40_000_00)},
+	}
+	s, err := structure.NewService(accounts, fakePositions{}, fakeSpaces{}, fakeRates{}).Of(t.Context(), uuid.New(), structure.Liquid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := func(list []structure.Slice) map[string]int64 {
+		m := map[string]int64{}
+		for _, x := range list {
+			m[x.Key] = x.Minor
+		}
+		return m
+	}
+	if banks := got(s.ByBank); len(banks) != 2 || banks["tbank"] != 100_000_00 || banks["-"] != 300_000_00 || s.AtBanks != 400_000_00 {
+		t.Errorf("by bank = %v, at banks %d", s.ByBank, s.AtBanks)
+	}
+	if brokers := got(s.ByBroker); len(brokers) != 1 || brokers["freedom"] != 500_000_00 {
+		t.Errorf("by broker = %v", s.ByBroker)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/intermediary"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
@@ -103,13 +104,18 @@ type Settings struct {
 	Mode       Mode
 	Kinds      []Target
 	Currencies []Target
-	// Countries and Sectors are ceilings (decision Р-46).
+	// Countries and Sectors are ceilings (decision Р-46), Brokers and Banks
+	// too (decision Р-47).
 	Countries, Sectors []Target
+	Brokers, Banks     []Target
 }
 
 // Settings are the space's targets, ModeTopUp until the family picks.
 func (s *Service) Settings(ctx context.Context, spaceID uuid.UUID) (Settings, error) {
-	out := Settings{Mode: ModeTopUp, Kinds: []Target{}, Currencies: []Target{}, Countries: []Target{}, Sectors: []Target{}}
+	out := Settings{
+		Mode: ModeTopUp, Kinds: []Target{}, Currencies: []Target{}, Countries: []Target{}, Sectors: []Target{},
+		Brokers: []Target{}, Banks: []Target{},
+	}
 	err := s.db.QueryRow(ctx, `SELECT mode FROM allocation_settings WHERE space_id = $1`, spaceID).Scan(&out.Mode)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Settings{}, fmt.Errorf("allocation: mode: %w", err)
@@ -134,6 +140,10 @@ func (s *Service) Settings(ctx context.Context, spaceID uuid.UUID) (Settings, er
 			out.Countries = append(out.Countries, t)
 		case BySector:
 			out.Sectors = append(out.Sectors, t)
+		case ByBroker:
+			out.Brokers = append(out.Brokers, t)
+		case ByBank:
+			out.Banks = append(out.Banks, t)
 		}
 	}
 	return out, rows.Err()
@@ -150,7 +160,7 @@ func (s *Service) View(ctx context.Context, spaceID uuid.UUID, valuation structu
 	if err != nil {
 		return View{}, err
 	}
-	return withCeilings(view(worth, st.Mode, st.Kinds, st.Currencies), worth, st.Countries, st.Sectors), nil
+	return withCeilings(view(worth, st.Mode, st.Kinds, st.Currencies), worth, st), nil
 }
 
 var (
@@ -182,8 +192,8 @@ func (s *Service) SetTargets(ctx context.Context, spaceID uuid.UUID, dim Dimensi
 }
 
 func validTargets(dim Dimension, targets []Target) error {
-	if dim != ByKind && dim != ByCurrency && dim != ByCountry && dim != BySector {
-		return fmt.Errorf("%w: targets are by kind, currency, country or sector", family.ErrValidation)
+	if dim != ByKind && dim != ByCurrency && dim != ByCountry && dim != BySector && dim != ByBroker && dim != ByBank {
+		return fmt.Errorf("%w: targets are by kind, currency, country, sector, broker or bank", family.ErrValidation)
 	}
 	seen := map[string]bool{}
 	sum := decimal.Zero
@@ -197,6 +207,8 @@ func validTargets(dim Dimension, targets []Target) error {
 			return fmt.Errorf("%w: a country is two capital letters, not %q", family.ErrValidation, t.Key)
 		case dim == BySector && !slices.Contains(instrument.Sectors, instrument.Sector(t.Key)):
 			return fmt.Errorf("%w: no sector %q", family.ErrValidation, t.Key)
+		case (dim == ByBroker || dim == ByBank) && !inCatalog(t.Key, dim):
+			return fmt.Errorf("%w: no %s %q in the catalog", family.ErrValidation, dim, t.Key)
 		case seen[t.Key]:
 			return fmt.Errorf("%w: %q twice", family.ErrValidation, t.Key)
 		case t.Percent.IsNegative() || t.Percent.GreaterThan(hundred) || !t.Percent.Equal(t.Percent.Round(2)):
@@ -222,4 +234,18 @@ func (s *Service) SetMode(ctx context.Context, spaceID uuid.UUID, mode Mode) err
 		return fmt.Errorf("allocation: set mode: %w", err)
 	}
 	return nil
+}
+
+// inCatalog says the catalog has a broker, or a bank, of this id.
+func inCatalog(id string, dim Dimension) bool {
+	c, err := intermediary.Load()
+	if err != nil {
+		return false
+	}
+	i, ok := c.ByID(id)
+	want := intermediary.Bank
+	if dim == ByBroker {
+		want = intermediary.Broker
+	}
+	return ok && i.Kind == want
 }

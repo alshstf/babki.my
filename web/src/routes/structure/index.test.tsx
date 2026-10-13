@@ -28,8 +28,17 @@ fetchMock.mockImplementation(async (input: Request) => {
       by_sector: [{ key: "financials", minor: 300_000_00 }, { key: "", minor: 120_000_00 }, { key: "funds_bonds", minor: 100_000_00 }, { key: "-", minor: 90_000_00 }],
       by_holding: [{ key: "domestic", minor: 420_000_00 }, { key: "", minor: 100_000_00 }, { key: "foreign_broker", minor: 90_000_00 }],
       papers_minor: 490_000_00, at_brokers_minor: 510_000_00,
+      by_broker: [{ key: "tinvest", minor: 420_000_00 }, { key: "freedom", minor: 90_000_00 }],
+      by_bank: [{ key: "tbank", minor: 70_000_00 }, { key: "-", minor: 30_000_00 }], at_banks_minor: 100_000_00,
       unpriced: 1, missing_rates: [],
     });
+  }
+  if (url.pathname.endsWith("/intermediaries")) {
+    return json({ checked_on: "2026-10-14", intermediaries: [
+      { id: "tinvest", name: "Т-Инвестиции", kind: "broker", country: "RU", insured: false, reg_number: null, bank_id: "tbank", aliases: [] },
+      { id: "freedom", name: "Freedom Finance", kind: "broker", country: "KZ", insured: false, reg_number: null, bank_id: null, aliases: [] },
+      { id: "tbank", name: "Т-Банк", kind: "bank", country: "RU", insured: true, reg_number: 2673, bank_id: null, aliases: [] },
+    ] });
   }
   if (url.pathname.endsWith("/accounts")) {
     return json([{ id: "a-1", name: "Брокер" }, { id: "a-2", name: "Карта" }]);
@@ -64,6 +73,11 @@ describe("StructurePage", () => {
     const held = within(screen.getByTestId("structure-holding")).getAllByTestId("structure-slice");
     expect(held[0]).toHaveTextContent(/Российские бумаги в России.*420\s000.*82 %/);
     expect(held[1]).toHaveTextContent(/У иностранного брокера.*90\s000.*18 %/);
+    // What each broker and bank holds, of what the brokers or the banks hold.
+    await waitFor(() => expect(within(screen.getByTestId("structure-broker")).getAllByTestId("structure-slice")[0]).toHaveTextContent(/Т-Инвестиции.*420\s000.*82 %/));
+    const banks = within(screen.getByTestId("structure-bank")).getAllByTestId("structure-slice");
+    expect(banks[0]).toHaveTextContent(/Т-Банк.*70\s000.*70 %/);
+    expect(banks[1]).toHaveTextContent(/Не из справочника.*30\s000.*30 %/);
     expect(screen.getByText(/Бумаг без цены не учтено: 1/)).toBeTruthy();
 
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Оценка бумаг" }), { key: "Enter" });

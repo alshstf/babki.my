@@ -8,12 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAllocation, useSetTargets, type AllocationRow } from "@/api/allocation";
 import { useSession } from "@/api/session";
+import { useIntermediaries } from "@/api/intermediaries";
 import { countryName } from "@/lib/country";
 import { formatMinorCompact } from "@/lib/money";
 import { hundredths, percent } from "@/lib/percent";
 import { sectorName } from "@/lib/sectors";
 
-type Dimension = "country" | "sector";
+type Dimension = "country" | "sector" | "broker" | "bank";
 
 // CeilingsCard is the papers against the family's ceilings by country of risk
 // and by sector (decision Р-46): «no more than N %», each on its own, for the
@@ -24,11 +25,15 @@ export function CeilingsCard({ valuation }: { valuation: "liquid" | "full" }) {
   const { data: session } = useSession();
   const canEdit = session?.role === "owner" || session?.role === "editor";
   const [editing, setEditing] = useState<Dimension | null>(null);
+  const intermediaries = useIntermediaries();
   const a = allocation.data;
-  if (!a || a.papers_minor === 0) return null;
+  if (!a || (a.papers_minor === 0 && a.at_brokers_minor === 0 && a.at_banks_minor === 0)) return null;
   const c = a.base_currency;
   const country = (k: string) => (k === "-" ? t("structure.noIsin") : countryName(k));
   const sector = (k: string) => sectorName(t, k);
+  const holder = (k: string) => (k === "-" ? t("structure.unknownHolder") : (intermediaries.data?.find((i) => i.id === k)?.name ?? k));
+  const rowsOf = (d: Dimension) => (d === "country" ? a.countries : d === "sector" ? a.sectors : d === "broker" ? a.brokers : a.banks);
+  const nameOf = (d: Dimension) => (d === "country" ? country : d === "sector" ? sector : holder);
   return (
     <Card className="min-w-0" data-testid="ceilings">
       <CardHeader className="pb-2">
@@ -40,14 +45,17 @@ export function CeilingsCard({ valuation }: { valuation: "liquid" | "full" }) {
           onEdit={canEdit ? () => setEditing("country") : undefined} />
         <Section title={t("ceilings.sectors")} rows={a.sectors} currency={c} name={sector} testId="ceilings-sectors"
           onEdit={canEdit ? () => setEditing("sector") : undefined} />
+        {a.brokers.length > 0 && (
+          <Section title={t("ceilings.brokers")} rows={a.brokers} currency={c} name={holder} testId="ceilings-brokers"
+            onEdit={canEdit ? () => setEditing("broker") : undefined} />
+        )}
+        {a.banks.length > 0 && (
+          <Section title={t("ceilings.banks")} rows={a.banks} currency={c} name={holder} testId="ceilings-banks"
+            onEdit={canEdit ? () => setEditing("bank") : undefined} />
+        )}
       </CardContent>
       {editing && (
-        <CeilingsDialog
-          dimension={editing}
-          rows={editing === "country" ? a.countries : a.sectors}
-          name={editing === "country" ? country : sector}
-          onClose={() => setEditing(null)}
-        />
+        <CeilingsDialog dimension={editing} rows={rowsOf(editing)} name={nameOf(editing)} onClose={() => setEditing(null)} />
       )}
     </Card>
   );
@@ -122,7 +130,15 @@ function CeilingsDialog({ dimension, rows, name, onClose }: {
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md" data-testid="ceilings-dialog">
         <DialogHeader>
-          <DialogTitle>{dimension === "country" ? t("ceilings.dialogCountries") : t("ceilings.dialogSectors")}</DialogTitle>
+          <DialogTitle>
+            {dimension === "country"
+              ? t("ceilings.dialogCountries")
+              : dimension === "sector"
+                ? t("ceilings.dialogSectors")
+                : dimension === "broker"
+                  ? t("ceilings.dialogBrokers")
+                  : t("ceilings.dialogBanks")}
+          </DialogTitle>
         </DialogHeader>
         <div className="grid gap-2">
           <p className="text-xs text-muted-foreground">{t("ceilings.dialogHint")}</p>
