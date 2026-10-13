@@ -2395,6 +2395,10 @@ export interface components {
                 mode: components["schemas"]["AllocationMode"];
                 kinds: components["schemas"]["AllocationTarget"][];
                 currencies: components["schemas"]["AllocationTarget"][];
+                /** @description Ceilings by country of risk */
+                countries: components["schemas"]["AllocationTarget"][];
+                /** @description Ceilings by sector */
+                sectors: components["schemas"]["AllocationTarget"][];
             };
             /** @description The cash receipts, by their time; operation_id names the row each completes */
             receipts: components["schemas"]["Receipt"][];
@@ -2862,6 +2866,15 @@ export interface components {
             kinds: components["schemas"]["AllocationRow"][];
             /** @description Every currency held or targeted, the base currency first, then largest first */
             currencies: components["schemas"]["AllocationRow"][];
+            /** @description The papers by country of risk against their ceilings (decision Р-46): target is the ceiling, off_minor positive what is above it; shares of papers_minor */
+            countries: components["schemas"]["AllocationRow"][];
+            /** @description The papers by sector against their ceilings, as countries */
+            sectors: components["schemas"]["AllocationRow"][];
+            /**
+             * Format: int64
+             * @description What the papers come to: the ceilings' base
+             */
+            papers_minor: number;
             /** @description Papers left out for want of a price */
             unpriced: number;
             missing_rates: string[];
@@ -3356,8 +3369,11 @@ export interface components {
             percent: string;
         };
         AllocationTargets: {
-            /** @enum {string} */
-            dimension: "kind" | "currency";
+            /**
+             * @description kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own
+             * @enum {string}
+             */
+            dimension: "kind" | "currency" | "country" | "sector";
             targets: components["schemas"]["AllocationTarget"][];
         };
         Structure: {

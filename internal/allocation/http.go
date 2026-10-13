@@ -216,6 +216,7 @@ func ViewAPI(v View) apitypes.Allocation {
 	return apitypes.Allocation{
 		BaseCurrency: v.BaseCurrency, Mode: apitypes.AllocationMode(v.Mode), WorthMinor: v.Worth,
 		EverydayMinor: v.Everyday, UnsplitMinor: v.Unsplit, Kinds: rowsAPI(v.Kinds), Currencies: rowsAPI(v.Currencies),
+		Countries: rowsAPI(v.Countries), Sectors: rowsAPI(v.Sectors), PapersMinor: v.Papers,
 		Unpriced: v.Unpriced, MissingRates: missing,
 	}
 }

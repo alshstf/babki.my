@@ -3438,11 +3438,13 @@ components:
         allocation:
           description: "The target shares of the worth and how the family comes to them (decision Р-37)"
           type: object
-          required: [mode, kinds, currencies]
+          required: [mode, kinds, currencies, countries, sectors]
           properties:
             mode: { $ref: "#/components/schemas/AllocationMode" }
             kinds: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
             currencies: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
+            countries: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" }, description: "Ceilings by country of risk" }
+            sectors: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" }, description: "Ceilings by sector" }
         receipts:
           type: array
           description: "The cash receipts, by their time; operation_id names the row each completes"
@@ -3792,7 +3794,7 @@ components:
         off_minor: { type: integer, format: int64, nullable: true, description: "What its part is above (positive) or below its target, in the base currency; null without a target" }
     Allocation:
       type: object
-      required: [base_currency, mode, worth_minor, everyday_minor, unsplit_minor, kinds, currencies, unpriced, missing_rates]
+      required: [base_currency, mode, worth_minor, everyday_minor, unsplit_minor, kinds, currencies, countries, sectors, papers_minor, unpriced, missing_rates]
       properties:
         base_currency: { type: string }
         mode: { $ref: "#/components/schemas/AllocationMode" }
@@ -3801,6 +3803,9 @@ components:
         unsplit_minor: { type: integer, format: int64, description: "Brokers' accounts known only by their balance: left out, their kinds not known" }
         kinds: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "Every kind held or targeted, in the kinds' order" }
         currencies: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "Every currency held or targeted, the base currency first, then largest first" }
+        countries: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "The papers by country of risk against their ceilings (decision Р-46): target is the ceiling, off_minor positive what is above it; shares of papers_minor" }
+        sectors: { type: array, items: { $ref: "#/components/schemas/AllocationRow" }, description: "The papers by sector against their ceilings, as countries" }
+        papers_minor: { type: integer, format: int64, description: "What the papers come to: the ceilings' base" }
         unpriced: { type: integer, description: "Papers left out for want of a price" }
         missing_rates: { type: array, items: { type: string } }
     AllocationTopUp:
@@ -4043,7 +4048,7 @@ components:
       type: object
       required: [dimension, targets]
       properties:
-        dimension: { type: string, enum: [kind, currency] }
+        dimension: { type: string, enum: [kind, currency, country, sector], description: "kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own" }
         targets: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
     Structure:
       type: object
