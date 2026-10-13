@@ -26,6 +26,7 @@ import (
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
@@ -100,6 +101,18 @@ type budgets interface {
 	Limits(ctx context.Context, spaceID uuid.UUID) ([]budget.Limit, error)
 }
 
+type handClasses interface {
+	ByHand(ctx context.Context, spaceID uuid.UUID) ([]instrument.HandClass, error)
+}
+
+type savingsGoals interface {
+	Goals(ctx context.Context, spaceID uuid.UUID) ([]goals.Goal, error)
+}
+
+type savedPlans interface {
+	Plans(ctx context.Context, spaceID uuid.UUID) ([]allocation.SavedPlan, error)
+}
+
 type prices interface {
 	PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]marketdata.Quote, error)
 }
@@ -120,6 +133,9 @@ type Handler struct {
 	allocations allocations
 	valuables   valuableSets
 	wages       wageEntries
+	classes     handClasses
+	goals       savingsGoals
+	plans       savedPlans
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
@@ -143,6 +159,13 @@ func (h *Handler) WithValuables(v valuableSets) *Handler {
 // WithWages writes the wage payments' payslips into the export.
 func (h *Handler) WithWages(w wageEntries) *Handler {
 	h.wages = w
+	return h
+}
+
+// WithPlanning writes the family's own countries and sectors of papers, the
+// savings goals and the saved what-if plans into the export.
+func (h *Handler) WithPlanning(c handClasses, g savingsGoals, p savedPlans) *Handler {
+	h.classes, h.goals, h.plans = c, g, p
 	return h
 }
 
@@ -263,6 +286,11 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		}
 	}
 
+	// The family's own classes and the plans name papers too, a journal or
+	// not.
+	if err := h.addPlanning(ctx, &doc, spaceID, papers); err != nil {
+		return apitypes.SpaceExport{}, err
+	}
 	if err := h.addPapers(ctx, &doc, papers); err != nil {
 		return apitypes.SpaceExport{}, err
 	}
@@ -333,6 +361,65 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	doc.Allocation.Countries, doc.Allocation.Sectors = allocation.TargetsAPI(targets.Countries), allocation.TargetsAPI(targets.Sectors)
 	doc.Allocation.Brokers, doc.Allocation.Banks = allocation.TargetsAPI(targets.Brokers), allocation.TargetsAPI(targets.Banks)
 	return doc, nil
+}
+
+// addPlanning adds the family's own countries and sectors of papers, the
+// savings goals and the saved plans, noting the papers they name.
+func (h *Handler) addPlanning(ctx context.Context, doc *apitypes.SpaceExport, spaceID uuid.UUID, papers map[uuid.UUID]bool) error {
+	doc.InstrumentClasses, doc.SavingsGoals, doc.AllocationPlans = []apitypes.ExportInstrumentClass{}, []apitypes.ExportSavingsGoal{}, []apitypes.AllocationSavedPlan{}
+	if h.classes != nil {
+		list, err := h.classes.ByHand(ctx, spaceID)
+		if err != nil {
+			return err
+		}
+		for _, c := range list {
+			doc.InstrumentClasses = append(doc.InstrumentClasses, apitypes.ExportInstrumentClass{
+				InstrumentId: c.Instrument, Country: of(c.Country), Sector: of(c.Sector),
+			})
+			papers[c.Instrument] = true
+		}
+	}
+	if h.goals != nil {
+		list, err := h.goals.Goals(ctx, spaceID)
+		if err != nil {
+			return err
+		}
+		for _, g := range list {
+			out := apitypes.ExportSavingsGoal{
+				Id: g.ID, Name: g.Name, TargetMinor: of(g.Target), MonthlyMinor: of(g.Monthly), YieldPercent: g.Yield.StringFixed(2),
+				Position: g.Position, TargetOn: nullable.NewNullNullable[string](), Funds: []apitypes.ExportGoalFund{},
+			}
+			if g.TargetOn != nil {
+				out.TargetOn = nullable.NewNullableWithValue(g.TargetOn.Format(time.DateOnly))
+			}
+			for _, f := range g.Funds {
+				out.Funds = append(out.Funds, apitypes.ExportGoalFund{AccountId: f.Account, AmountMinor: of(f.Minor)})
+			}
+			doc.SavingsGoals = append(doc.SavingsGoals, out)
+		}
+	}
+	if h.plans != nil {
+		list, err := h.plans.Plans(ctx, spaceID)
+		if err != nil {
+			return err
+		}
+		for _, p := range list {
+			doc.AllocationPlans = append(doc.AllocationPlans, allocation.PlanAPI(p))
+			for _, op := range p.Ops {
+				if op.Instrument != nil {
+					papers[*op.Instrument] = true
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func of[T any](p *T) nullable.Nullable[T] {
+	if p == nil {
+		return nullable.NewNullNullable[T]()
+	}
+	return nullable.NewNullableWithValue(*p)
 }
 
 // addPapers adds the papers the journals name, the registry's events about

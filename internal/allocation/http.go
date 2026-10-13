@@ -181,23 +181,28 @@ func (h *Handler) writePlans(w http.ResponseWriter, r *http.Request, spaceID uui
 	}
 	out := apitypes.AllocationSavedPlans{Plans: make([]apitypes.AllocationSavedPlan, 0, len(plans))}
 	for _, p := range plans {
-		sp := apitypes.AllocationSavedPlan{Id: p.ID, Name: p.Name, SavedAt: p.SavedAt, Operations: make([]apitypes.AllocationPlanOperation, 0, len(p.Ops))}
-		for _, op := range p.Ops {
-			o := apitypes.AllocationPlanOperation{
-				Kind: apitypes.AllocationPlanOperationKind(op.Kind), AccountId: op.Account, Currency: op.Currency, AmountMinor: op.Minor,
-				ToAccountId: nullable.NewNullNullable[uuid.UUID](), InstrumentId: nullable.NewNullNullable[uuid.UUID](),
-			}
-			if op.To != nil {
-				o.ToAccountId = nullable.NewNullableWithValue(*op.To)
-			}
-			if op.Instrument != nil {
-				o.InstrumentId = nullable.NewNullableWithValue(*op.Instrument)
-			}
-			sp.Operations = append(sp.Operations, o)
-		}
-		out.Plans = append(out.Plans, sp)
+		out.Plans = append(out.Plans, PlanAPI(p))
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// PlanAPI is a saved plan as the API writes it.
+func PlanAPI(p SavedPlan) apitypes.AllocationSavedPlan {
+	sp := apitypes.AllocationSavedPlan{Id: p.ID, Name: p.Name, SavedAt: p.SavedAt, Operations: make([]apitypes.AllocationPlanOperation, 0, len(p.Ops))}
+	for _, op := range p.Ops {
+		o := apitypes.AllocationPlanOperation{
+			Kind: apitypes.AllocationPlanOperationKind(op.Kind), AccountId: op.Account, Currency: op.Currency, AmountMinor: op.Minor,
+			ToAccountId: nullable.NewNullNullable[uuid.UUID](), InstrumentId: nullable.NewNullNullable[uuid.UUID](),
+		}
+		if op.To != nil {
+			o.ToAccountId = nullable.NewNullableWithValue(*op.To)
+		}
+		if op.Instrument != nil {
+			o.InstrumentId = nullable.NewNullableWithValue(*op.Instrument)
+		}
+		sp.Operations = append(sp.Operations, o)
+	}
+	return sp
 }
 
 func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {

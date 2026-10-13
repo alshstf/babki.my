@@ -3612,7 +3612,7 @@ components:
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     SpaceExport:
       type: object
-      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts, allocation, wage_entries]
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts, allocation, wage_entries, instrument_classes, savings_goals, allocation_plans]
       properties:
         format: { type: string, enum: [babki.my/space-export] }
         version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
@@ -3665,6 +3665,43 @@ components:
           type: array
           description: "Wage payments' gross and withheld tax written from their payslips; operation_id names the row"
           items: { $ref: "#/components/schemas/ExportWageEntry" }
+        instrument_classes:
+          type: array
+          description: "Papers' country of risk and sector the family set itself (decision Р-46); null keeps the source's"
+          items: { $ref: "#/components/schemas/ExportInstrumentClass" }
+        savings_goals:
+          type: array
+          description: "The savings goals as entered, in their order (decision Р-44)"
+          items: { $ref: "#/components/schemas/ExportSavingsGoal" }
+        allocation_plans:
+          type: array
+          description: "The what-if plans the family saved (decision Р-48)"
+          items: { $ref: "#/components/schemas/AllocationSavedPlan" }
+    ExportInstrumentClass:
+      type: object
+      required: [instrument_id, country, sector]
+      properties:
+        instrument_id: { type: string, format: uuid }
+        country: { type: string, nullable: true }
+        sector: { type: string, nullable: true }
+    ExportSavingsGoal:
+      type: object
+      required: [id, name, target_minor, target_on, monthly_minor, yield_percent, position, funds]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        target_minor: { type: integer, format: int64, nullable: true }
+        target_on: { type: string, nullable: true }
+        monthly_minor: { type: integer, format: int64, nullable: true }
+        yield_percent: { type: string }
+        position: { type: integer }
+        funds: { type: array, items: { $ref: "#/components/schemas/ExportGoalFund" } }
+    ExportGoalFund:
+      type: object
+      required: [account_id, amount_minor]
+      properties:
+        account_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64, nullable: true, description: "A sum out of the account in the base currency; null: the whole account" }
     ExportWageEntry:
       type: object
       required: [operation_id, gross_minor, withheld_minor]

@@ -23,6 +23,7 @@ import (
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
@@ -35,10 +36,11 @@ import (
 )
 
 type stack struct {
-	url string
-	c   *http.Client
-	md  *marketdata.Store
-	ca  *corporateaction.Store
+	url   string
+	c     *http.Client
+	goals *goals.Service
+	md    *marketdata.Store
+	ca    *corporateaction.Store
 }
 
 func newStack(t *testing.T) stack {
@@ -64,9 +66,12 @@ func newStack(t *testing.T) stack {
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
 	taxSvc := taxyear.NewService(accStore, nil, famStore, md).WithEarnings(opStore, category.NewStore(pool)).WithEntries(pool, opStore)
+	allocSvc, goalsSvc := allocation.NewService(pool, nil), goals.NewService(pool, nil, accStore)
+	allocation.NewHandler(allocSvc, auth, sm).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
 		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore, category.NewStore(pool), operation.NewService(opStore)),
-		allocation.NewService(pool, nil), auth, sm).WithValuables(valuables.NewService(pool, accStore, md)).WithWages(taxSvc).Mount(srv)
+		allocSvc, auth, sm).WithValuables(valuables.NewService(pool, accStore, md)).WithWages(taxSvc).
+		WithPlanning(instStore, goalsSvc, allocSvc).Mount(srv)
 	valuables.NewHandler(valuables.NewService(pool, accStore, md), auth, sm).Mount(srv)
 	taxyear.NewHandler(taxSvc, auth, sm).Mount(srv)
 
@@ -75,7 +80,7 @@ func newStack(t *testing.T) stack {
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
 	post(t, c, ts.URL+"/api/v1/setup", `{"space_name":"Семья","username":"alex","display_name":"Алекс","password":"secret123"}`, http.StatusCreated)
-	return stack{url: ts.URL, c: c, md: md, ca: ca}
+	return stack{url: ts.URL, c: c, goals: goalsSvc, md: md, ca: ca}
 }
 
 func post(t *testing.T, c *http.Client, url, body string, want int) map[string]any {
@@ -455,5 +460,60 @@ func TestTheExportCarriesValuables(t *testing.T) {
 				t.Errorf("current: %s", a.Valuables)
 			}
 		}
+	}
+}
+
+// What the family planned is the family's too: its own country and sector of a
+// paper no journal holds, a savings goal on a whole account and a sum out of
+// another, a saved plan to buy that paper — and the paper with them.
+func TestTheExportCarriesThePlans(t *testing.T) {
+	s := newStack(t)
+	broker := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Брокер","type":"brokerage","currency":"RUB"}`, http.StatusCreated)["id"].(string)
+	savings := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Накопительный","type":"savings","currency":"RUB"}`, http.StatusCreated)["id"].(string)
+	paper := post(t, s.c, s.url+"/api/v1/instruments", `{"type":"etf","name":"FinEx FXUS","ticker":"FXUS","isin":"IE00BD3QHZ91","currency":"RUB"}`, http.StatusCreated)["id"].(string)
+	req, _ := http.NewRequest(http.MethodPut, s.url+"/api/v1/instruments/"+paper+"/class", strings.NewReader(`{"country":"US","sector":null}`))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := s.c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("class: %v %v", resp, err)
+	}
+	post(t, s.c, s.url+"/api/v1/allocation/plans", `{"name":"Октябрь","operations":[{"kind":"buy","account_id":"`+broker+`","instrument_id":"`+paper+`","currency":"RUB","amount_minor":10000000}]}`, http.StatusOK)
+
+	var who struct {
+		SpaceID string `json:"space_id"`
+	}
+	if err := json.NewDecoder(get(t, s.c, s.url+"/api/v1/auth/me").Body).Decode(&who); err != nil {
+		t.Fatal(err)
+	}
+	target, part := int64(570_000_00), int64(70_000_00)
+	if _, err := s.goals.Save(t.Context(), uuid.MustParse(who.SpaceID), goals.Goal{
+		Name: "Подушка", Target: &target, Yield: decimal.NewFromInt(14),
+		Funds: []goals.Fund{{Account: uuid.MustParse(savings)}, {Account: uuid.MustParse(broker), Minor: &part}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Instruments []struct {
+			ID string `json:"id"`
+		} `json:"instruments"`
+		InstrumentClasses []map[string]any `json:"instrument_classes"`
+		SavingsGoals      []map[string]any `json:"savings_goals"`
+		AllocationPlans   []map[string]any `json:"allocation_plans"`
+	}
+	if err := json.NewDecoder(get(t, s.c, s.url+"/api/v1/export").Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.InstrumentClasses) != 1 || doc.InstrumentClasses[0]["country"] != "US" || doc.InstrumentClasses[0]["sector"] != nil {
+		t.Errorf("classes = %v", doc.InstrumentClasses)
+	}
+	if len(doc.SavingsGoals) != 1 || doc.SavingsGoals[0]["name"] != "Подушка" || doc.SavingsGoals[0]["yield_percent"] != "14.00" ||
+		len(doc.SavingsGoals[0]["funds"].([]any)) != 2 {
+		t.Errorf("goals = %v", doc.SavingsGoals)
+	}
+	if len(doc.AllocationPlans) != 1 || doc.AllocationPlans[0]["name"] != "Октябрь" {
+		t.Errorf("plans = %v", doc.AllocationPlans)
+	}
+	if len(doc.Instruments) != 1 || doc.Instruments[0].ID != paper {
+		t.Errorf("instruments = %v; the planned paper belongs with its plan", doc.Instruments)
 	}
 }
