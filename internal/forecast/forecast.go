@@ -2,8 +2,8 @@
 // the coming months (household stage 4, Р-24): the money on cards, current
 // and savings accounts and in cash today, and ahead of it the regular payments
 // the journal shows (internal/recurring) and the loans' scheduled payments
-// (internal/loan), day by day; when asked, the spending the budget's limits
-// expect (internal/budget). From it: the lowest point, and how much can be
+// (internal/loan), day by day; the bars' storages' fees (internal/valuables);
+// when asked, the spending the budget's limits expect (internal/budget). From it: the lowest point, and how much can be
 // spent before the next salary without going below zero. It owns no table.
 package forecast
 
@@ -27,6 +27,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/recurring"
+	"babki.my/babki/internal/valuables"
 )
 
 // Kind is where an event comes from.
@@ -39,6 +40,8 @@ const (
 	// KindBudget is what the limits expect to be spent, week by week: no
 	// account's, no payee's.
 	KindBudget Kind = "budget"
+	// KindStorage is a safe box's or a bank custody's fee for the bars.
+	KindStorage Kind = "storage"
 )
 
 // Event is one payment ahead. Amount is in Currency, signed as the journal
@@ -128,6 +131,10 @@ type budgets interface {
 	Expect(ctx context.Context, spaceID uuid.UUID, today, last time.Time) ([]budget.Expected, error)
 }
 
+type storages interface {
+	Storages(ctx context.Context, spaceID uuid.UUID) ([]valuables.StorageAt, error)
+}
+
 // Service builds forecasts.
 type Service struct {
 	accounts  accounts
@@ -137,12 +144,19 @@ type Service struct {
 	loans     loans
 	cards     cards
 	budgets   budgets
+	storages  storages
 	rates     marketdata.RateSource
 	now       func() time.Time
 }
 
 func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c cards, b budgets, rates marketdata.RateSource) *Service {
 	return &Service{accounts: acc, positions: pos, spaces: sp, regulars: reg, loans: l, cards: c, budgets: b, rates: rates, now: time.Now}
+}
+
+// WithStorages puts the bars' storages' fees in the forecast.
+func (s *Service) WithStorages(st storages) *Service {
+	s.storages = st
+	return s
 }
 
 // Of is the space's forecast for the given number of days from today; with
@@ -254,6 +268,16 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 		}
 		mark, byBalance := markedOn[p.AccountID]
 		events = append(events, occurrences(p, today, end, byBalance && !mark.Before(p.Next))...)
+	}
+
+	if s.storages != nil {
+		list, err := s.storages.Storages(ctx, spaceID)
+		if err != nil {
+			return Forecast{}, err
+		}
+		for _, st := range list {
+			events = append(events, fees(st, payments, today, end)...)
+		}
 	}
 
 	for i := range events {
@@ -383,6 +407,44 @@ func occurrences(p recurring.Payment, today, end time.Time, inBalance bool) []Ev
 		}
 	}
 	for ; on.Before(end); on = p.Cadence.After(on) {
+		out = append(out, ev(on, false))
+	}
+	return out
+}
+
+// fees are a storage's payments from today to end. A safe box's rent is paid
+// ahead for the term, so the first is on the term's end — the renewal, today
+// when it has passed — then one a period. None without a term or a fee, or
+// when the journal repeats a payment of about the fee at the fee's pace: then
+// it is the same payment, in the forecast already.
+func fees(st valuables.StorageAt, payments []recurring.Payment, today, end time.Time) []Event {
+	s := st.Storage
+	if s.Until == nil || s.FeeMinor == nil || *s.FeeMinor <= 0 || s.FeePeriod == nil {
+		return nil
+	}
+	cadence := recurring.Monthly
+	if *s.FeePeriod == valuables.FeeYear {
+		cadence = recurring.Yearly
+	}
+	fee := *s.FeeMinor
+	for _, p := range payments {
+		if p.Cadence == cadence && p.Currency == st.Currency && p.Amount < 0 && !p.Hidden &&
+			4*fee <= -5*p.Amount && -4*p.Amount <= 5*fee {
+			return nil
+		}
+	}
+	ev := func(on time.Time, overdue bool) Event {
+		return Event{On: on, Name: st.Name, Kind: KindStorage, AccountID: st.AccountID, Amount: -fee, Currency: st.Currency, Overdue: overdue}
+	}
+	var out []Event
+	on := *s.Until
+	if on.Before(today) {
+		out = append(out, ev(today, true))
+		for !on.After(today) {
+			on = cadence.After(on)
+		}
+	}
+	for ; on.Before(end); on = cadence.After(on) {
 		out = append(out, ev(on, false))
 	}
 	return out

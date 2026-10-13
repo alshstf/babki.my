@@ -412,6 +412,7 @@ const (
 	ForecastEventKindCashback ForecastEventKind = "cashback"
 	ForecastEventKindLoan     ForecastEventKind = "loan"
 	ForecastEventKindRegular  ForecastEventKind = "regular"
+	ForecastEventKindStorage  ForecastEventKind = "storage"
 )
 
 // Valid indicates whether the value is a known member of the ForecastEventKind enum.
@@ -424,6 +425,8 @@ func (e ForecastEventKind) Valid() bool {
 	case ForecastEventKindLoan:
 		return true
 	case ForecastEventKindRegular:
+		return true
+	case ForecastEventKindStorage:
 		return true
 	default:
 		return false
@@ -3481,7 +3484,7 @@ type ForecastEvent struct {
 	// InBaseMinor The same in the base currency at today's rate
 	InBaseMinor int64 `json:"in_base_minor"`
 
-	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days
+	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period
 	Kind ForecastEventKind `json:"kind"`
 
 	// Name The payee, or the loan account's name; empty for the budget's
@@ -3494,7 +3497,7 @@ type ForecastEvent struct {
 	Overdue bool `json:"overdue"`
 }
 
-// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days
+// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period
 type ForecastEventKind string
 
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.

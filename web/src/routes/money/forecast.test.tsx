@@ -94,6 +94,12 @@ describe("ForecastCard", () => {
     expect(screen.getByTestId("forecast-chart")).toBeTruthy();
   });
 
+  it("names a safe box's rent", async () => {
+    show(forecast({ events: [event("2026-11-20", "Ячейка ВТБ", -24_000_00, { kind: "storage" })] }));
+    const items = (await screen.findByTestId("forecast-events")).querySelectorAll("li");
+    expect(norm(items[0].textContent ?? "")).toMatch(/Ячейка ВТБ · плата за ячейку или хранение/);
+  });
+
   it("shows what can be spent when the money stays above zero", async () => {
     show(forecast({ free_until_income_minor: 12_000_00 }));
     expect(norm((await screen.findByTestId("forecast-free")).textContent ?? "")).toMatch(/12 000,00 ₽$/);

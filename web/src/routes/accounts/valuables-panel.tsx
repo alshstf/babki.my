@@ -362,6 +362,7 @@ function StorageDialog({ accountId, storage, onClose }: { accountId: string; sto
                     <SelectItem value="year">{t("valuables.perYear")}</SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="basis-full text-xs text-muted-foreground">{t("valuables.feeHint")}</p>
               </div>
             </>
           )}
