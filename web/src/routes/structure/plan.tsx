@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/api/accounts";
 import { useIntermediaries } from "@/api/intermediaries";
+import { useMembers } from "@/api/members";
 import { useWhatIf, type AllocationPlanOperation, type AllocationWhatIf } from "@/api/allocation";
 import type { Instrument } from "@/api/instruments";
 import { currencyName, kindName } from "@/lib/allocation-names";
@@ -251,6 +252,7 @@ function Result({ data }: { data: AllocationWhatIf }) {
   const [all, setAll] = useState(false);
   const c = data.base_currency;
   const intermediaries = useIntermediaries();
+  const members = useMembers();
   const title = (d: string) =>
     d === "kind"
       ? t("plan.cuts.kind")
@@ -277,9 +279,15 @@ function Result({ data }: { data: AllocationWhatIf }) {
   const verdict = (v: string) =>
     v === "closer" ? t("plan.verdicts.closer") : v === "further" ? t("plan.verdicts.further") : v === "same" ? t("plan.verdicts.same") : t("plan.verdicts.none");
   const short = data.cuts.find((x) => x.dimension === "kind")?.rows.find((r) => r.key === "broker_cash" && r.after_minor < 0);
+  const person = (id: string) => members.data?.find((m) => m.id === id)?.display_name ?? "";
   return (
     <div className="grid gap-3" data-testid="plan-result">
       {short && <p className="text-sm text-amber-700 dark:text-amber-400">{t("plan.short", { amount: formatMinorCompact(-short.after_minor, c) })}</p>}
+      {data.uninsured.map((u) => (
+        <p key={`${u.user_id}-${u.bank}`} className="text-sm text-amber-700 dark:text-amber-400" data-testid="plan-uninsured">
+          {t("plan.uninsured", { person: person(u.user_id), bank: holder(u.bank), amount: formatMinorCompact(u.after_minor, c) })}
+        </p>
+      ))}
       {data.cuts.map((cut) => {
         const rows = cut.rows.filter((r) => all || r.before_minor !== r.after_minor);
         if (rows.length === 0) return null;

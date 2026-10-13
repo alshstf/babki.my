@@ -3897,10 +3897,11 @@ components:
         amount_minor: { type: integer, format: int64, minimum: 1, description: "The sum bought, sold, put in, taken out or moved" }
     AllocationWhatIf:
       type: object
-      required: [base_currency, cuts, sales, tax_minor, tax_rate, missing_rates]
+      required: [base_currency, cuts, uninsured, sales, tax_minor, tax_rate, missing_rates]
       properties:
         base_currency: { type: string }
         cuts: { type: array, items: { $ref: "#/components/schemas/AllocationCut" }, description: "kind, currency, country, sector, broker, bank — in that order" }
+        uninsured: { type: array, items: { $ref: "#/components/schemas/AllocationUninsured" }, description: "A person's money in a bank whose part over the deposit insurance limit the plan raises (decision Р-47)" }
         sales: { type: array, items: { $ref: "#/components/schemas/AllocationPaperSale" } }
         tax_minor: { type: integer, format: int64, nullable: true, description: "The sales' tax at the rules' rate on the gain not freed, gains and losses offset; null when a sale's gain is not known or the rules estimate none" }
         tax_rate: { type: string, nullable: true, description: "Decimal percent" }
@@ -3922,6 +3923,14 @@ components:
         share_after: { type: string }
         target: { type: string, nullable: true, description: "The target — for countries and sectors the ceiling" }
         verdict: { type: string, enum: [closer, further, same, none], description: "Closer to the target or under the ceiling by more, further from it, the same, or no target" }
+    AllocationUninsured:
+      type: object
+      required: [user_id, bank, before_minor, after_minor]
+      properties:
+        user_id: { type: string, format: uuid }
+        bank: { type: string, description: "The bank's id in GET /intermediaries" }
+        before_minor: { type: integer, format: int64, description: "Over the limit before the plan" }
+        after_minor: { type: integer, format: int64, description: "Over the limit after it" }
     AllocationPaperSale:
       type: object
       required: [instrument_id, gain_minor, free_minor, known]

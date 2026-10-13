@@ -3006,6 +3006,8 @@ export interface components {
             base_currency: string;
             /** @description kind, currency, country, sector, broker, bank — in that order */
             cuts: components["schemas"]["AllocationCut"][];
+            /** @description A person's money in a bank whose part over the deposit insurance limit the plan raises (decision Р-47) */
+            uninsured: components["schemas"]["AllocationUninsured"][];
             sales: components["schemas"]["AllocationPaperSale"][];
             /**
              * Format: int64
@@ -3037,6 +3039,22 @@ export interface components {
              * @enum {string}
              */
             verdict: "closer" | "further" | "same" | "none";
+        };
+        AllocationUninsured: {
+            /** Format: uuid */
+            user_id: string;
+            /** @description The bank's id in GET /intermediaries */
+            bank: string;
+            /**
+             * Format: int64
+             * @description Over the limit before the plan
+             */
+            before_minor: number;
+            /**
+             * Format: int64
+             * @description Over the limit after it
+             */
+            after_minor: number;
         };
         AllocationPaperSale: {
             /** Format: uuid */

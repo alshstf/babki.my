@@ -2315,6 +2315,19 @@ type AllocationTopUp struct {
 	WorthAfterMinor int64 `json:"worth_after_minor"`
 }
 
+// AllocationUninsured defines model for AllocationUninsured.
+type AllocationUninsured struct {
+	// AfterMinor Over the limit after it
+	AfterMinor int64 `json:"after_minor"`
+
+	// Bank The bank's id in GET /intermediaries
+	Bank string `json:"bank"`
+
+	// BeforeMinor Over the limit before the plan
+	BeforeMinor int64              `json:"before_minor"`
+	UserId      openapi_types.UUID `json:"user_id"`
+}
+
 // AllocationWhatIf defines model for AllocationWhatIf.
 type AllocationWhatIf struct {
 	BaseCurrency string `json:"base_currency"`
@@ -2329,6 +2342,9 @@ type AllocationWhatIf struct {
 
 	// TaxRate Decimal percent
 	TaxRate nullable.Nullable[string] `json:"tax_rate"`
+
+	// Uninsured A person's money in a bank whose part over the deposit insurance limit the plan raises (decision Р-47)
+	Uninsured []AllocationUninsured `json:"uninsured"`
 }
 
 // Arrival defines model for Arrival.

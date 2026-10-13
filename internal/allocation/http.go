@@ -144,7 +144,8 @@ func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {
 	out := apitypes.AllocationWhatIf{
 		BaseCurrency: wi.BaseCurrency, Cuts: make([]apitypes.AllocationCut, 0, len(wi.Cuts)),
 		Sales: make([]apitypes.AllocationPaperSale, 0, len(wi.Sales)), MissingRates: wi.MissingRates,
-		TaxMinor: nullable.NewNullNullable[int64](), TaxRate: nullable.NewNullNullable[string](),
+		Uninsured: make([]apitypes.AllocationUninsured, 0, len(wi.Uninsured)),
+		TaxMinor:  nullable.NewNullNullable[int64](), TaxRate: nullable.NewNullNullable[string](),
 	}
 	if out.MissingRates == nil {
 		out.MissingRates = []string{}
@@ -162,6 +163,9 @@ func (h *Handler) handleWhatIf(w http.ResponseWriter, r *http.Request) {
 			cut.Rows = append(cut.Rows, row)
 		}
 		out.Cuts = append(out.Cuts, cut)
+	}
+	for _, u := range wi.Uninsured {
+		out.Uninsured = append(out.Uninsured, apitypes.AllocationUninsured{UserId: u.Person, Bank: u.Bank, BeforeMinor: u.Before, AfterMinor: u.After})
 	}
 	for _, s := range wi.Sales {
 		out.Sales = append(out.Sales, apitypes.AllocationPaperSale{InstrumentId: s.Instrument, GainMinor: s.Gain, FreeMinor: s.Free, Known: s.Known})
