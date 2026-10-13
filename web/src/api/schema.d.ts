@@ -1034,6 +1034,23 @@ export interface paths {
         patch: operations["updateMember"];
         trace?: never;
     };
+    "/api/v1/intermediaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The program's catalog of banks and brokers (decision Р-47): names and former names, a bank's Bank of Russia number and whether deposits with it are insured, a broker's bank and country. */
+        get: operations["listIntermediaries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts": {
         parameters: {
             query?: never;
@@ -2097,6 +2114,10 @@ export interface components {
              * @description Whose income the account's is for tax (decision Р-42); null: its personal owner (owner_user_id), else the space's owner.
              */
             tax_owner_user_id: string | null;
+            /** @description The bank or broker holding the account, an id of GET /intermediaries (decision Р-47): the family's pick, else the one its institution names; null when neither */
+            intermediary_id?: string | null;
+            /** @description The family picked intermediary_id rather than the program finding it by name */
+            intermediary_by_hand?: boolean;
             /**
              * @description Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active account with at least one operation that is a brokerage account not valued_by_balance, or an everyday account kept_by_operations — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere. Only brokerage accounts enter the family's return.
              * @enum {string}
@@ -2181,6 +2202,26 @@ export interface components {
             /** @description See AccountWithBalance.foreign_broker. Omitted, false. */
             foreign_broker?: boolean;
         };
+        Intermediaries: {
+            /** @description Date YYYY-MM-DD the banks were checked against the Bank of Russia's register */
+            checked_on: string;
+            intermediaries: components["schemas"]["Intermediary"][];
+        };
+        Intermediary: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: "bank" | "broker";
+            /** @description ISO 3166 two-letter; RU unless a broker abroad */
+            country: string;
+            /** @description Deposits with the bank are insured (up to the country's limit per person); false for brokers */
+            insured: boolean;
+            /** @description A bank's number at the Bank of Russia */
+            reg_number: number | null;
+            /** @description A broker's bank, an id of this catalog */
+            bank_id: string | null;
+            aliases: string[];
+        };
         UpdateAccountRequest: {
             /** @description Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states. */
             name?: string;
@@ -2201,6 +2242,8 @@ export interface components {
              * @description See AccountWithBalance.tax_owner_user_id. Omitted, it stays as it is; null gives the account back to its default owner for tax.
              */
             tax_owner_user_id?: string | null;
+            /** @description An id of GET /intermediaries. Omitted, it stays as it is; null finds it by the institution's name again. 400 for an id the catalog does not have. */
+            intermediary_id?: string | null;
         };
         SetBalanceRequest: {
             /** @description Date YYYY-MM-DD */
@@ -2480,6 +2523,8 @@ export interface components {
             foreign_broker: boolean;
             /** @description Whose the account is for tax when set apart from its owner; null otherwise */
             tax_owner_username: string | null;
+            /** @description The bank or broker the family picked from the catalog (decision Р-47); null when found by the institution's name */
+            intermediary_id?: string | null;
             /** Format: date-time */
             created_at: string;
             /** @description Balance marks, oldest first */
@@ -7732,6 +7777,27 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    listIntermediaries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Intermediaries"];
+                };
+            };
+            401: components["responses"]["Error"];
         };
     };
     listAccounts: {

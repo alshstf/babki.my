@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/intermediary"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/currency"
@@ -145,6 +146,12 @@ func toAPI(a WithBalance) apitypes.AccountWithBalance {
 	}
 	if a.TaxOwnerUserID != nil {
 		out.TaxOwnerUserId = nullable.NewNullableWithValue(*a.TaxOwnerUserID)
+	}
+	if i, byHand, ok := IntermediaryOf(a.Account); ok {
+		out.IntermediaryId = nullable.NewNullableWithValue(i.ID)
+		out.IntermediaryByHand = &byHand
+	} else {
+		out.IntermediaryId = nullable.NewNullNullable[string]()
 	}
 	if a.Balance != nil {
 		out.Balance = &apitypes.BalancePoint{
@@ -358,6 +365,19 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			owner = &v
 		}
 		upd.TaxOwnerUserID = &owner
+	}
+	if req.IntermediaryId.IsSpecified() {
+		var pick *string
+		if !req.IntermediaryId.IsNull() {
+			v := req.IntermediaryId.MustGet()
+			c, err := intermediary.Load()
+			if _, ok := c.ByID(v); err != nil || !ok {
+				httpjson.Error(w, http.StatusBadRequest, "intermediary_id is not in the catalog")
+				return
+			}
+			pick = &v
+		}
+		upd.Intermediary = &pick
 	}
 	a, err := h.store.Update(r.Context(), p.SpaceID, id, upd)
 	if err != nil {

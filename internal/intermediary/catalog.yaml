@@ -1,0 +1,57 @@
+# Банки и брокеры (решение Р-47 В). Банки сверены со справочником кредитных
+# организаций Банка России (веб-сервис CreditOrgInfo, 2026-10-14): номер, название,
+# статус «норм.». Банк, который принимает вклады граждан и работает, участвует в
+# системе страхования вкладов обязательно; у части банков, вошедших в неё позже,
+# в справочнике ЦБ нет даты вступления — это пробел данных, не исключение.
+# Ликвидированные (Росбанк № 2272, Почта Банк № 650, Хоум Банк № 316 — влиты в
+# другие банки) сюда не входят: счёт с таким названием выбирается руками.
+checked_on: 2026-10-14
+banks:
+  - { id: sber, name: Сбербанк, reg: 1481, aliases: [Сбер, ПАО Сбербанк, Sberbank, СберБанк] }
+  - { id: vtb, name: ВТБ, reg: 1000, aliases: [Банк ВТБ, VTB, Открытие, Банк Открытие, ФК Открытие] }
+  - { id: gazprombank, name: Газпромбанк, reg: 354, aliases: [Банк ГПБ, ГПБ, Gazprombank] }
+  - { id: alfa, name: Альфа-Банк, reg: 1326, aliases: [Альфа, Alfa-Bank, Alfa Bank, АЛЬФА-БАНК] }
+  - { id: tbank, name: Т-Банк, reg: 2673, aliases: [ТБанк, Тинькофф, Тинькофф Банк, T-Bank, Tinkoff] }
+  - { id: sovcombank, name: Совкомбанк, reg: 963, aliases: [Sovcombank, Халва] }
+  - { id: raiffeisen, name: Райффайзенбанк, reg: 3292, aliases: [Райффайзен, Raiffeisen, Raiffeisenbank] }
+  - { id: psb, name: ПСБ, reg: 3251, aliases: [Банк ПСБ, Промсвязьбанк, PSB] }
+  - { id: rshb, name: Россельхозбанк, reg: 3349, aliases: [РСХБ] }
+  - { id: mkb, name: МКБ, reg: 1978, aliases: [Московский кредитный банк, Credit Bank of Moscow] }
+  - { id: domrf, name: Банк ДОМ.РФ, reg: 2312, aliases: [ДОМ.РФ, Дом РФ] }
+  - { id: bspb, name: Банк «Санкт-Петербург», reg: 436, aliases: [Банк Санкт-Петербург, БСПБ] }
+  - { id: akbars, name: Ак Барс Банк, reg: 2590, aliases: [Ак Барс, АК БАРС] }
+  - { id: mtsbank, name: МТС Банк, reg: 2268, aliases: [МТС-Банк] }
+  - { id: renins, name: Ренессанс Кредит, reg: 3354, aliases: [Ренессанс, Renaissance Credit] }
+  - { id: otp, name: ОТП Банк, reg: 2766, aliases: [OTP Bank, ОТП] }
+  - { id: ozon, name: Ozon Банк, reg: 3542, aliases: [Озон Банк, ОЗОН Банк, Ozon] }
+  - { id: yandex, name: Яндекс Банк, reg: 3027, aliases: [Yandex Bank, Яндекс Пэй] }
+  - { id: wb, name: ВБ Банк, reg: 841, aliases: [Вайлдберриз Банк, Wildberries Банк, WB Банк] }
+  - { id: uralsib, name: Уралсиб, reg: 2275, aliases: [Банк Уралсиб, УРАЛСИБ] }
+  - { id: absolut, name: Абсолют Банк, reg: 2306, aliases: [Абсолют] }
+  - { id: metallinvest, name: Металлинвестбанк, reg: 2440, aliases: [] }
+  - { id: novikom, name: Новикомбанк, reg: 2546, aliases: [] }
+  - { id: crediteurope, name: Кредит Европа Банк, reg: 3311, aliases: [Credit Europe Bank] }
+  - { id: unicredit, name: ЮниКредит Банк, reg: 1, aliases: [ЮниКредит, UniCredit] }
+  - { id: loko, name: Локо-Банк, reg: 2707, aliases: [Локо Банк] }
+  - { id: tkb, name: ТКБ Банк, reg: 2210, aliases: [Транскапиталбанк, ТКБ] }
+  - { id: zenit, name: Банк Зенит, reg: 3255, aliases: [Зенит] }
+  - { id: expobank, name: Экспобанк, reg: 2998, aliases: [] }
+  - { id: avangard, name: Банк Авангард, reg: 2879, aliases: [Авангард] }
+# Брокеры: бумаги клиента хранятся отдельно от денег брокера; страхования
+# вкладов на брокерские счета нет. ИИС нового типа защищён до 1,4 млн ₽, если
+# брокер вошёл в систему гарантирования (с 2026 года) — участие пока не сверено.
+brokers:
+  - { id: tinvest, name: Т-Инвестиции, bank: tbank, aliases: [Тинькофф Инвестиции, T-Invest, Tinkoff Investments] }
+  - { id: sberinvest, name: Сбер Инвестиции, bank: sber, aliases: [СберИнвестиции, Сбербанк Инвестиции] }
+  - { id: vtbinvest, name: ВТБ Мои Инвестиции, bank: vtb, aliases: [ВТБ Инвестиции, Мои Инвестиции, Открытие Инвестиции, Открытие Брокер] }
+  - { id: alfainvest, name: Альфа-Инвестиции, bank: alfa, aliases: [Альфа Инвестиции] }
+  - { id: gpbinvest, name: Газпромбанк Инвестиции, bank: gazprombank, aliases: [ГПБ Инвестиции] }
+  - { id: psbinvest, name: ПСБ Брокер, bank: psb, aliases: [ПСБ Инвестиции] }
+  - { id: sovcominvest, name: Совкомбанк Инвестиции, bank: sovcombank, aliases: [] }
+  - { id: bcs, name: БКС, aliases: [БКС Мир инвестиций, БКС Брокер, Компания БКС, BCS] }
+  - { id: finam, name: Финам, aliases: [ФИНАМ, Finam] }
+  - { id: tsifra, name: Цифра брокер, aliases: [Цифра] }
+  - { id: aton, name: Атон, aliases: [Aton] }
+  - { id: newton, name: Ньютон Инвестиции, aliases: [Ньютон] }
+  - { id: freedom, name: Freedom Finance, country: KZ, aliases: [Freedom Finance Global, Freedom KZ, Фридом Финанс, Freedom24] }
+  - { id: ibkr, name: Interactive Brokers, country: US, aliases: [IBKR, Interactive Brokers LLC] }

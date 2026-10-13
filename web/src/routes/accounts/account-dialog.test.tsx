@@ -168,3 +168,41 @@ describe("AccountDialog — a foreign broker", () => {
     expect(screen.queryByLabelText("Иностранный брокер — налог в России не удерживает")).toBeNull();
   });
 });
+
+// Decision Р-47: the bank or broker holding the account — found by its name,
+// or picked from the catalog over it.
+describe("AccountDialog — the bank or broker", () => {
+  const catalog = {
+    checked_on: "2026-10-14",
+    intermediaries: [
+      { id: "tbank", name: "Т-Банк", kind: "bank", country: "RU", insured: true, reg_number: 2673, bank_id: null, aliases: [] },
+      { id: "alfa", name: "Альфа-Банк", kind: "bank", country: "RU", insured: true, reg_number: 1326, bank_id: null, aliases: [] },
+      { id: "tinvest", name: "Т-Инвестиции", kind: "broker", country: "RU", insured: false, reg_number: null, bank_id: "tbank", aliases: [] },
+    ],
+  };
+  const card = { ...account, type: "checking" as const, institution: "Тинькофф", intermediary_id: "tbank", intermediary_by_hand: false };
+
+  it("says which one the name found, and sends the one picked", async () => {
+    fetchMock.mockImplementation((input: Request) =>
+      Promise.resolve(new Response(JSON.stringify(new URL(input.url).pathname.endsWith("/intermediaries") ? catalog : card), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })),
+    );
+    open(card);
+    const pick = screen.getByRole("combobox", { name: "Банк или брокер из справочника" });
+    await vi.waitFor(() => expect(pick).toHaveTextContent("По названию выше: Т-Банк"));
+    fireEvent.keyDown(pick, { key: "Enter" });
+    expect(screen.queryByRole("option", { name: "Т-Инвестиции" })).toBeNull();
+    fireEvent.click(await screen.findByRole("option", { name: "Альфа-Банк" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    const patch = () =>
+      fetchMock.mock.calls.map((call) => call[0] as Request).find((request) => request.method === "PATCH");
+    await vi.waitFor(() => expect(patch()).toBeDefined());
+    expect(await patch()!.clone().json()).toMatchObject({ intermediary_id: "alfa" });
+  });
+
+  it("offers nothing for cash", () => {
+    open({ ...account, type: "cash" });
+    expect(screen.queryByRole("combobox", { name: "Банк или брокер из справочника" })).toBeNull();
+  });
+});
