@@ -30,8 +30,17 @@ fetchMock.mockImplementation(async (input: Request) => {
       papers_minor: 490_000_00, at_brokers_minor: 510_000_00,
       by_broker: [{ key: "tinvest", minor: 420_000_00 }, { key: "freedom", minor: 90_000_00 }],
       by_bank: [{ key: "tbank", minor: 70_000_00 }, { key: "-", minor: 30_000_00 }], at_banks_minor: 100_000_00,
+      insured_limit_minor: 1_400_000_00,
+      insurance: [
+        { user_id: "u-maria", bank: "tbank", held_minor: 1_900_000_00, insured_minor: 1_400_000_00, over_minor: 500_000_00, known: true },
+        { user_id: "u-alex", bank: "tbank", held_minor: 1_200_000_00, insured_minor: 1_200_000_00, over_minor: 0, known: true },
+        { user_id: "u-alex", bank: "-", held_minor: 300_000_00, insured_minor: 0, over_minor: 0, known: false },
+      ],
       unpriced: 1, missing_rates: [],
     });
+  }
+  if (url.pathname.endsWith("/members")) {
+    return json([{ id: "u-alex", username: "a", display_name: "Алекс", role: "owner" }, { id: "u-maria", username: "m", display_name: "Мария", role: "editor" }]);
   }
   if (url.pathname.endsWith("/intermediaries")) {
     return json({ checked_on: "2026-10-14", intermediaries: [
@@ -78,6 +87,11 @@ describe("StructurePage", () => {
     const banks = within(screen.getByTestId("structure-bank")).getAllByTestId("structure-slice");
     expect(banks[0]).toHaveTextContent(/Т-Банк.*70\s000.*70 %/);
     expect(banks[1]).toHaveTextContent(/Не из справочника.*30\s000.*30 %/);
+    // Deposit insurance by person and bank.
+    const insured = screen.getAllByTestId("insurance-row");
+    await waitFor(() => expect(insured[0]).toHaveTextContent(/Мария · Т-Банк1\s900\s000 ₽Не застраховано 500\s000 ₽ — застраховано 1\s400\s000 ₽/));
+    expect(insured[1]).toHaveTextContent(/Алекс · Т-Банк.*Всё застраховано/);
+    expect(insured[2]).toHaveTextContent(/Банк не из справочника/);
     expect(screen.getByText(/Бумаг без цены не учтено: 1/)).toBeTruthy();
 
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Оценка бумаг" }), { key: "Enter" });

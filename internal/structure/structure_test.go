@@ -385,3 +385,54 @@ func TestTheWorthComesApartByBrokerAndBank(t *testing.T) {
 		t.Errorf("by broker = %v", s.ByBroker)
 	}
 }
+
+type ruSpace struct{ owner uuid.UUID }
+
+func (ruSpace) SpaceByID(context.Context, uuid.UUID) (family.Space, error) {
+	return family.Space{BaseCurrency: "RUB", TaxResidency: "RU"}, nil
+}
+
+func (r ruSpace) ListMembers(context.Context, uuid.UUID) ([]family.Member, error) {
+	return []family.Member{{User: family.User{ID: r.owner}, Role: family.RoleOwner}}, nil
+}
+
+// Deposit insurance by person and bank (decision Р-47), the note's family:
+// Maria's card, savings and deposit at Т-Банк come to 1 900 000 — 500 000 of
+// it over the 1 400 000 insured; Alex's deposit there is his own limit; a
+// shared savings account at a bank the catalog does not know is not counted;
+// cash and a credit card's debt are no deposit.
+func TestDepositsAgainstTheirInsurance(t *testing.T) {
+	alex, maria := uuid.New(), uuid.New()
+	bal := func(v int64) *account.BalancePoint { return &account.BalancePoint{AmountMinor: v} }
+	acc := func(typ account.Type, inst string, owner *uuid.UUID, v int64) account.WithBalance {
+		return account.WithBalance{Account: account.Account{ID: uuid.New(), Type: typ, Currency: "RUB", Status: account.StatusActive, Institution: inst, OwnerUserID: owner}, Balance: bal(v)}
+	}
+	accounts := fakeAccounts{
+		acc(account.TypeChecking, "Тинькофф", &maria, 300_000_00),
+		acc(account.TypeSavings, "Т-Банк", &maria, 1_100_000_00),
+		acc(account.TypeDeposit, "Т-Банк", &maria, 500_000_00),
+		acc(account.TypeDeposit, "Т-Банк", &alex, 1_200_000_00),
+		acc(account.TypeSavings, "Свой банк", nil, 300_000_00),
+		acc(account.TypeCash, "", &alex, 20_000_00),
+		acc(account.TypeCreditCard, "Альфа-Банк", &alex, -40_000_00),
+	}
+	s, err := structure.NewService(accounts, fakePositions{}, ruSpace{alex}, fakeRates{}).WithMembers(ruSpace{alex}).Of(t.Context(), uuid.New(), structure.Liquid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.InsuredLimit != 1_400_000_00 || len(s.Insurance) != 3 {
+		t.Fatalf("insurance = %+v, limit %d", s.Insurance, s.InsuredLimit)
+	}
+	m := s.Insurance[0]
+	if m.Person != maria || m.Bank != "tbank" || m.Held != 1_900_000_00 || m.Insured != 1_400_000_00 || m.Over != 500_000_00 || !m.Known {
+		t.Errorf("Maria at Т-Банк = %+v", m)
+	}
+	a := s.Insurance[1]
+	if a.Person != alex || a.Held != 1_200_000_00 || a.Over != 0 || a.Insured != 1_200_000_00 {
+		t.Errorf("Alex at Т-Банк = %+v", a)
+	}
+	u := s.Insurance[2]
+	if u.Person != alex || u.Bank != "-" || u.Known || u.Insured != 0 {
+		t.Errorf("the unknown bank = %+v", u)
+	}
+}

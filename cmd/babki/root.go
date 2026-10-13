@@ -153,7 +153,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	accHandler.Mount(srv)
 	intermediary.NewHandler(famAuth, famSM).Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
-	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore)
+	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore).WithMembers(famStore)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore).WithCatalog(instStore, converter)

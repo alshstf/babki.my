@@ -2871,6 +2871,29 @@ export interface components {
             country: string | null;
             sector: string | null;
         };
+        StructureInsurance: {
+            /**
+             * Format: uuid
+             * @description Whose: a personal account's owner, a shared one's person for tax, else the space's owner
+             */
+            user_id: string;
+            /** @description The bank's id in GET /intermediaries, «-» for one not known */
+            bank: string;
+            /**
+             * Format: int64
+             * @description Cards, current and savings accounts, deposits at the bank
+             */
+            held_minor: number;
+            /** Format: int64 */
+            insured_minor: number;
+            /**
+             * Format: int64
+             * @description What is above the limit, not insured
+             */
+            over_minor: number;
+            /** @description False for a bank the catalog does not know: insured_minor and over_minor are not counted */
+            known: boolean;
+        };
         StructureSlice: {
             /** @description The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, the two-letter country of risk — empty for what is not a paper, «-» for a paper with no ISIN and no known country —, the sector (financials, energy, it, consumer, telecom, utilities, materials, industrials, health_care, real_estate, government, municipal, funds_equity, funds_bonds, funds_money, funds_gold, funds_mixed; empty for what is not a paper, «-» for an unknown sector), or where it is held (domestic, foreign_paper, foreign_broker; empty for what is not at a broker) */
             key: string;
@@ -3567,6 +3590,13 @@ export interface components {
              * @description What the banks hold: the base of the shares by bank
              */
             at_banks_minor: number;
+            /** @description What each person holds in each bank against deposit insurance (decision Р-47), the most held first; empty when the country's limit is not counted or the base currency is not the limit's */
+            insurance: components["schemas"]["StructureInsurance"][];
+            /**
+             * Format: int64
+             * @description What insurance pays a person per bank, in the base currency; 0 when not counted
+             */
+            insured_limit_minor: number;
             /** @description Papers left out for want of a price */
             unpriced: number;
             /** @description Currencies left out for want of today's rate */

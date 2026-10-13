@@ -57,6 +57,17 @@ func (h *Handler) handleStructure(w http.ResponseWriter, r *http.Request) {
 		BySector: slicesAPI(s.BySector), ByHolding: slicesAPI(s.ByHolding),
 		PapersMinor: s.Papers, AtBrokersMinor: s.AtBrokers,
 		ByBroker: slicesAPI(s.ByBroker), ByBank: slicesAPI(s.ByBank), AtBanksMinor: s.AtBanks,
+		Insurance: insuranceAPI(s.Insurance), InsuredLimitMinor: s.InsuredLimit,
 		Unpriced: s.Unpriced, MissingRates: s.MissingRates,
 	})
+}
+
+func insuranceAPI(in []InsuranceRow) []apitypes.StructureInsurance {
+	out := make([]apitypes.StructureInsurance, 0, len(in))
+	for _, r := range in {
+		out = append(out, apitypes.StructureInsurance{
+			UserId: r.Person, Bank: r.Bank, HeldMinor: r.Held, InsuredMinor: r.Insured, OverMinor: r.Over, Known: r.Known,
+		})
+	}
+	return out
 }
