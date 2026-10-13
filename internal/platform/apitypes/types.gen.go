@@ -5535,7 +5535,7 @@ type ValuablesItem struct {
 	// Sealed Its maker's packing is whole
 	Sealed bool `json:"sealed"`
 
-	// SellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
+	// SellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal; no_price: nothing to value it by yet
 	SellBy ValuablesItemSellBy `json:"sell_by"`
 
 	// SellMinor What it would sell for now (decision Р-40 Г), in roubles' minor units; null before there is a price
@@ -5557,7 +5557,7 @@ type ValuablesItemHardToSell string
 // ValuablesItemKind account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial
 type ValuablesItemKind string
 
-// ValuablesItemSellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
+// ValuablesItemSellBy bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal; no_price: nothing to value it by yet
 type ValuablesItemSellBy string
 
 // ValuablesItemInput defines model for ValuablesItemInput.
@@ -5680,7 +5680,7 @@ type ValuablesStorage struct {
 	// Bank The bank of a safe box or custody; empty otherwise
 	Bank string `json:"bank"`
 
-	// BuybackPercent Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal and weight
+	// BuybackPercent Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal
 	BuybackPercent nullable.Nullable[string] `json:"buyback_percent"`
 
 	// FeeMinor What the box or the custody costs a period, in roubles' minor units; null with fee_period
