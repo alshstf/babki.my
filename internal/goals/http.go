@@ -123,6 +123,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, spaceID uuid.UUI
 		return
 	}
 	out := apitypes.Goals{BaseCurrency: base, Goals: make([]apitypes.Goal, 0, len(list))}
+	out.MonthlyMinor, out.BrokerMonthlyMinor = Contributions(list)
 	for _, v := range list {
 		g := apitypes.Goal{
 			Id: v.ID, Name: v.Name, TargetMinor: of(v.Target), MonthlyMinor: of(v.Monthly), YieldPercent: v.Yield.StringFixed(2),

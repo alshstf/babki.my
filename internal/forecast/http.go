@@ -64,7 +64,7 @@ func (h *Handler) handleForecast(w http.ResponseWriter, r *http.Request) {
 	out := apitypes.Forecast{
 		BaseCurrency: f.BaseCurrency, Days: f.Days, StartMinor: f.Start, AccountsCounted: f.Accounts,
 		Series: make([]apitypes.ForecastDay, 0, len(f.Series)), Events: make([]apitypes.ForecastEvent, 0, len(f.Events)),
-		Lowest: day(f.Lowest), MissingRates: f.MissingRates,
+		Lowest: day(f.Lowest), ReservedMinor: f.Reserved, MissingRates: f.MissingRates,
 		NextIncome:           nullable.NewNullNullable[apitypes.ForecastEvent](),
 		FreeUntilIncomeMinor: nullable.NewNullNullable[int64](),
 	}

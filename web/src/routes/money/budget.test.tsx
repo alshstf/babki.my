@@ -33,13 +33,14 @@ const september: Budget = {
   planned_minor: 54_000_00, spent_minor: 49_600_00, left_minor: 4_400_00, unlimited_minor: 52_990_00, missing_rates: [],
 };
 
-function answer(role: string, budget: Budget) {
+function answer(role: string, budget: Budget, toGoals = 0) {
   fetchMock.mockImplementation((input: Request) => {
     const path = new URL(input.url).pathname;
     const json = (body: unknown, status = 200) =>
       Promise.resolve(new Response(body === null ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
     if (path.endsWith("/budget/limits")) return json(null, 204);
     if (path.endsWith("/budget")) return json(budget);
+    if (path.endsWith("/goals")) return json({ base_currency: "RUB", goals: [], monthly_minor: toGoals, broker_monthly_minor: 0 });
     if (path.endsWith("/categories")) return json(categories);
     if (path.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space: { id: "s", name: "S", base_currency: "RUB" } });
     return json([]);
@@ -118,6 +119,14 @@ describe("BudgetCard", () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([r]) => new URL((r as Request).url).searchParams.get("month") === d)).toBe(true),
     );
+  });
+
+  it("puts the savings goals' contributions aside from this month on", async () => {
+    answer("owner", september, 65_000_00);
+    show();
+    expect(norm((await screen.findByTestId("budget-goals")).textContent)).toBe("Отложить на цели: 65 000 ₽ в месяц — взносы целей накоплений.");
+    fireEvent.click(screen.getByRole("button", { name: "Предыдущий месяц" }));
+    await waitFor(() => expect(screen.queryByTestId("budget-goals")).toBeNull());
   });
 
   it("is nothing for a viewer while no limit is set", async () => {

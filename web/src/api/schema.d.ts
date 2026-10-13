@@ -2241,6 +2241,16 @@ export interface components {
         Goals: {
             base_currency: string;
             goals: components["schemas"]["Goal"][];
+            /**
+             * Format: int64
+             * @description What the goals not yet reached take a month, their contributions summed
+             */
+            monthly_minor: number;
+            /**
+             * Format: int64
+             * @description Of monthly_minor, the goals' with money on a brokerage account: a top-up to invest
+             */
+            broker_monthly_minor: number;
         };
         Goal: {
             /** Format: uuid */
@@ -4428,9 +4438,14 @@ export interface components {
             next_income: components["schemas"]["ForecastEvent"] | null;
             /**
              * Format: int64
-             * @description The lowest the money gets before next_income: what can be spent until then without going below zero (below zero: what is short)
+             * @description The lowest the money gets before next_income, less reserved_minor: what can be spent until then without going below zero or into the goals' money (below zero: what is short)
              */
             free_until_income_minor: number | null;
+            /**
+             * Format: int64
+             * @description Of the money today, what the savings goals set aside on these accounts (decision Р-44)
+             */
+            reserved_minor: number;
             /** @description Currencies left out for want of today's rate */
             missing_rates: string[];
         };

@@ -101,6 +101,11 @@ export function ForecastCard() {
             <div className={cn("text-2xl font-semibold tabular-nums", free < 0 && "text-amber-700 dark:text-amber-400")}>
               {free < 0 ? t("forecast.short", { amount: formatMinor(-free, c) }) : formatMinor(free, c)}
             </div>
+            {f.reserved_minor > 0 && (
+              <div className="text-xs text-muted-foreground" data-testid="forecast-reserved">
+                {t("forecast.reserved", { amount: formatMinor(f.reserved_minor, c) })}
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-sm text-muted-foreground" data-testid="forecast-no-income">

@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CategorySelect, categoryLabel } from "@/components/category-picker";
 import { useBudget, useSetBudgetLimit, type BudgetLine } from "@/api/budget";
+import { useGoals } from "@/api/goals";
 import { useCategories } from "@/api/categories";
 import { useSession } from "@/api/session";
 import { localToday } from "@/lib/dates";
@@ -39,6 +40,7 @@ export function BudgetCard() {
   const { t } = useTranslation();
   const [month, setMonth] = useState(() => localToday().slice(0, 7));
   const budget = useBudget(month);
+  const goals = useGoals();
   const categories = useCategories();
   const { data: session } = useSession();
   const canEdit = session?.role === "owner" || session?.role === "editor";
@@ -47,6 +49,7 @@ export function BudgetCard() {
   if (!b || (b.lines.length === 0 && !canEdit)) return null;
   const c = b.base_currency;
   const cats = categories.data ?? [];
+  const toGoals = goals.data?.monthly_minor ?? 0;
 
   return (
     <Card data-testid="money-budget">
@@ -147,6 +150,12 @@ export function BudgetCard() {
               </TableBody>
             </Table>
           </>
+        )}
+        {/* The goals' contributions (Р-44): from this month on, not in the past. */}
+        {toGoals > 0 && month >= localToday().slice(0, 7) && (
+          <p className="text-sm text-muted-foreground" data-testid="budget-goals">
+            {t("goals.budgetLine", { amount: formatMinorCompact(toGoals, c) })}
+          </p>
         )}
         {b.missing_rates.length > 0 && (
           <Alert>

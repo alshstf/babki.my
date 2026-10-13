@@ -3760,7 +3760,7 @@ type Forecast struct {
 	Days            int             `json:"days"`
 	Events          []ForecastEvent `json:"events"`
 
-	// FreeUntilIncomeMinor The lowest the money gets before next_income: what can be spent until then without going below zero (below zero: what is short)
+	// FreeUntilIncomeMinor The lowest the money gets before next_income, less reserved_minor: what can be spent until then without going below zero or into the goals' money (below zero: what is short)
 	FreeUntilIncomeMinor nullable.Nullable[int64] `json:"free_until_income_minor"`
 	Lowest               ForecastDay              `json:"lowest"`
 
@@ -3769,6 +3769,9 @@ type Forecast struct {
 
 	// NextIncome The next salary: the next regular income of at least half the largest; null without one in sight
 	NextIncome nullable.Nullable[ForecastEvent] `json:"next_income"`
+
+	// ReservedMinor Of the money today, what the savings goals set aside on these accounts (decision Р-44)
+	ReservedMinor int64 `json:"reserved_minor"`
 
 	// Series Today and each day after, `days` of them
 	Series []ForecastDay `json:"series"`
@@ -3891,7 +3894,13 @@ type GoalInput struct {
 // Goals defines model for Goals.
 type Goals struct {
 	BaseCurrency string `json:"base_currency"`
-	Goals        []Goal `json:"goals"`
+
+	// BrokerMonthlyMinor Of monthly_minor, the goals' with money on a brokerage account: a top-up to invest
+	BrokerMonthlyMinor int64  `json:"broker_monthly_minor"`
+	Goals              []Goal `json:"goals"`
+
+	// MonthlyMinor What the goals not yet reached take a month, their contributions summed
+	MonthlyMinor int64 `json:"monthly_minor"`
 }
 
 // ImportAddedPaper defines model for ImportAddedPaper.

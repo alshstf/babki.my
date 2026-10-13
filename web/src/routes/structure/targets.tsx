@@ -19,6 +19,7 @@ import {
   type AllocationSale,
   type TopUpMoney,
 } from "@/api/allocation";
+import { useGoals } from "@/api/goals";
 import { useSession } from "@/api/session";
 import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -488,6 +489,9 @@ function TopUp({
   const { t } = useTranslation();
   const c = allocation.base_currency;
   const free = allocation.kinds.find((r) => r.key === "broker_cash")?.minor ?? 0;
+  // The savings goals' contributions on brokerage accounts (Р-44): a top-up
+  // the family has already planned.
+  const toBrokers = useGoals().data?.broker_monthly_minor ?? 0;
   const [fresh, setFresh] = useState("");
   const [useFree, setUseFree] = useState(false);
   const [fromBrokers, setFromBrokers] = useState(minorToInput(free));
@@ -526,6 +530,14 @@ function TopUp({
           <Label htmlFor="allocation-topup">{t("allocation.topUpAmount", { currency: c })}</Label>
           <Input id="allocation-topup" inputMode="decimal" className="w-40" value={fresh} onChange={(e) => setFresh(e.target.value)} />
         </div>
+        {toBrokers > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground" data-testid="allocation-topup-goals">
+            {t("goals.topUpGoals", { amount: formatMinorCompact(toBrokers, c) })}
+            <Button type="button" size="sm" variant="link" className="h-auto p-0 text-xs" onClick={() => setFresh(minorToInput(toBrokers))}>
+              {t("goals.topUpGoalsUse")}
+            </Button>
+          </div>
+        )}
         {free > 0 && (
           <div className="grid gap-1">
             <Label htmlFor="allocation-use-free" className="flex items-center gap-2 font-normal">

@@ -38,6 +38,7 @@ function forecast(over: Partial<Forecast> = {}): Forecast {
     lowest: { on: "2026-10-15", balance_minor: -40_956_90 },
     next_income: event("2026-11-05", "ООО «Ромашка»", 180_000_00),
     free_until_income_minor: -40_956_90,
+    reserved_minor: 0,
     missing_rates: [],
     ...over,
   };
@@ -103,6 +104,11 @@ describe("ForecastCard", () => {
   it("shows what can be spent when the money stays above zero", async () => {
     show(forecast({ free_until_income_minor: 12_000_00 }));
     expect(norm((await screen.findByTestId("forecast-free")).textContent ?? "")).toMatch(/12 000,00 ₽$/);
+  });
+
+  it("leaves the savings goals' money out of what can be spent", async () => {
+    show(forecast({ free_until_income_minor: 12_000_00, reserved_minor: 520_000_00 }));
+    expect(norm((await screen.findByTestId("forecast-reserved")).textContent ?? "")).toBe("не считая 520 000,00 ₽, отложенных на цели накоплений");
   });
 
   it("says when there is no regular income to count to", async () => {

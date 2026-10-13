@@ -13,6 +13,7 @@ import (
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
@@ -218,6 +219,50 @@ func TestAPaymentBeforeTheBalanceMarkIsInTheBalance(t *testing.T) {
 	}
 	if len(f.Events) != 1 || f.Events[0].On.Format(time.DateOnly) != "2026-11-06" || f.Events[0].Overdue {
 		t.Errorf("events = %+v, want only the rent of 6 November", f.Events)
+	}
+}
+
+type fakeGoals map[uuid.UUID]goals.Reserve
+
+func (f fakeGoals) SetAside(context.Context, uuid.UUID) (map[uuid.UUID]goals.Reserve, error) {
+	return f, nil
+}
+
+// The savings goals' money is not to be spent (Р-44): the whole savings
+// account of the cushion, 70 000 of the holiday's out of the current account
+// and, of a sum out of the cash larger than it, the cash there is, are left
+// out of what can be spent until the salary; the deposit's goal is not in
+// the money to live on at all.
+func TestTheGoalsMoneyIsNotToSpend(t *testing.T) {
+	acc := func(name string, typ account.Type, minor int64) account.WithBalance {
+		return account.WithBalance{
+			Account: account.Account{ID: uuid.New(), Name: name, Type: typ, Currency: "RUB", Status: account.StatusActive},
+			Balance: &account.BalancePoint{AsOf: d("2026-10-09"), AmountMinor: minor},
+		}
+	}
+	current, savings := acc("Текущий", account.TypeChecking, 150_000_00), acc("Накопительный", account.TypeSavings, 450_000_00)
+	cash, deposit := acc("Наличные", account.TypeCash, 20_000_00), acc("Вклад", account.TypeDeposit, 300_000_00)
+	svc := NewService(fakeAccounts{current, savings, cash, deposit}, fakePositions{}, fakeSpaces{},
+		fakeRegulars{
+			{Name: "Аренда", Cadence: recurring.Monthly, Amount: -30_000_00, Currency: "RUB", AccountID: current.ID, Next: d("2026-10-20")},
+			{Name: "Зарплата", Cadence: recurring.Monthly, Amount: 100_000_00, Currency: "RUB", AccountID: current.ID, Next: d("2026-11-05")},
+		},
+		fakeLoans{}, fakeCards{}, fakeBudgets{}, fakeRates{}).WithGoals(fakeGoals{
+		savings.ID: {Whole: true},
+		current.ID: {Minor: 70_000_00},
+		cash.ID:    {Minor: 1_000_000_00},
+		deposit.ID: {Whole: true},
+	})
+	svc.now = func() time.Time { return d("2026-10-10") }
+	f, err := svc.Of(context.Background(), uuid.New(), 40, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Start != 620_000_00 || f.Reserved != 540_000_00 || f.FreeUntilIncome == nil || *f.FreeUntilIncome != 50_000_00 {
+		t.Errorf("start %d, reserved %d, free %v; want 620 000, 540 000 and 50 000", f.Start, f.Reserved, f.FreeUntilIncome)
+	}
+	if f.Lowest.Balance != 590_000_00 {
+		t.Errorf("lowest = %+v; the goals' money is still there", f.Lowest)
 	}
 }
 

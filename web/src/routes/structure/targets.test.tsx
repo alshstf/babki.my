@@ -58,12 +58,13 @@ function rebalanceOf(taxMinor: number | null, sharesSale = sale(92_857_14, 92_85
   };
 }
 
-function answer(role: string, a: Allocation) {
+function answer(role: string, a: Allocation, toBrokers = 0) {
   fetchMock.mockImplementation((input: Request) => {
     const url = new URL(input.url);
     const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     if (url.pathname.endsWith("/auth/me")) return json({ user: { id: "u", username: "a", display_name: "A" }, role, space: { id: "s", name: "S", base_currency: "RUB" } });
     if (url.pathname.endsWith("/allocation/rebalance")) return json(rebalance);
+    if (url.pathname.endsWith("/goals")) return json({ base_currency: "RUB", goals: [], monthly_minor: toBrokers, broker_monthly_minor: toBrokers });
     if (url.pathname.endsWith("/allocation/mode")) return input.json().then((b: { mode: string }) => json({ ...a, mode: b.mode }));
     if (url.pathname.endsWith("/allocation/topup")) {
       const fromBrokers = Number(url.searchParams.get("from_brokers_minor") ?? 0);
@@ -119,6 +120,15 @@ describe("TargetsCard", () => {
     expect(norm((await screen.findByTestId("allocation")).textContent)).toMatch(/по полной оценке, с замороженными бумагами/);
     const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname.endsWith("/allocation"));
     expect(asked.every((u) => u.searchParams.get("valuation") === "full")).toBe(true);
+  });
+
+  it("offers the savings goals' contribution on brokerage accounts as the top-up", async () => {
+    answer("viewer", allocation, 30_000_00);
+    show();
+    const offer = await screen.findByTestId("allocation-topup-goals");
+    expect(norm(offer.textContent)).toBe("Взнос целей на брокерских счетах — 30 000 ₽ в месяцПодставить");
+    fireEvent.click(within(offer).getByRole("button", { name: "Подставить" }));
+    expect(norm((await screen.findByTestId("allocation-topup-total")).textContent)).toBe("К вложению: 30 000 ₽.");
   });
 
   it("shows on the kinds where a top-up goes, the brokers' free money moved in", async () => {

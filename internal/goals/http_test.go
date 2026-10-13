@@ -56,13 +56,14 @@ func TestGoalsOverHTTP(t *testing.T) {
 		return a.ID
 	}
 	savings, card, credit := mk("Накопительный", "savings", 450_000_00), mk("Карта", "checking", 180_000_00), mk("Кредитка", "credit_card", -10_000_00)
+	broker := mk("Брокерский", "brokerage", 1_200_000_00)
 
 	var got apitypes.Goals
 	cushion := fmt.Sprintf(`{"name":"Подушка","target_minor":57000000,"target_on":null,"monthly_minor":1500000,"yield_percent":"14","funds":[{"account_id":%q,"amount_minor":null}]}`, savings)
 	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/goals", cushion), &got)
 	holiday := fmt.Sprintf(`{"name":"Отпуск","target_minor":25000000,"target_on":"2099-07-01","monthly_minor":2000000,"yield_percent":"0","funds":[{"account_id":%q,"amount_minor":7000000}]}`, card)
 	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/goals", holiday), &got)
-	if len(got.Goals) != 2 || got.BaseCurrency != "RUB" {
+	if len(got.Goals) != 2 || got.BaseCurrency != "RUB" || got.MonthlyMinor != 35_000_00 || got.BrokerMonthlyMinor != 0 {
 		t.Fatalf("goals = %+v", got)
 	}
 	c0, h := got.Goals[0], got.Goals[1]
@@ -101,5 +102,13 @@ func TestGoalsOverHTTP(t *testing.T) {
 	}
 	if r := apitest.Do(t, c, "DELETE", url+"/api/v1/goals/"+h.Id.String(), ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("deleted twice = %d, want 404", r.StatusCode)
+	}
+
+	// The first payment out of the broker: its 30 000 a month is a top-up to
+	// invest.
+	first := fmt.Sprintf(`{"name":"Первый взнос","target_minor":200000000,"target_on":"2099-09-01","monthly_minor":3000000,"yield_percent":"10","funds":[{"account_id":%q,"amount_minor":80000000}]}`, broker)
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/goals", first), &got)
+	if got.MonthlyMinor != 45_000_00 || got.BrokerMonthlyMinor != 30_000_00 {
+		t.Errorf("a month = %d, of it to the broker %d; want 45 000 and 30 000", got.MonthlyMinor, got.BrokerMonthlyMinor)
 	}
 }
