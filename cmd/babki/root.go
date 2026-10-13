@@ -31,6 +31,7 @@ import (
 	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/intermediary"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/mailbox"
 	"babki.my/babki/internal/marketdata"
@@ -150,6 +151,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	worths := journalValues{positions: positions, valuables: valuablesSvc}
 	accHandler := account.NewHandler(accStore, famStore, converter, worths, famAuth, famSM)
 	accHandler.Mount(srv)
+	intermediary.NewHandler(famAuth, famSM).Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
 	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)

@@ -52,7 +52,7 @@ func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const accCols = `a.id, a.space_id, a.owner_user_id, a.name, a.type, a.currency,
 	a.institution, a.status, a.valued_by_balance, a.trades_abroad, a.kept_by_operations, a.foreign_broker, a.tax_owner_user_id,
-	a.created_at, a.updated_at`
+	a.intermediary, a.created_at, a.updated_at`
 
 // withBalanceQuery joins the latest balance mark per account.
 const withBalanceQuery = `
@@ -69,7 +69,7 @@ func scanWithBalance(row pgx.Row) (WithBalance, error) {
 	var amount *int64
 	err := row.Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
 		&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.KeptByOperations, &a.ForeignBroker, &a.TaxOwnerUserID,
-		&a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
+		&a.Intermediary, &a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
 	if err != nil {
 		return WithBalance{}, err
 	}
@@ -92,11 +92,11 @@ func (s *Store) Create(
 		INSERT INTO accounts (space_id, owner_user_id, name, type, currency, institution)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, space_id, owner_user_id, name, type, currency, institution, status,
-			valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_user_id, created_at, updated_at`,
+			valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_user_id, intermediary, created_at, updated_at`,
 		spaceID, ownerUserID, name, t, currency, institution).
 		Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
 			&a.Institution, &a.Status, &a.ValuedByBalance, &a.TradesAbroad, &a.KeptByOperations, &a.ForeignBroker, &a.TaxOwnerUserID,
-			&a.CreatedAt, &a.UpdatedAt)
+			&a.Intermediary, &a.CreatedAt, &a.UpdatedAt)
 	return a, wrapOwnerFK(err)
 }
 
@@ -136,11 +136,13 @@ func (s *Store) Update(ctx context.Context, spaceID, id uuid.UUID, upd Update) (
 			kept_by_operations = COALESCE($10, kept_by_operations),
 			foreign_broker = COALESCE($11, foreign_broker),
 			tax_owner_user_id = CASE WHEN $12 THEN $13 ELSE tax_owner_user_id END,
+			intermediary  = CASE WHEN $14 THEN $15 ELSE intermediary END,
 			updated_at    = now()
 		WHERE space_id = $1 AND id = $2`,
 		spaceID, id, upd.Name, upd.Institution,
 		upd.OwnerUserID != nil, ownerValue(upd.OwnerUserID), upd.Status, upd.ValuedByBalance, upd.TradesAbroad,
-		upd.KeptByOperations, upd.ForeignBroker, upd.TaxOwnerUserID != nil, ownerValue(upd.TaxOwnerUserID))
+		upd.KeptByOperations, upd.ForeignBroker, upd.TaxOwnerUserID != nil, ownerValue(upd.TaxOwnerUserID),
+		upd.Intermediary != nil, stringValue(upd.Intermediary))
 	if err != nil {
 		return WithBalance{}, wrapOwnerFK(err)
 	}
@@ -254,4 +256,13 @@ func (s *Store) BalanceHistory(ctx context.Context, spaceID uuid.UUID) (map[uuid
 		out[id] = append(out[id], bp)
 	}
 	return out, rows.Err()
+}
+
+// stringValue is what a double-pointer field writes: nil when unset or
+// cleared.
+func stringValue(p **string) *string {
+	if p == nil {
+		return nil
+	}
+	return *p
 }

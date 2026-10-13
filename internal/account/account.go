@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"babki.my/babki/internal/intermediary"
 )
 
 type Type string
@@ -80,8 +82,34 @@ type Account struct {
 	// TaxOwnerUserID is whose income the account's is for tax; nil: its
 	// personal owner, else the space's owner (decision Р-42).
 	TaxOwnerUserID *uuid.UUID
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// Intermediary is the catalog's bank or broker the family picked; nil
+	// finds it by Institution (decision Р-47).
+	Intermediary *string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// IntermediaryOf is the bank or broker holding the account: the family's pick,
+// else the one its «bank or broker» names; byHand says the family picked.
+// None for cash and valuables, or a name the catalog does not know.
+func IntermediaryOf(a Account) (i intermediary.Intermediary, byHand, ok bool) {
+	c, err := intermediary.Load()
+	if err != nil {
+		return intermediary.Intermediary{}, false, false
+	}
+	if a.Intermediary != nil {
+		i, ok = c.ByID(*a.Intermediary)
+		return i, true, ok
+	}
+	switch a.Type {
+	case TypeCash, TypeValuables:
+		return intermediary.Intermediary{}, false, false
+	case TypeBrokerage:
+		i, ok = c.Match(a.Institution, intermediary.Broker)
+	default:
+		i, ok = c.Match(a.Institution, intermediary.Bank)
+	}
+	return i, false, ok
 }
 
 type BalancePoint struct {
@@ -115,4 +143,6 @@ type Update struct {
 	// TaxOwnerUserID is a double pointer like OwnerUserID: a pointer to nil
 	// gives the account back to its default owner for tax.
 	TaxOwnerUserID **uuid.UUID
+	// Intermediary likewise: a pointer to nil finds it by name again.
+	Intermediary **string
 }

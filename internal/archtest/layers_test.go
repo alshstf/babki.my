@@ -19,6 +19,7 @@ const module = "babki.my/babki/"
 var layers = map[string]int{
 	"internal/platform/":       0,
 	"internal/family":          1,
+	"internal/intermediary":    1,
 	"internal/instrument":      2,
 	"internal/marketdata":      2,
 	"internal/account":         2,

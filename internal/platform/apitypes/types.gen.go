@@ -832,6 +832,24 @@ func (e InstrumentType) Valid() bool {
 	}
 }
 
+// Defines values for IntermediaryKind.
+const (
+	Bank   IntermediaryKind = "bank"
+	Broker IntermediaryKind = "broker"
+)
+
+// Valid indicates whether the value is a known member of the IntermediaryKind enum.
+func (e IntermediaryKind) Valid() bool {
+	switch e {
+	case Bank:
+		return true
+	case Broker:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LoanPrepaymentMode.
 const (
 	LoanPrepaymentModePayment LoanPrepaymentMode = "payment"
@@ -2013,6 +2031,12 @@ type AccountWithBalance struct {
 	ForeignBroker bool               `json:"foreign_broker"`
 	Id            openapi_types.UUID `json:"id"`
 	Institution   string             `json:"institution"`
+
+	// IntermediaryByHand The family picked intermediary_id rather than the program finding it by name
+	IntermediaryByHand *bool `json:"intermediary_by_hand,omitempty"`
+
+	// IntermediaryId The bank or broker holding the account, an id of GET /intermediaries (decision Р-47): the family's pick, else the one its institution names; null when neither
+	IntermediaryId nullable.Nullable[string] `json:"intermediary_id,omitempty"`
 
 	// Journal What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE account with at least one operation, whichever figure counted_by names, so an account counted by its balance can still say what its journal comes to. Null on every other account.
 	Journal nullable.Nullable[AccountJournal] `json:"journal,omitempty"`
@@ -3383,7 +3407,10 @@ type ExportAccount struct {
 	ForeignBroker          bool                    `json:"foreign_broker"`
 	Id                     openapi_types.UUID      `json:"id"`
 	Institution            string                  `json:"institution"`
-	KeptByOperations       bool                    `json:"kept_by_operations"`
+
+	// IntermediaryId The bank or broker the family picked from the catalog (decision Р-47); null when found by the institution's name
+	IntermediaryId   nullable.Nullable[string] `json:"intermediary_id,omitempty"`
+	KeptByOperations bool                      `json:"kept_by_operations"`
 
 	// Loan A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account
 	Loan nullable.Nullable[LoanTerms] `json:"loan"`
@@ -4025,6 +4052,36 @@ type InstrumentsResponse struct {
 	// Instruments The page itself, ordered by name, at most `limit` long. Shorter than `limit` only at the end of the catalog: an over-large `limit` is refused rather than clamped here, so a short page has one meaning.
 	Instruments []Instrument `json:"instruments"`
 }
+
+// Intermediaries defines model for Intermediaries.
+type Intermediaries struct {
+	// CheckedOn Date YYYY-MM-DD the banks were checked against the Bank of Russia's register
+	CheckedOn      string         `json:"checked_on"`
+	Intermediaries []Intermediary `json:"intermediaries"`
+}
+
+// Intermediary defines model for Intermediary.
+type Intermediary struct {
+	Aliases []string `json:"aliases"`
+
+	// BankId A broker's bank, an id of this catalog
+	BankId nullable.Nullable[string] `json:"bank_id"`
+
+	// Country ISO 3166 two-letter; RU unless a broker abroad
+	Country string `json:"country"`
+	Id      string `json:"id"`
+
+	// Insured Deposits with the bank are insured (up to the country's limit per person); false for brokers
+	Insured bool             `json:"insured"`
+	Kind    IntermediaryKind `json:"kind"`
+	Name    string           `json:"name"`
+
+	// RegNumber A bank's number at the Bank of Russia
+	RegNumber nullable.Nullable[int] `json:"reg_number"`
+}
+
+// IntermediaryKind defines model for Intermediary.Kind.
+type IntermediaryKind string
 
 // Loan defines model for Loan.
 type Loan struct {
@@ -5624,6 +5681,9 @@ type UpdateAccountRequest struct {
 	// ForeignBroker See AccountWithBalance.foreign_broker. Omitted, it stays as it is.
 	ForeignBroker *bool   `json:"foreign_broker,omitempty"`
 	Institution   *string `json:"institution,omitempty"`
+
+	// IntermediaryId An id of GET /intermediaries. Omitted, it stays as it is; null finds it by the institution's name again. 400 for an id the catalog does not have.
+	IntermediaryId nullable.Nullable[string] `json:"intermediary_id,omitempty"`
 
 	// KeptByOperations See AccountWithBalance.kept_by_operations. Omitted, it stays as it is.
 	KeptByOperations *bool `json:"kept_by_operations,omitempty"`

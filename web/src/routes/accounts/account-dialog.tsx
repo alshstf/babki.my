@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useIntermediaries } from "@/api/intermediaries";
 import { useSession } from "@/api/session";
 import { COMMON_CURRENCIES, isCurrencyCode } from "@/lib/currencies";
 import {
@@ -40,6 +41,12 @@ const ACCOUNT_TYPES: AccountType[] = [
   "cash",
   "valuables",
 ];
+
+
+// AUTO is «find it by the bank or broker's name»; holdsIntermediary, the
+// accounts a bank or broker holds (decision Р-47).
+const AUTO = "auto";
+const holdsIntermediary = (type: AccountType) => type !== "cash" && type !== "valuables";
 
 export function AccountDialog({
   open,
@@ -65,6 +72,8 @@ export function AccountDialog({
   const [personal, setPersonal] = useState(false);
   const [tradesAbroad, setTradesAbroad] = useState(false);
   const [foreignBroker, setForeignBroker] = useState(false);
+  const [pick, setPick] = useState(AUTO);
+  const intermediaries = useIntermediaries();
 
   useEffect(() => {
     if (open) {
@@ -76,6 +85,7 @@ export function AccountDialog({
       setPersonal(Boolean(account?.owner_user_id));
       setTradesAbroad(account?.trades_abroad ?? false);
       setForeignBroker(account?.foreign_broker ?? false);
+      setPick(account?.intermediary_by_hand && account.intermediary_id ? account.intermediary_id : AUTO);
       create.reset();
       update.reset();
     }
@@ -104,6 +114,7 @@ export function AccountDialog({
             institution,
             owner_user_id: ownerUserId,
             ...(account.type === "brokerage" ? { trades_abroad: tradesAbroad, foreign_broker: foreignBroker } : {}),
+            ...(holdsIntermediary(account.type) ? { intermediary_id: pick === AUTO ? null : pick } : {}),
           },
         },
         { onSuccess: () => onOpenChange(false) },
@@ -192,6 +203,31 @@ export function AccountDialog({
               onChange={(e) => setInstitution(e.target.value)}
             />
           </div>
+          {isEdit && account && holdsIntermediary(account.type) && (
+            <div className="grid gap-2">
+              <Label htmlFor="acc-intermediary">{t("accounts.dialog.intermediary")}</Label>
+              <Select value={pick} onValueChange={setPick}>
+                <SelectTrigger id="acc-intermediary" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={AUTO}>
+                    {account.intermediary_id && !account.intermediary_by_hand
+                      ? t("accounts.dialog.intermediaryFound", { name: intermediaries.data?.find((i) => i.id === account.intermediary_id)?.name ?? account.intermediary_id })
+                      : t("accounts.dialog.intermediaryByName")}
+                  </SelectItem>
+                  {(intermediaries.data ?? [])
+                    .filter((i) => i.kind === (account.type === "brokerage" ? "broker" : "bank"))
+                    .map((i) => (
+                      <SelectItem key={i.id} value={i.id}>
+                        {i.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{t("accounts.dialog.intermediaryHint")}</p>
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="account-ownership">{t("accounts.dialog.ownership")}</Label>
             <Select
