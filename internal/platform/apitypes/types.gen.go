@@ -126,16 +126,22 @@ func (e AllocationMode) Valid() bool {
 
 // Defines values for AllocationTargetsDimension.
 const (
+	AllocationTargetsDimensionCountry  AllocationTargetsDimension = "country"
 	AllocationTargetsDimensionCurrency AllocationTargetsDimension = "currency"
 	AllocationTargetsDimensionKind     AllocationTargetsDimension = "kind"
+	AllocationTargetsDimensionSector   AllocationTargetsDimension = "sector"
 )
 
 // Valid indicates whether the value is a known member of the AllocationTargetsDimension enum.
 func (e AllocationTargetsDimension) Valid() bool {
 	switch e {
+	case AllocationTargetsDimensionCountry:
+		return true
 	case AllocationTargetsDimensionCurrency:
 		return true
 	case AllocationTargetsDimensionKind:
+		return true
+	case AllocationTargetsDimensionSector:
 		return true
 	default:
 		return false
@@ -1944,6 +1950,9 @@ type AccountWithBalanceCountedBy string
 type Allocation struct {
 	BaseCurrency string `json:"base_currency"`
 
+	// Countries The papers by country of risk against their ceilings (decision Р-46): target is the ceiling, off_minor positive what is above it; shares of papers_minor
+	Countries []AllocationRow `json:"countries"`
+
 	// Currencies Every currency held or targeted, the base currency first, then largest first
 	Currencies []AllocationRow `json:"currencies"`
 
@@ -1956,6 +1965,12 @@ type Allocation struct {
 
 	// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 	Mode AllocationMode `json:"mode"`
+
+	// PapersMinor What the papers come to: the ceilings' base
+	PapersMinor int64 `json:"papers_minor"`
+
+	// Sectors The papers by sector against their ceilings, as countries
+	Sectors []AllocationRow `json:"sectors"`
 
 	// Unpriced Papers left out for want of a price
 	Unpriced int `json:"unpriced"`
@@ -2072,11 +2087,12 @@ type AllocationTarget struct {
 
 // AllocationTargets defines model for AllocationTargets.
 type AllocationTargets struct {
+	// Dimension kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own
 	Dimension AllocationTargetsDimension `json:"dimension"`
 	Targets   []AllocationTarget         `json:"targets"`
 }
 
-// AllocationTargetsDimension defines model for AllocationTargets.Dimension.
+// AllocationTargetsDimension kind and currency: shares adding up to 100; country (two letters) and sector: ceilings, each on its own
 type AllocationTargetsDimension string
 
 // AllocationTopUp defines model for AllocationTopUp.
@@ -4732,11 +4748,16 @@ type SpaceExport struct {
 
 	// Allocation The target shares of the worth and how the family comes to them (decision Р-37)
 	Allocation struct {
+		// Countries Ceilings by country of risk
+		Countries  []AllocationTarget `json:"countries"`
 		Currencies []AllocationTarget `json:"currencies"`
 		Kinds      []AllocationTarget `json:"kinds"`
 
 		// Mode topup: the suggestions put new money where it is short, nothing is sold; rebalance: what to sell and buy to come to the targets
 		Mode AllocationMode `json:"mode"`
+
+		// Sectors Ceilings by sector
+		Sectors []AllocationTarget `json:"sectors"`
 	} `json:"allocation"`
 
 	// BudgetLimits The budget's limits, by category and the month each runs from (GET /budget/limits)

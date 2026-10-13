@@ -22,6 +22,7 @@ import {
 import { useSession } from "@/api/session";
 import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
+import { hundredths, percent } from "@/lib/percent";
 
 // The kinds targets are set for, in the server's order.
 const KINDS = ["shares", "bonds", "funds", "foreign_currency", "metals", "deposits", "crypto", "other", "broker_cash"];
@@ -66,10 +67,6 @@ function currencyName(t: (key: string) => string, key: string): string {
   }
 }
 
-// A percent as the API writes it ("35.00"), as people read it ("35 %").
-function percent(s: string): string {
-  return `${Number(s).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} %`;
-}
 
 // TargetsCard is the worth against the family's target shares (decision
 // Р-37): by kind of asset — what the suggestions will bring to the targets —
@@ -613,14 +610,6 @@ function TopUp({
   );
 }
 
-// hundredths reads a percent typed with a comma or a point, to hundredths;
-// null when it is not one, empty is no target.
-function hundredths(s: string): number | null {
-  const m = /^(\d{1,3})(?:[.,](\d{1,2}))?$/.exec(s.trim());
-  if (!m) return null;
-  const v = Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
-  return v <= 10_000 ? v : null;
-}
 
 // TargetsDialog states the targets of one dimension: a percent at each kind
 // (or currency held, or one added), 100 in all; all empty takes them back.

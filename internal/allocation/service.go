@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/structure"
@@ -97,11 +98,13 @@ type Settings struct {
 	Mode       Mode
 	Kinds      []Target
 	Currencies []Target
+	// Countries and Sectors are ceilings (decision Р-46).
+	Countries, Sectors []Target
 }
 
 // Settings are the space's targets, ModeTopUp until the family picks.
 func (s *Service) Settings(ctx context.Context, spaceID uuid.UUID) (Settings, error) {
-	out := Settings{Mode: ModeTopUp, Kinds: []Target{}, Currencies: []Target{}}
+	out := Settings{Mode: ModeTopUp, Kinds: []Target{}, Currencies: []Target{}, Countries: []Target{}, Sectors: []Target{}}
 	err := s.db.QueryRow(ctx, `SELECT mode FROM allocation_settings WHERE space_id = $1`, spaceID).Scan(&out.Mode)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Settings{}, fmt.Errorf("allocation: mode: %w", err)
@@ -117,10 +120,15 @@ func (s *Service) Settings(ctx context.Context, spaceID uuid.UUID) (Settings, er
 		if err := rows.Scan(&dim, &t.Key, &t.Percent); err != nil {
 			return Settings{}, err
 		}
-		if dim == ByKind {
+		switch dim {
+		case ByKind:
 			out.Kinds = append(out.Kinds, t)
-		} else {
+		case ByCurrency:
 			out.Currencies = append(out.Currencies, t)
+		case ByCountry:
+			out.Countries = append(out.Countries, t)
+		case BySector:
+			out.Sectors = append(out.Sectors, t)
 		}
 	}
 	return out, rows.Err()
@@ -137,13 +145,16 @@ func (s *Service) View(ctx context.Context, spaceID uuid.UUID, valuation structu
 	if err != nil {
 		return View{}, err
 	}
-	return view(worth, st.Mode, st.Kinds, st.Currencies), nil
+	return withCeilings(view(worth, st.Mode, st.Kinds, st.Currencies), worth, st.Countries, st.Sectors), nil
 }
 
-var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
+var (
+	currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
+	countryCode  = regexp.MustCompile(`^[A-Z]{2}$`)
+)
 
 // SetTargets states the targets of a dimension anew: none, or percents that
-// add up to 100, each key once.
+// add up to 100, each key once — ceilings each on its own.
 func (s *Service) SetTargets(ctx context.Context, spaceID uuid.UUID, dim Dimension, targets []Target) error {
 	if err := validTargets(dim, targets); err != nil {
 		return err
@@ -166,8 +177,8 @@ func (s *Service) SetTargets(ctx context.Context, spaceID uuid.UUID, dim Dimensi
 }
 
 func validTargets(dim Dimension, targets []Target) error {
-	if dim != ByKind && dim != ByCurrency {
-		return fmt.Errorf("%w: targets are by kind or by currency", family.ErrValidation)
+	if dim != ByKind && dim != ByCurrency && dim != ByCountry && dim != BySector {
+		return fmt.Errorf("%w: targets are by kind, currency, country or sector", family.ErrValidation)
 	}
 	seen := map[string]bool{}
 	sum := decimal.Zero
@@ -177,6 +188,10 @@ func validTargets(dim Dimension, targets []Target) error {
 			return fmt.Errorf("%w: no kind of asset %q", family.ErrValidation, t.Key)
 		case dim == ByCurrency && !currencyCode.MatchString(t.Key):
 			return fmt.Errorf("%w: a currency is three capital letters, not %q", family.ErrValidation, t.Key)
+		case dim == ByCountry && !countryCode.MatchString(t.Key):
+			return fmt.Errorf("%w: a country is two capital letters, not %q", family.ErrValidation, t.Key)
+		case dim == BySector && !slices.Contains(instrument.Sectors, instrument.Sector(t.Key)):
+			return fmt.Errorf("%w: no sector %q", family.ErrValidation, t.Key)
 		case seen[t.Key]:
 			return fmt.Errorf("%w: %q twice", family.ErrValidation, t.Key)
 		case t.Percent.IsNegative() || t.Percent.GreaterThan(hundred) || !t.Percent.Equal(t.Percent.Round(2)):
@@ -185,7 +200,7 @@ func validTargets(dim Dimension, targets []Target) error {
 		seen[t.Key] = true
 		sum = sum.Add(t.Percent)
 	}
-	if len(targets) > 0 && !sum.Equal(hundred) {
+	if (dim == ByKind || dim == ByCurrency) && len(targets) > 0 && !sum.Equal(hundred) {
 		return fmt.Errorf("%w: the targets add up to %s%%, not 100%%", family.ErrValidation, sum.String())
 	}
 	return nil

@@ -1,9 +1,10 @@
 // Package allocation keeps the family's target shares of its worth and sets
 // them against the worth as it is (decision Р-37): by kind of asset — the
 // part the suggestions to top up or rebalance bring to the targets — and by
-// currency, for the record only. The worth is the structure's (internal/
-// structure) less the money to live on and the brokers' accounts known only
-// by their balance.
+// currency, for the record only; and ceilings on the papers by country of risk
+// and by sector (decision Р-46), each «no more than N %». The worth is the
+// structure's (internal/structure) less the money to live on and the brokers'
+// accounts known only by their balance; the ceilings' base is the papers.
 package allocation
 
 import (
@@ -18,6 +19,9 @@ type Dimension string
 const (
 	ByKind     Dimension = "kind"
 	ByCurrency Dimension = "currency"
+	// ByCountry and BySector set ceilings, not shares adding up to 100.
+	ByCountry Dimension = "country"
+	BySector  Dimension = "sector"
 )
 
 // Mode is how the family brings its worth to the targets: by top-ups only
@@ -57,6 +61,10 @@ type View struct {
 	Worth             int64
 	Everyday, Unsplit int64
 	Kinds, Currencies []Row
+	// Countries and Sectors are the papers against their ceilings, Papers
+	// what the papers come to.
+	Countries, Sectors []Row
+	Papers             int64
 	// Unsellable is, by kind, what cannot be sold now (structure.Unsellable).
 	Unsellable   map[string]int64
 	Unpriced     int
@@ -110,6 +118,25 @@ func rows(worth int64, slices []structure.Slice, targets []Target, order []strin
 			r.Target, r.Gap, r.Off = &target, &gap, &off
 		}
 		out = append(out, r)
+	}
+	return out
+}
+
+// withCeilings lays the papers against the ceilings by country and sector.
+func withCeilings(v View, s structure.Structure, countries, sectors []Target) View {
+	v.Countries = rows(s.Papers, papersOnly(s.ByCountry), countries, nil)
+	v.Sectors = rows(s.Papers, papersOnly(s.BySector), sectors, nil)
+	v.Papers = s.Papers
+	return v
+}
+
+// papersOnly is a breakdown of the papers: what is not one left out.
+func papersOnly(in []structure.Slice) []structure.Slice {
+	out := []structure.Slice{}
+	for _, x := range in {
+		if x.Key != structure.NotPapers {
+			out = append(out, x)
+		}
 	}
 	return out
 }

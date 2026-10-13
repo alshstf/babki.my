@@ -51,6 +51,9 @@ func (fakeStructures) Of(_ context.Context, _ uuid.UUID, valuation structure.Val
 		BaseCurrency: "RUB", Targets: 1_000_000_00, Everyday: 100_000_00, MissingRates: []string{},
 		ByKind:           []structure.Slice{{Key: "shares", Minor: 600_000_00}, {Key: "bonds", Minor: 400_000_00}},
 		ByTargetCurrency: []structure.Slice{{Key: "RUB", Minor: 1_000_000_00}},
+		Papers:           1_000_000_00,
+		ByCountry:        []structure.Slice{{Key: "RU", Minor: 750_000_00}, {Key: "US", Minor: 250_000_00}, {Key: "", Minor: 100_000_00}},
+		BySector:         []structure.Slice{{Key: "it", Minor: 350_000_00}, {Key: "government", Minor: 400_000_00}, {Key: "financials", Minor: 250_000_00}},
 	}
 	if valuation == structure.Full {
 		s.Targets += 500_000_00
@@ -157,5 +160,64 @@ func TestTheTargetsOverHTTP(t *testing.T) {
 	apitest.Decode(t, apitest.Do(t, c, "PUT", url+"/api/v1/allocation/targets", `{"dimension":"kind","targets":[]}`), &got)
 	if len(got.Kinds) != 2 || !got.Kinds[0].Target.IsNull() || got.Mode != "rebalance" {
 		t.Errorf("targets taken back: %+v", got)
+	}
+}
+
+// Ceilings by country and sector, each on its own (decision Р-46): the papers
+// against them, what is above; a ceiling of a country not two letters or of
+// no sector is refused, ceilings not adding up to 100 are not.
+func TestCeilingsOverHTTP(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	allocation.NewHandler(allocation.NewService(pool, fakeStructures{}), auth, sm).Mount(srv)
+	url, c := apitest.Serve(t, srv.Handler())
+
+	put := func(body string) *http.Response {
+		return apitest.Do(t, c, "PUT", url+"/api/v1/allocation/targets", body)
+	}
+	if r := put(`{"dimension":"country","targets":[{"key":"US","percent":"20"}]}`); r.StatusCode != http.StatusNoContent && r.StatusCode != http.StatusOK {
+		t.Fatalf("country ceiling = %d", r.StatusCode)
+	}
+	if r := put(`{"dimension":"sector","targets":[{"key":"it","percent":"30"},{"key":"financials","percent":"30"}]}`); r.StatusCode != http.StatusNoContent && r.StatusCode != http.StatusOK {
+		t.Fatalf("sector ceilings = %d", r.StatusCode)
+	}
+	var got apitypes.Allocation
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/allocation", ""), &got)
+	row := func(rows []apitypes.AllocationRow, key string) apitypes.AllocationRow {
+		for _, r := range rows {
+			if r.Key == key {
+				return r
+			}
+		}
+		t.Fatalf("no %s in %+v", key, rows)
+		return apitypes.AllocationRow{}
+	}
+	if got.PapersMinor != 1_000_000_00 || len(got.Countries) != 2 {
+		t.Fatalf("countries = %+v", got.Countries)
+	}
+	if us := row(got.Countries, "US"); us.Share != "25.00" || us.Target.MustGet() != "20.00" || us.OffMinor.MustGet() != 50_000_00 {
+		t.Errorf("US = %+v", us)
+	}
+	if ru := row(got.Countries, "RU"); !ru.Target.IsNull() {
+		t.Errorf("RU has no ceiling: %+v", ru)
+	}
+	if it := row(got.Sectors, "it"); it.Share != "35.00" || it.OffMinor.MustGet() != 50_000_00 {
+		t.Errorf("IT = %+v", it)
+	}
+	if fin := row(got.Sectors, "financials"); fin.OffMinor.MustGet() != -50_000_00 {
+		t.Errorf("financials = %+v", fin)
+	}
+	for _, bad := range []string{
+		`{"dimension":"country","targets":[{"key":"USA","percent":"20"}]}`,
+		`{"dimension":"sector","targets":[{"key":"banks","percent":"20"}]}`,
+		`{"dimension":"sector","targets":[{"key":"it","percent":"120"}]}`,
+	} {
+		if r := put(bad); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, r.StatusCode)
+		}
 	}
 }
