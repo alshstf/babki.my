@@ -637,6 +637,27 @@ func (e InBaseGap) Valid() bool {
 	}
 }
 
+// Defines values for InstrumentClassSource.
+const (
+	InstrumentClassSourceEmpty   InstrumentClassSource = ""
+	InstrumentClassSourceTinvest InstrumentClassSource = "tinvest"
+	InstrumentClassSourceYahoo   InstrumentClassSource = "yahoo"
+)
+
+// Valid indicates whether the value is a known member of the InstrumentClassSource enum.
+func (e InstrumentClassSource) Valid() bool {
+	switch e {
+	case InstrumentClassSourceEmpty:
+		return true
+	case InstrumentClassSourceTinvest:
+		return true
+	case InstrumentClassSourceYahoo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InstrumentEventKind.
 const (
 	InstrumentEventKindConversion InstrumentEventKind = "conversion"
@@ -786,28 +807,28 @@ func (e LoanTermsKind) Valid() bool {
 
 // Defines values for MailboxProblem.
 const (
-	Connect MailboxProblem = "connect"
-	Empty   MailboxProblem = ""
-	Folder  MailboxProblem = "folder"
-	Key     MailboxProblem = "key"
-	Login   MailboxProblem = "login"
-	Read    MailboxProblem = "read"
+	MailboxProblemConnect MailboxProblem = "connect"
+	MailboxProblemEmpty   MailboxProblem = ""
+	MailboxProblemFolder  MailboxProblem = "folder"
+	MailboxProblemKey     MailboxProblem = "key"
+	MailboxProblemLogin   MailboxProblem = "login"
+	MailboxProblemRead    MailboxProblem = "read"
 )
 
 // Valid indicates whether the value is a known member of the MailboxProblem enum.
 func (e MailboxProblem) Valid() bool {
 	switch e {
-	case Connect:
+	case MailboxProblemConnect:
 		return true
-	case Empty:
+	case MailboxProblemEmpty:
 		return true
-	case Folder:
+	case MailboxProblemFolder:
 		return true
-	case Key:
+	case MailboxProblemKey:
 		return true
-	case Login:
+	case MailboxProblemLogin:
 		return true
-	case Read:
+	case MailboxProblemRead:
 		return true
 	default:
 		return false
@@ -3661,6 +3682,42 @@ type Instrument struct {
 	Type           InstrumentType           `json:"type"`
 }
 
+// InstrumentClass defines model for InstrumentClass.
+type InstrumentClass struct {
+	// Country ISO 3166 two-letter country of risk as the family sees it; empty when unknown
+	Country       string                       `json:"country"`
+	CountryByHand bool                         `json:"country_by_hand"`
+	FetchedAt     nullable.Nullable[time.Time] `json:"fetched_at"`
+
+	// Raw The source's own words: the broker's sector and a fund's focus, or Yahoo's sector
+	Raw string `json:"raw"`
+
+	// Sector The sector key as the family sees it; empty when unknown
+	Sector       string `json:"sector"`
+	SectorByHand bool   `json:"sector_by_hand"`
+
+	// Sectors The list of sector keys, in the order a picker shows it
+	Sectors []string `json:"sectors"`
+
+	// Source Where the source's class came from; empty when no source has been asked
+	Source InstrumentClassSource `json:"source"`
+
+	// SourceCountry The source's country; empty when it gave none
+	SourceCountry string `json:"source_country"`
+
+	// SourceSector The source's sector, brought to the list; empty when it gave none
+	SourceSector string `json:"source_sector"`
+}
+
+// InstrumentClassSource Where the source's class came from; empty when no source has been asked
+type InstrumentClassSource string
+
+// InstrumentClassInput defines model for InstrumentClassInput.
+type InstrumentClassInput struct {
+	Country nullable.Nullable[string] `json:"country"`
+	Sector  nullable.Nullable[string] `json:"sector"`
+}
+
 // InstrumentEvent One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds.
 type InstrumentEvent struct {
 	// BasisShare Decimal as string: the fraction of the original's cost basis a spin-off moves across. At least 0 and less than 1; 0 — the new paper arrives bought for nothing and the whole basis stays on the original — is how the broker keeps a carve-out and the program's default. Required on a spin-off and refused on the other two, where the whole basis either stays or travels.
@@ -6097,6 +6154,9 @@ type CreateInstrumentJSONRequestBody = CreateInstrumentRequest
 
 // UpdateInstrumentJSONRequestBody defines body for UpdateInstrument for application/json ContentType.
 type UpdateInstrumentJSONRequestBody = UpdateInstrumentRequest
+
+// SetInstrumentClassJSONRequestBody defines body for SetInstrumentClass for application/json ContentType.
+type SetInstrumentClassJSONRequestBody = InstrumentClassInput
 
 // StateInstrumentPriceJSONRequestBody defines body for StateInstrumentPrice for application/json ContentType.
 type StateInstrumentPriceJSONRequestBody StateInstrumentPriceJSONBody

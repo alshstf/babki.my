@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { apiError } from "./operations";
 import type { components } from "./schema";
@@ -58,5 +58,41 @@ export function useInstrumentOperations(instrumentId: string) {
     },
     getNextPageParam: (last, all) =>
       last.has_more ? all.reduce((rows, page) => rows + page.operations.length, 0) : undefined,
+  });
+}
+
+export type InstrumentClass = components["schemas"]["InstrumentClass"];
+
+// The paper's country of risk and sector as the family sees them, and the
+// source's (decision Р-46).
+export function useInstrumentClass(instrumentId: string) {
+  return useQuery({
+    queryKey: ["instrument-class", instrumentId],
+    queryFn: async (): Promise<InstrumentClass> => {
+      const { data, error, response } = await api.GET("/api/v1/instruments/{instrumentId}/class", {
+        params: { path: { instrumentId } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+// The family's own country and sector; null keeps the source's.
+export function useSetInstrumentClass(instrumentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { country: string | null; sector: string | null }): Promise<InstrumentClass> => {
+      const { data, error, response } = await api.PUT("/api/v1/instruments/{instrumentId}/class", {
+        params: { path: { instrumentId } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["instrument-class", instrumentId], data);
+      void queryClient.invalidateQueries({ queryKey: ["structure"] });
+    },
   });
 }

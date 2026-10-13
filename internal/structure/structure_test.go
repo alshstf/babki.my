@@ -255,7 +255,7 @@ func TestBarsAreMetals(t *testing.T) {
 
 type fakeClasses map[uuid.UUID]instrument.Class
 
-func (f fakeClasses) Classes(context.Context, []uuid.UUID) (map[uuid.UUID]instrument.Class, error) {
+func (f fakeClasses) ClassesFor(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]instrument.Class, error) {
 	return f, nil
 }
 

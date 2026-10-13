@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"babki.my/babki/internal/family"
 )
 
 // Sector is a paper's sector in the program's own short list (decision Р-46):
@@ -48,14 +51,27 @@ const (
 )
 
 // Class is a paper's country of risk (ISO 3166 code, empty when unknown) and
-// sector, with the source's own words in Raw.
+// sector, with the source's own words in Raw. CountryByHand and SectorByHand
+// say the family's own stands over the source's.
 type Class struct {
 	Country   string
 	Sector    Sector
 	Source    ClassSource
 	Raw       string
 	FetchedAt time.Time
+
+	CountryByHand, SectorByHand bool
 }
+
+// Sectors is the list, in the order a picker shows it.
+var Sectors = []Sector{
+	SectorFinancials, SectorEnergy, SectorIT, SectorConsumer, SectorTelecom, SectorUtilities,
+	SectorMaterials, SectorIndustrials, SectorHealthCare, SectorRealEstate, SectorGovernment,
+	SectorMunicipal, SectorFundsEquity, SectorFundsBonds, SectorFundsMoney, SectorFundsGold, SectorFundsMixed,
+}
+
+// ErrBadClass: a country not two Latin letters, or a sector off the list.
+var ErrBadClass = fmt.Errorf("%w: the country is two Latin letters, the sector one of the list", family.ErrValidation)
 
 // tinvestSectors brings the broker's sector words to the list; its
 // "green" ones are their industries, and "other" is none.
@@ -174,3 +190,67 @@ func (s *Store) ToClassify(ctx context.Context, olderThan time.Time, limit int) 
 	}
 	return out, nil
 }
+
+// ClassesFor are the papers' classes as the space sees them: its own country
+// and sector over the source's; a paper with neither is absent.
+func (s *Store) ClassesFor(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]Class, error) {
+	out, err := s.Classes(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT instrument_id, country, sector FROM instrument_class_overrides
+		WHERE space_id = $1 AND instrument_id = ANY($2)`, spaceID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("instrument: class overrides: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var country, sector *string
+		if err := rows.Scan(&id, &country, &sector); err != nil {
+			return nil, fmt.Errorf("instrument: class overrides: %w", err)
+		}
+		c := out[id]
+		if country != nil {
+			c.Country, c.CountryByHand = *country, true
+		}
+		if sector != nil {
+			c.Sector, c.SectorByHand = Sector(*sector), true
+		}
+		out[id] = c
+	}
+	return out, rows.Err()
+}
+
+// SetClassByHand records the space's own country and sector for a paper;
+// a nil one keeps the source's, both nil drop the family's own.
+func (s *Store) SetClassByHand(ctx context.Context, spaceID, id uuid.UUID, country, sector *string) error {
+	if country != nil {
+		c := strings.ToUpper(strings.TrimSpace(*country))
+		if !isoCountry.MatchString(c) {
+			return ErrBadClass
+		}
+		country = &c
+	}
+	if sector != nil && !slices.Contains(Sectors, Sector(*sector)) {
+		return ErrBadClass
+	}
+	if _, err := s.ByID(ctx, id); err != nil {
+		return err
+	}
+	if country == nil && sector == nil {
+		_, err := s.db.Exec(ctx, `DELETE FROM instrument_class_overrides WHERE space_id = $1 AND instrument_id = $2`, spaceID, id)
+		return err
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO instrument_class_overrides (space_id, instrument_id, country, sector) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (space_id, instrument_id) DO UPDATE SET country = EXCLUDED.country, sector = EXCLUDED.sector`,
+		spaceID, id, country, sector)
+	if err != nil {
+		return fmt.Errorf("instrument: set class by hand: %w", err)
+	}
+	return nil
+}
+
+var isoCountry = regexp.MustCompile(`^[A-Z]{2}$`)

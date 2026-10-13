@@ -1390,6 +1390,24 @@ export interface paths {
         patch: operations["updateInstrument"];
         trace?: never;
     };
+    "/api/v1/instruments/{instrumentId}/class": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The paper's country of risk and sector as the family sees them (decision Р-46), and the source's. */
+        get: operations["getInstrumentClass"];
+        /** @description The family's own country of risk and sector for the paper, over the source's; a null keeps the source's, both null drop the family's own. 400 for a country not two Latin letters or a sector off the list. */
+        put: operations["setInstrumentClass"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instrument-events": {
         parameters: {
             query?: never;
@@ -2755,6 +2773,33 @@ export interface components {
             /** @description amount_minor above zero */
             incoming: boolean;
             currency: string;
+        };
+        InstrumentClass: {
+            /** @description ISO 3166 two-letter country of risk as the family sees it; empty when unknown */
+            country: string;
+            /** @description The sector key as the family sees it; empty when unknown */
+            sector: string;
+            country_by_hand: boolean;
+            sector_by_hand: boolean;
+            /**
+             * @description Where the source's class came from; empty when no source has been asked
+             * @enum {string}
+             */
+            source: "tinvest" | "yahoo" | "";
+            /** @description The source's own words: the broker's sector and a fund's focus, or Yahoo's sector */
+            raw: string;
+            /** Format: date-time */
+            fetched_at: string | null;
+            /** @description The source's country; empty when it gave none */
+            source_country: string;
+            /** @description The source's sector, brought to the list; empty when it gave none */
+            source_sector: string;
+            /** @description The list of sector keys, in the order a picker shows it */
+            sectors: string[];
+        };
+        InstrumentClassInput: {
+            country: string | null;
+            sector: string | null;
         };
         StructureSlice: {
             /** @description The kind (shares, bonds, funds, currency, metals, crypto, other, broker_cash, money, deposits, broker_balance), the currency, the account's id, the two-letter country of risk — empty for what is not a paper, «-» for a paper with no ISIN and no known country —, the sector (financials, energy, it, consumer, telecom, utilities, materials, industrials, health_care, real_estate, government, municipal, funds_equity, funds_bonds, funds_money, funds_gold, funds_mixed; empty for what is not a paper, «-» for an unknown sector), or where it is held (domestic, foreign_paper, foreign_broker; empty for what is not at a broker) */
@@ -8260,6 +8305,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Instrument"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    getInstrumentClass: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The class */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentClass"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setInstrumentClass: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstrumentClassInput"];
+            };
+        };
+        responses: {
+            /** @description The class */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentClass"];
                 };
             };
             400: components["responses"]["Error"];

@@ -2016,6 +2016,33 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/instruments/{instrumentId}/class:
+    get:
+      tags: [instruments]
+      operationId: getInstrumentClass
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: The paper's country of risk and sector as the family sees them (decision Р-46), and the source's.
+      responses:
+        "200": { description: The class, content: { application/json: { schema: { $ref: "#/components/schemas/InstrumentClass" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [instruments]
+      operationId: setInstrumentClass
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        The family's own country of risk and sector for the paper, over the source's; a null keeps the
+        source's, both null drop the family's own. 400 for a country not two Latin letters or a sector off
+        the list.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/InstrumentClassInput" } } } }
+      responses:
+        "200": { description: The class, content: { application/json: { schema: { $ref: "#/components/schemas/InstrumentClass" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/instrument-events:
     get:
       tags: [corporate-actions]
@@ -3722,6 +3749,26 @@ components:
         name: { type: string, maxLength: 200, description: "RecurringPayment.name; case and «ё» do not matter" }
         incoming: { type: boolean, description: "amount_minor above zero" }
         currency: { type: string }
+    InstrumentClass:
+      type: object
+      required: [country, sector, country_by_hand, sector_by_hand, source, raw, fetched_at, source_country, source_sector, sectors]
+      properties:
+        country: { type: string, description: "ISO 3166 two-letter country of risk as the family sees it; empty when unknown" }
+        sector: { type: string, description: "The sector key as the family sees it; empty when unknown" }
+        country_by_hand: { type: boolean }
+        sector_by_hand: { type: boolean }
+        source: { type: string, enum: [tinvest, yahoo, ""], description: "Where the source's class came from; empty when no source has been asked" }
+        raw: { type: string, description: "The source's own words: the broker's sector and a fund's focus, or Yahoo's sector" }
+        fetched_at: { type: string, format: date-time, nullable: true }
+        source_country: { type: string, description: "The source's country; empty when it gave none" }
+        source_sector: { type: string, description: "The source's sector, brought to the list; empty when it gave none" }
+        sectors: { type: array, items: { type: string }, description: "The list of sector keys, in the order a picker shows it" }
+    InstrumentClassInput:
+      type: object
+      required: [country, sector]
+      properties:
+        country: { type: string, nullable: true }
+        sector: { type: string, nullable: true }
     StructureSlice:
       type: object
       required: [key, minor]

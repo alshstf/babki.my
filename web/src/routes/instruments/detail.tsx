@@ -24,6 +24,7 @@ import type { Instrument } from "@/api/instruments";
 import { PriceChart } from "./price-chart";
 import { PaperOperations } from "./paper-operations";
 import { PaperPayouts } from "./paper-payouts";
+import { PaperClass } from "./paper-class";
 import { PaperReturn } from "@/routes/accounts/account-return";
 import { priceText } from "./price-text";
 
@@ -133,6 +134,9 @@ export function InstrumentPage() {
           )}
         </h1>
         <div className="text-sm text-muted-foreground">{subtitle}</div>
+        {(paper.type === "share" || paper.type === "bond" || paper.type === "etf") && (
+          <PaperClass instrumentId={instrumentId} canEdit={!isViewer} />
+        )}
       </div>
 
       <Card size="sm">
