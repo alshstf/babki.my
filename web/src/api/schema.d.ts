@@ -2647,6 +2647,40 @@ export interface components {
             receipts: components["schemas"]["Receipt"][];
             /** @description Wage payments' gross and withheld tax written from their payslips; operation_id names the row */
             wage_entries: components["schemas"]["ExportWageEntry"][];
+            /** @description Papers' country of risk and sector the family set itself (decision Р-46); null keeps the source's */
+            instrument_classes: components["schemas"]["ExportInstrumentClass"][];
+            /** @description The savings goals as entered, in their order (decision Р-44) */
+            savings_goals: components["schemas"]["ExportSavingsGoal"][];
+            /** @description The what-if plans the family saved (decision Р-48) */
+            allocation_plans: components["schemas"]["AllocationSavedPlan"][];
+        };
+        ExportInstrumentClass: {
+            /** Format: uuid */
+            instrument_id: string;
+            country: string | null;
+            sector: string | null;
+        };
+        ExportSavingsGoal: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: int64 */
+            target_minor: number | null;
+            target_on: string | null;
+            /** Format: int64 */
+            monthly_minor: number | null;
+            yield_percent: string;
+            position: number;
+            funds: components["schemas"]["ExportGoalFund"][];
+        };
+        ExportGoalFund: {
+            /** Format: uuid */
+            account_id: string;
+            /**
+             * Format: int64
+             * @description A sum out of the account in the base currency; null: the whole account
+             */
+            amount_minor: number | null;
         };
         ExportWageEntry: {
             /** Format: uuid */

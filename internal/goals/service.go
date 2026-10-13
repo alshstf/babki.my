@@ -142,6 +142,11 @@ func (s *Service) SetAside(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUI
 	return out, nil
 }
 
+// Goals are the space's goals as entered, unvalued: for the export.
+func (s *Service) Goals(ctx context.Context, spaceID uuid.UUID) ([]Goal, error) {
+	return s.load(ctx, spaceID)
+}
+
 func (s *Service) load(ctx context.Context, spaceID uuid.UUID) ([]Goal, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, name, target_minor, target_on, monthly_minor, yield_percent, position

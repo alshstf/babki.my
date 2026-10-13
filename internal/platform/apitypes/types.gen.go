@@ -3571,6 +3571,14 @@ type ExportCategory struct {
 	TaxMark nullable.Nullable[string] `json:"tax_mark"`
 }
 
+// ExportGoalFund defines model for ExportGoalFund.
+type ExportGoalFund struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// AmountMinor A sum out of the account in the base currency; null: the whole account
+	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+}
+
 // ExportInstrument defines model for ExportInstrument.
 type ExportInstrument struct {
 	Currency       string                    `json:"currency"`
@@ -3583,6 +3591,13 @@ type ExportInstrument struct {
 	Name           string                    `json:"name"`
 	Ticker         string                    `json:"ticker"`
 	Type           string                    `json:"type"`
+}
+
+// ExportInstrumentClass defines model for ExportInstrumentClass.
+type ExportInstrumentClass struct {
+	Country      nullable.Nullable[string] `json:"country"`
+	InstrumentId openapi_types.UUID        `json:"instrument_id"`
+	Sector       nullable.Nullable[string] `json:"sector"`
 }
 
 // ExportInstrumentEvent defines model for ExportInstrumentEvent.
@@ -3670,6 +3685,18 @@ type ExportOperation struct {
 	TradingMode     nullable.Nullable[string]             `json:"trading_mode"`
 	TransferGroupId nullable.Nullable[openapi_types.UUID] `json:"transfer_group_id"`
 	Type            string                                `json:"type"`
+}
+
+// ExportSavingsGoal defines model for ExportSavingsGoal.
+type ExportSavingsGoal struct {
+	Funds        []ExportGoalFund          `json:"funds"`
+	Id           openapi_types.UUID        `json:"id"`
+	MonthlyMinor nullable.Nullable[int64]  `json:"monthly_minor"`
+	Name         string                    `json:"name"`
+	Position     int                       `json:"position"`
+	TargetMinor  nullable.Nullable[int64]  `json:"target_minor"`
+	TargetOn     nullable.Nullable[string] `json:"target_on"`
+	YieldPercent string                    `json:"yield_percent"`
 }
 
 // ExportSpace defines model for ExportSpace.
@@ -5189,6 +5216,9 @@ type SpaceExport struct {
 		Sectors []AllocationTarget `json:"sectors"`
 	} `json:"allocation"`
 
+	// AllocationPlans The what-if plans the family saved (decision Р-48)
+	AllocationPlans []AllocationSavedPlan `json:"allocation_plans"`
+
 	// BudgetLimits The budget's limits, by category and the month each runs from (GET /budget/limits)
 	BudgetLimits []BudgetLimit `json:"budget_limits"`
 
@@ -5196,17 +5226,23 @@ type SpaceExport struct {
 	Categories []ExportCategory `json:"categories"`
 
 	// CategoryRules The family's filing rules in the order they are tried
-	CategoryRules    []CategoryRule          `json:"category_rules"`
-	ExportedAt       time.Time               `json:"exported_at"`
-	Format           SpaceExportFormat       `json:"format"`
-	InstrumentEvents []ExportInstrumentEvent `json:"instrument_events"`
-	Instruments      []ExportInstrument      `json:"instruments"`
-	ManualPrices     []ExportManualPrice     `json:"manual_prices"`
-	Members          []ExportMember          `json:"members"`
+	CategoryRules []CategoryRule    `json:"category_rules"`
+	ExportedAt    time.Time         `json:"exported_at"`
+	Format        SpaceExportFormat `json:"format"`
+
+	// InstrumentClasses Papers' country of risk and sector the family set itself (decision Р-46); null keeps the source's
+	InstrumentClasses []ExportInstrumentClass `json:"instrument_classes"`
+	InstrumentEvents  []ExportInstrumentEvent `json:"instrument_events"`
+	Instruments       []ExportInstrument      `json:"instruments"`
+	ManualPrices      []ExportManualPrice     `json:"manual_prices"`
+	Members           []ExportMember          `json:"members"`
 
 	// Receipts The cash receipts, by their time; operation_id names the row each completes
-	Receipts []Receipt   `json:"receipts"`
-	Space    ExportSpace `json:"space"`
+	Receipts []Receipt `json:"receipts"`
+
+	// SavingsGoals The savings goals as entered, in their order (decision Р-44)
+	SavingsGoals []ExportSavingsGoal `json:"savings_goals"`
+	Space        ExportSpace         `json:"space"`
 
 	// Version 1. Raised when a field changes meaning or goes away; new fields may appear without it.
 	Version int `json:"version"`

@@ -223,6 +223,33 @@ func (s *Store) ClassesFor(ctx context.Context, spaceID uuid.UUID, ids []uuid.UU
 	return out, rows.Err()
 }
 
+// HandClass is a paper's country and sector the space set itself; nil keeps
+// the source's.
+type HandClass struct {
+	Instrument      uuid.UUID
+	Country, Sector *string
+}
+
+// ByHand are the space's own countries and sectors, by paper.
+func (s *Store) ByHand(ctx context.Context, spaceID uuid.UUID) ([]HandClass, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT instrument_id, country, sector FROM instrument_class_overrides
+		WHERE space_id = $1 ORDER BY instrument_id`, spaceID)
+	if err != nil {
+		return nil, fmt.Errorf("instrument: classes by hand: %w", err)
+	}
+	defer rows.Close()
+	var out []HandClass
+	for rows.Next() {
+		var c HandClass
+		if err := rows.Scan(&c.Instrument, &c.Country, &c.Sector); err != nil {
+			return nil, fmt.Errorf("instrument: classes by hand: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // SetClassByHand records the space's own country and sector for a paper;
 // a nil one keeps the source's, both nil drop the family's own.
 func (s *Store) SetClassByHand(ctx context.Context, spaceID, id uuid.UUID, country, sector *string) error {
