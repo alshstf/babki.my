@@ -60,7 +60,10 @@ export function TaxesPage() {
         <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="tax-by-balance">{t("taxes.byBalance", { count: data.by_balance })}</p>
       )}
       {data && data.supported && (
-        <p className="text-xs text-muted-foreground">{t("taxes.notYet")}</p>
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <p>{t("taxes.notYet")}</p>
+          <p>{t("taxes.accrued")}</p>
+        </div>
       )}
       {data && data.supported && <SharedAccounts />}
     </div>
