@@ -33,6 +33,7 @@ import { PERIODS, periodDays, type Period } from "@/lib/periods";
 import { RecurringPayments } from "./recurring";
 import { ForecastCard } from "./forecast";
 import { BudgetCard } from "./budget";
+import { GoalsCard } from "./goals";
 import { ReceiptsCard } from "./receipts";
 
 const EVERYONE = "all";
@@ -143,6 +144,7 @@ export function MoneyPage() {
             testId="money-income"
           />
           <BudgetCard />
+          <GoalsCard />
           <ReceiptsCard />
           <ForecastCard />
           <TaxCard />
