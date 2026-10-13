@@ -162,3 +162,27 @@ func TestATopUpGoesWhereTheWorthIsShort(t *testing.T) {
 		t.Error("more than the brokers hold free accepted")
 	}
 }
+
+// A target is approached from either side; a ceiling only matters above it;
+// a hundredth of a point is no move.
+func TestVerdict(t *testing.T) {
+	d := decimal.RequireFromString
+	for _, c := range []struct {
+		before, after, target string
+		ceiling               bool
+		want                  Verdict
+	}{
+		{"35", "31", "30", false, Closer},
+		{"25", "29", "30", false, Closer},
+		{"25", "35", "30", false, Same},
+		{"30", "40", "30", false, Further},
+		{"25", "28", "20", true, Further},
+		{"28", "22", "20", true, Closer},
+		{"10", "18", "20", true, Same},
+		{"30.004", "30.001", "20", true, Same},
+	} {
+		if got := verdict(d(c.before), d(c.after), d(c.target), c.ceiling); got != c.want {
+			t.Errorf("%s → %s against %s (ceiling %v): %s, want %s", c.before, c.after, c.target, c.ceiling, got, c.want)
+		}
+	}
+}

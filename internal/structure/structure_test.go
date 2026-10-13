@@ -321,3 +321,34 @@ func TestPapersComeApartByCountrySectorAndHolding(t *testing.T) {
 		t.Errorf("papers %d, at brokers %d", s.Papers, s.AtBrokers)
 	}
 }
+
+// A planned purchase laid on the worth (decision Р-48): the paper on top of
+// its account's, the money off its cash — even below zero, which is not a
+// debt; an account not of the family's is refused.
+func TestAPlanIsLaidOnTheWorth(t *testing.T) {
+	broker := uuid.New()
+	accounts := fakeAccounts{{Account: account.Account{ID: broker, Type: account.TypeBrokerage, Currency: "RUB", Status: account.StatusActive}}}
+	positions := fakePositions{broker: {
+		Positions: []apitypes.Position{position(apitypes.InstrumentTypeShare, "RU0009029540", "RUB", of(300_000_00), of(300_000_00))},
+		Cash:      []apitypes.CashPosition{{Currency: "RUB", AmountMinor: 20_000_00}},
+	}}
+	svc := structure.NewService(accounts, positions, fakeSpaces{}, fakeRates{})
+	fund := uuid.New()
+	s, err := svc.OfWith(t.Context(), uuid.New(), structure.Liquid, []structure.Change{
+		{Account: broker, Paper: &fund, Type: instrument.TypeETF, ISIN: "US46138G6492", Currency: "RUB", Minor: 50_000_00},
+		{Account: broker, Currency: "RUB", Minor: -50_000_00},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int64{}
+	for _, k := range s.ByKind {
+		kinds[k.Key] = k.Minor
+	}
+	if s.Assets != 320_000_00 || s.Debts != 0 || kinds["funds"] != 50_000_00 || kinds["broker_cash"] != -30_000_00 || s.Papers != 350_000_00 {
+		t.Errorf("after the purchase: assets %d, debts %d, kinds %v, papers %d", s.Assets, s.Debts, kinds, s.Papers)
+	}
+	if _, err := svc.OfWith(t.Context(), uuid.New(), structure.Liquid, []structure.Change{{Account: uuid.New(), Currency: "RUB", Minor: 1}}); err == nil {
+		t.Error("a stranger's account was taken")
+	}
+}

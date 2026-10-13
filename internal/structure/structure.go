@@ -216,10 +216,31 @@ type piece struct {
 	byISIN bool
 	sector string
 	held   string
+	// change is a planned change's piece: negative is less of what is held,
+	// not a debt.
+	change bool
+}
+
+// Change is a planned change to what an account holds, in Currency's minor
+// units, signed: a paper (Paper set, with its type and ISIN) or money.
+type Change struct {
+	Account  uuid.UUID
+	Paper    *uuid.UUID
+	Type     instrument.Type
+	ISIN     string
+	Currency string
+	Minor    int64
 }
 
 // Of is the space's structure today, papers at valuation.
 func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation) (Structure, error) {
+	return s.OfWith(ctx, spaceID, valuation, nil)
+}
+
+// OfWith is the structure as it would be after the changes (decision Р-48):
+// each laid on top of what its account holds, as the account's own pieces
+// would be. An account not of the space's, or archived, is refused.
+func (s *Service) OfWith(ctx context.Context, spaceID uuid.UUID, valuation Valuation, changes []Change) (Structure, error) {
 	if valuation != Liquid && valuation != Full {
 		return Structure{}, fmt.Errorf("%w: valuation is liquid or full", family.ErrValidation)
 	}
@@ -252,6 +273,13 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation
 			class: balanceClass(a.Type), kind: moneyKind(a.Type, a.Currency, sp.BaseCurrency, false),
 			currency: a.Currency, account: a.ID, country: NoCountry, minor: a.Balance.AmountMinor,
 		})
+	}
+	for _, c := range changes {
+		p, err := changePiece(list, c, sp.BaseCurrency)
+		if err != nil {
+			return Structure{}, err
+		}
+		pieces = append(pieces, p)
 	}
 	if err := s.classify(ctx, spaceID, pieces); err != nil {
 		return Structure{}, err
@@ -453,6 +481,35 @@ func balanceClass(t account.Type) Class {
 	return ClassMoney
 }
 
+// changePiece is a planned change as a piece of its account.
+func changePiece(list []account.WithBalance, c Change, base string) (piece, error) {
+	var a *account.WithBalance
+	for i := range list {
+		if list[i].ID == c.Account && list[i].Status == account.StatusActive {
+			a = &list[i]
+		}
+	}
+	if a == nil {
+		return piece{}, fmt.Errorf("%w: no such active account", family.ErrValidation)
+	}
+	p := piece{currency: c.Currency, account: a.ID, country: NoCountry, minor: c.Minor, change: true}
+	if c.Paper != nil {
+		p.class = paperClass(c.Type)
+		p.kind = paperKind(p.class)
+		p.country = issuerCountry(c.ISIN)
+		p.paper, p.held = c.Paper, heldAt(*a, c.ISIN)
+		return p, nil
+	}
+	byJournal := account.CountedByJournal(a.Account)
+	p.class = balanceClass(a.Type)
+	if byJournal && a.Type == account.TypeBrokerage {
+		p.class = ClassBrokerCash
+	}
+	p.kind = moneyKind(a.Type, c.Currency, base, byJournal)
+	p.held = heldAt(*a, "")
+	return p, nil
+}
+
 // heldAt is where a paper of this ISIN (money: none) on the account is held:
 // anything at a broker abroad is there; at a Russian broker, a paper issued
 // elsewhere is foreign; what is not at a broker is not.
@@ -506,7 +563,7 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 			}
 			inBase = converted
 		}
-		if inBase < 0 {
+		if inBase < 0 && !p.change {
 			out.Debts += inBase
 			continue
 		}

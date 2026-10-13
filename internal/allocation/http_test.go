@@ -63,6 +63,34 @@ func (fakeStructures) Of(_ context.Context, _ uuid.UUID, valuation structure.Val
 	return s, nil
 }
 
+// OfWith lays the changes on the worth the plain way: a paper by its kind,
+// its ISIN's country and an unknown sector, money as the brokers' roubles.
+func (f fakeStructures) OfWith(ctx context.Context, spaceID uuid.UUID, valuation structure.Valuation, changes []structure.Change) (structure.Structure, error) {
+	s, _ := f.Of(ctx, spaceID, valuation)
+	add := func(list []structure.Slice, key string, minor int64) []structure.Slice {
+		for i := range list {
+			if list[i].Key == key {
+				list[i].Minor += minor
+				return list
+			}
+		}
+		return append(list, structure.Slice{Key: key, Minor: minor})
+	}
+	for _, c := range changes {
+		s.Targets += c.Minor
+		s.ByTargetCurrency = add(s.ByTargetCurrency, c.Currency, c.Minor)
+		if c.Paper == nil {
+			s.ByKind = add(s.ByKind, string(structure.KindBrokerCash), c.Minor)
+			continue
+		}
+		s.ByKind = add(s.ByKind, string(structure.PaperKind(c.Type)), c.Minor)
+		s.Papers += c.Minor
+		s.ByCountry = add(s.ByCountry, c.ISIN[:2], c.Minor)
+		s.BySector = add(s.BySector, structure.UnknownSector, c.Minor)
+	}
+	return s, nil
+}
+
 // Targets are stated by kind and by currency and set against the worth;
 // targets that do not add up to 100 are refused; the mode is the family's
 // pick, top-ups until then.
