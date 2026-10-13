@@ -3716,6 +3716,8 @@ export interface components {
             user_id: string;
             /** @description The broker's country, ISO 3166 alpha-2 — where the money is credited (line 011); empty when the program does not know the broker */
             country: string;
+            /** @description The same as ОКСМ's digital code, three digits; empty when unknown */
+            country_code: string;
             payouts: components["schemas"]["TaxYearForeignPayout"][];
             sales: components["schemas"]["TaxYearForeignSale"][];
             /** @description Tax rows set against no payment: another day than the paper's payment, or no paper */
@@ -3746,8 +3748,11 @@ export interface components {
             isin: string;
             /** @description The issuer's country by its ISIN, ISO 3166 alpha-2 (line 010); empty without an ISIN */
             country: string;
-            /** @description Line 030 */
+            /** @description Line 010 as ОКСМ writes it, three digits; empty without one — no ISIN, or an international one (XS) */
+            country_code: string;
             currency: string;
+            /** @description Line 030: ОКВ's digital code, three digits; empty for a currency the program has no code for */
+            currency_code: string;
             /**
              * Format: int64
              * @description Line 060, before the tax
@@ -3793,6 +3798,8 @@ export interface components {
             /** @description Decimal; 0 for an amortization */
             quantity: string;
             currency: string;
+            /** @description ОКВ's digital code; empty when unknown */
+            currency_code: string;
             /** Format: int64 */
             proceeds_minor: number;
             /** Format: int64 */

@@ -186,21 +186,23 @@ func foreignAPI(f Foreign) apitypes.TaxYearForeign {
 	out := apitypes.TaxYearForeign{Year: f.Year, Supported: true, Currency: f.Currency, Accounts: make([]apitypes.TaxYearForeignAccount, 0, len(f.Accounts))}
 	for _, a := range f.Accounts {
 		acc := apitypes.TaxYearForeignAccount{
-			AccountId: a.ID, Name: a.Name, UserId: a.Person, Country: a.Country, IncomeBaseMinor: a.Income, ExpensesBaseMinor: a.Expenses,
+			AccountId: a.ID, Name: a.Name, UserId: a.Person, Country: a.Country, CountryCode: countryCode(a.Country),
+			IncomeBaseMinor: a.Income, ExpensesBaseMinor: a.Expenses,
 			Unvalued: a.Unvalued, Payouts: make([]apitypes.TaxYearForeignPayout, 0, len(a.Payouts)),
 			Sales: make([]apitypes.TaxYearForeignSale, 0, len(a.Sales)), OtherTaxes: make([]apitypes.TaxYearForeignTax, 0, len(a.Taxes)),
 		}
 		for _, p := range a.Payouts {
 			acc.Payouts = append(acc.Payouts, apitypes.TaxYearForeignPayout{
 				On: p.On.Format(time.DateOnly), Type: apitypes.TaxYearForeignPayoutType(p.Type), Kind: p.Kind, InstrumentId: paper(p.Instrument),
-				Paper: p.Paper, Isin: p.ISIN, Country: p.Country, Currency: p.Currency, AmountMinor: p.Minor, WithheldMinor: p.Withheld,
+				Paper: p.Paper, Isin: p.ISIN, Country: p.Country, CountryCode: countryCode(p.Country), Currency: p.Currency,
+				CurrencyCode: currencyCode(p.Currency), AmountMinor: p.Minor, WithheldMinor: p.Withheld,
 				Rate: rate(p.Known, p.Rate), AmountBaseMinor: p.InBase, WithheldBaseMinor: p.WithheldInBase, TaxRuMinor: p.TaxRU, CreditMinor: p.Credit,
 			})
 		}
 		for _, s := range a.Sales {
 			sale := apitypes.TaxYearForeignSale{
 				On: s.On.Format(time.DateOnly), SettledOn: s.RateOn.Format(time.DateOnly), InstrumentId: s.Instrument, Paper: s.Paper, Isin: s.ISIN,
-				Quantity: s.Quantity.String(), Currency: s.Currency, ProceedsMinor: s.Proceeds, FeeMinor: s.Fee, Rate: rate(!s.Rate.IsZero(), s.Rate),
+				Quantity: s.Quantity.String(), Currency: s.Currency, CurrencyCode: currencyCode(s.Currency), ProceedsMinor: s.Proceeds, FeeMinor: s.Fee, Rate: rate(!s.Rate.IsZero(), s.Rate),
 				ProceedsBaseMinor: s.ProceedsInBase, FeeBaseMinor: s.FeeInBase, Lots: make([]apitypes.TaxYearForeignLot, 0, len(s.Lots)),
 				ResultBaseMinor: nullable.NewNullNullable[int64](), LongBaseMinor: s.Long,
 			}

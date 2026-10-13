@@ -4330,12 +4330,13 @@ components:
         accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignAccount" } }
     TaxYearForeignAccount:
       type: object
-      required: [account_id, name, user_id, country, payouts, sales, other_taxes, income_base_minor, expenses_base_minor, unvalued]
+      required: [account_id, name, user_id, country, country_code, payouts, sales, other_taxes, income_base_minor, expenses_base_minor, unvalued]
       properties:
         account_id: { type: string, format: uuid }
         name: { type: string }
         user_id: { type: string, format: uuid, description: "Whose income it is for tax" }
         country: { type: string, description: "The broker's country, ISO 3166 alpha-2 — where the money is credited (line 011); empty when the program does not know the broker" }
+        country_code: { type: string, description: "The same as ОКСМ's digital code, three digits; empty when unknown" }
         payouts: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignPayout" } }
         sales: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignSale" } }
         other_taxes: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignTax" }, description: "Tax rows set against no payment: another day than the paper's payment, or no paper" }
@@ -4344,7 +4345,7 @@ components:
         unvalued: { type: integer, description: "Lines left out of the sums for a missing rate or a lot's missing day" }
     TaxYearForeignPayout:
       type: object
-      required: [on, type, kind, instrument_id, paper, isin, country, currency, amount_minor, withheld_minor, rate, amount_base_minor, withheld_base_minor, tax_ru_minor, credit_minor]
+      required: [on, type, kind, instrument_id, paper, isin, country, country_code, currency, currency_code, amount_minor, withheld_minor, rate, amount_base_minor, withheld_base_minor, tax_ru_minor, credit_minor]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD, line 040" }
         type: { type: string, enum: [dividend, coupon, interest] }
@@ -4353,7 +4354,9 @@ components:
         paper: { type: string }
         isin: { type: string }
         country: { type: string, description: "The issuer's country by its ISIN, ISO 3166 alpha-2 (line 010); empty without an ISIN" }
-        currency: { type: string, description: "Line 030" }
+        country_code: { type: string, description: "Line 010 as ОКСМ writes it, three digits; empty without one — no ISIN, or an international one (XS)" }
+        currency: { type: string }
+        currency_code: { type: string, description: "Line 030: ОКВ's digital code, three digits; empty for a currency the program has no code for" }
         amount_minor: { type: integer, format: int64, description: "Line 060, before the tax" }
         withheld_minor: { type: integer, format: int64, description: "Line 130: the tax rows of the same paper, day and currency" }
         rate: { type: string, nullable: true, description: "Line 050: the day's rate to the year's currency; null when there is none" }
@@ -4363,7 +4366,7 @@ components:
         credit_minor: { type: integer, format: int64, description: "Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged" }
     TaxYearForeignSale:
       type: object
-      required: [on, settled_on, instrument_id, paper, isin, quantity, currency, proceeds_minor, fee_minor, rate, proceeds_base_minor, fee_base_minor, lots, result_base_minor, long_base_minor]
+      required: [on, settled_on, instrument_id, paper, isin, quantity, currency, currency_code, proceeds_minor, fee_minor, rate, proceeds_base_minor, fee_base_minor, lots, result_base_minor, long_base_minor]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD" }
         settled_on: { type: string, description: "The day whose rate prices the proceeds and fee" }
@@ -4372,6 +4375,7 @@ components:
         isin: { type: string }
         quantity: { type: string, description: "Decimal; 0 for an amortization" }
         currency: { type: string }
+        currency_code: { type: string, description: "ОКВ's digital code; empty when unknown" }
         proceeds_minor: { type: integer, format: int64 }
         fee_minor: { type: integer, format: int64 }
         rate: { type: string, nullable: true }
