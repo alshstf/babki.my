@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/valuables"
@@ -62,6 +63,9 @@ type Service struct {
 	// For the lines of the accounts abroad (WithForeign).
 	rows   rows
 	papers papers
+	// For the report on the accounts abroad (WithReport).
+	moves moves
+	rates marketdata.RateSource
 }
 
 type soldPieces interface {

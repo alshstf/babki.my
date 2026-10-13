@@ -53,3 +53,18 @@ export function useTaxYearForeign(year: number) {
     },
   });
 }
+
+export type TaxYearForeignReport = components["schemas"]["TaxYearForeignReport"];
+
+// The yearly report on the money's moves of each account abroad
+// (GET /api/v1/tax-year/foreign-report, decision Р-45).
+export function useTaxYearForeignReport(year: number) {
+  return useQuery({
+    queryKey: ["tax-year", year, "foreign-report"],
+    queryFn: async (): Promise<TaxYearForeignReport> => {
+      const { data, error, response } = await api.GET("/api/v1/tax-year/foreign-report", { params: { query: { year } } });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}

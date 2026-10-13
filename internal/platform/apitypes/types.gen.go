@@ -1432,6 +1432,30 @@ func (e TaxYearForeignPayoutType) Valid() bool {
 	}
 }
 
+// Defines values for TaxYearReportAccountVerdict.
+const (
+	TaxYearReportAccountVerdictDue          TaxYearReportAccountVerdict = "due"
+	TaxYearReportAccountVerdictFree         TaxYearReportAccountVerdict = "free"
+	TaxYearReportAccountVerdictFreeIfListed TaxYearReportAccountVerdict = "free_if_listed"
+	TaxYearReportAccountVerdictUnknown      TaxYearReportAccountVerdict = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the TaxYearReportAccountVerdict enum.
+func (e TaxYearReportAccountVerdict) Valid() bool {
+	switch e {
+	case TaxYearReportAccountVerdictDue:
+		return true
+	case TaxYearReportAccountVerdictFree:
+		return true
+	case TaxYearReportAccountVerdictFreeIfListed:
+		return true
+	case TaxYearReportAccountVerdictUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TinvestConnectionStatus.
 const (
 	TinvestConnectionStatusActive       TinvestConnectionStatus = "active"
@@ -5606,6 +5630,25 @@ type TaxYearForeignPayout struct {
 // TaxYearForeignPayoutType defines model for TaxYearForeignPayout.Type.
 type TaxYearForeignPayoutType string
 
+// TaxYearForeignReport defines model for TaxYearForeignReport.
+type TaxYearForeignReport struct {
+	Accounts []TaxYearReportAccount `json:"accounts"`
+
+	// Currency The currency of in_minor and the limit
+	Currency string `json:"currency"`
+
+	// DueBy Date YYYY-MM-DD: the last day to file
+	DueBy string `json:"due_by"`
+
+	// FreeUpToMinor What may come in over the year with no report, where the country frees it
+	FreeUpToMinor int64 `json:"free_up_to_minor"`
+	Supported     bool  `json:"supported"`
+
+	// Until Date YYYY-MM-DD the year is counted to: its last day, or today while it runs
+	Until string `json:"until"`
+	Year  int    `json:"year"`
+}
+
 // TaxYearForeignSale defines model for TaxYearForeignSale.
 type TaxYearForeignSale struct {
 	Currency string `json:"currency"`
@@ -5720,6 +5763,69 @@ type TaxYearPerson struct {
 
 	// WithheldMinor The tax the journals of those brokers' accounts show already taken this year
 	WithheldMinor int64 `json:"withheld_minor"`
+}
+
+// TaxYearReportAccount defines model for TaxYearReportAccount.
+type TaxYearReportAccount struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// Cash Лист 3: one block a currency
+	Cash []TaxYearReportCash `json:"cash"`
+
+	// Country The broker's country, ISO 3166 alpha-2; empty when unknown
+	Country string `json:"country"`
+
+	// CountryCode The same as ОКСМ's digital code
+	CountryCode string `json:"country_code"`
+
+	// InMinor What came in over the year at the rates of 31 December; with nothing in, the money at the end
+	InMinor   int64  `json:"in_minor"`
+	Name      string `json:"name"`
+	NothingIn bool   `json:"nothing_in"`
+
+	// PapersEnd The same at the end of this year
+	PapersEnd []TaxYearReportPapers `json:"papers_end"`
+
+	// PapersStart Лист 4: the papers' full worth at the end of the year before, by currency
+	PapersStart []TaxYearReportPapers `json:"papers_start"`
+
+	// Unpriced Papers no price struck on either day, left out of the worth
+	Unpriced int                `json:"unpriced"`
+	UserId   openapi_types.UUID `json:"user_id"`
+
+	// Verdict free: within the limit in a country the rules free; free_if_listed: within the limit, free if the country exchanges account data automatically; due: past the limit; unknown: a rate is missing
+	Verdict TaxYearReportAccountVerdict `json:"verdict"`
+}
+
+// TaxYearReportAccountVerdict free: within the limit in a country the rules free; free_if_listed: within the limit, free if the country exchanges account data automatically; due: past the limit; unknown: a rate is missing
+type TaxYearReportAccountVerdict string
+
+// TaxYearReportCash defines model for TaxYearReportCash.
+type TaxYearReportCash struct {
+	Currency string `json:"currency"`
+
+	// CurrencyCode ОКВ's digital code; empty when unknown
+	CurrencyCode string `json:"currency_code"`
+	EndMinor     int64  `json:"end_minor"`
+	EndThousands string `json:"end_thousands"`
+	InMinor      int64  `json:"in_minor"`
+	InThousands  string `json:"in_thousands"`
+	OutMinor     int64  `json:"out_minor"`
+	OutThousands string `json:"out_thousands"`
+	StartMinor   int64  `json:"start_minor"`
+
+	// StartThousands The same in thousands of the currency, three decimals, as the form asks
+	StartThousands string `json:"start_thousands"`
+}
+
+// TaxYearReportPapers defines model for TaxYearReportPapers.
+type TaxYearReportPapers struct {
+	Currency     string `json:"currency"`
+	CurrencyCode string `json:"currency_code"`
+	Minor        int64  `json:"minor"`
+
+	// Thousands In thousands of the currency, three decimals
+	Thousands string `json:"thousands"`
 }
 
 // TaxYearWageEntry defines model for TaxYearWageEntry.
@@ -6728,6 +6834,12 @@ type GetTaxYearParams struct {
 
 // GetTaxYearForeignParams defines parameters for GetTaxYearForeign.
 type GetTaxYearForeignParams struct {
+	// Year The year; this one when absent
+	Year *int `form:"year,omitempty" json:"year,omitempty"`
+}
+
+// GetTaxYearForeignReportParams defines parameters for GetTaxYearForeignReport.
+type GetTaxYearForeignReportParams struct {
 	// Year The year; this one when absent
 	Year *int `form:"year,omitempty" json:"year,omitempty"`
 }
