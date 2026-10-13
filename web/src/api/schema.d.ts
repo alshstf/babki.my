@@ -193,6 +193,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tax-year/foreign-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The yearly report on the money's moves of each account at a broker abroad (decision Р-45, step 3; form КНД 1112520, due by 1 June): the money by currency — at the start, what came in, what went out, at the end — and the papers' full worth by currency at the start and the end; what came in over the year at the Central Bank's rates of 31 December (with nothing in, the money at the end) against the limit, and whether the report is due. supported is false, with no accounts, when the residency's rules know no such report. 400 for a year past this one. */
+        get: operations["getTaxYearForeignReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tax-year/wages/{operationId}": {
         parameters: {
             query?: never;
@@ -3879,6 +3896,76 @@ export interface components {
             /** Format: int64 */
             withheld_base_minor: number;
         };
+        TaxYearForeignReport: {
+            year: number;
+            supported: boolean;
+            /** @description The currency of in_minor and the limit */
+            currency: string;
+            /**
+             * Format: int64
+             * @description What may come in over the year with no report, where the country frees it
+             */
+            free_up_to_minor: number;
+            /** @description Date YYYY-MM-DD: the last day to file */
+            due_by: string;
+            accounts: components["schemas"]["TaxYearReportAccount"][];
+        };
+        TaxYearReportAccount: {
+            /** Format: uuid */
+            account_id: string;
+            name: string;
+            /** Format: uuid */
+            user_id: string;
+            /** @description The broker's country, ISO 3166 alpha-2; empty when unknown */
+            country: string;
+            /** @description The same as ОКСМ's digital code */
+            country_code: string;
+            /** @description Лист 3: one block a currency */
+            cash: components["schemas"]["TaxYearReportCash"][];
+            /** @description Лист 4: the papers' full worth at the end of the year before, by currency */
+            papers_start: components["schemas"]["TaxYearReportPapers"][];
+            /** @description The same at the end of this year */
+            papers_end: components["schemas"]["TaxYearReportPapers"][];
+            /** @description Papers no price struck on either day, left out of the worth */
+            unpriced: number;
+            /**
+             * Format: int64
+             * @description What came in over the year at the rates of 31 December; with nothing in, the money at the end
+             */
+            in_minor: number;
+            nothing_in: boolean;
+            /**
+             * @description free: within the limit in a country the rules free; free_if_listed: within the limit, free if the country exchanges account data automatically; due: past the limit; unknown: a rate is missing
+             * @enum {string}
+             */
+            verdict: "free" | "free_if_listed" | "due" | "unknown";
+        };
+        TaxYearReportCash: {
+            currency: string;
+            /** @description ОКВ's digital code; empty when unknown */
+            currency_code: string;
+            /** Format: int64 */
+            start_minor: number;
+            /** Format: int64 */
+            in_minor: number;
+            /** Format: int64 */
+            out_minor: number;
+            /** Format: int64 */
+            end_minor: number;
+            /** @description The same in thousands of the currency, three decimals, as the form asks */
+            start_thousands: string;
+            in_thousands: string;
+            out_thousands: string;
+            end_thousands: string;
+        };
+        TaxYearReportPapers: {
+            currency: string;
+            currency_code: string;
+            /** Format: int64 */
+            minor: number;
+            /** @description In thousands of the currency, three decimals */
+            thousands: string;
+        };
         TaxYearWageEntry: {
             /** Format: int64 */
             gross_minor: number;
@@ -6495,6 +6582,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaxYearForeign"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getTaxYearForeignReport: {
+        parameters: {
+            query?: {
+                /** @description The year; this one when absent */
+                year?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxYearForeignReport"];
                 };
             };
             400: components["responses"]["Error"];

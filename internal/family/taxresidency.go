@@ -105,6 +105,13 @@ type TaxRules struct {
 	// counts for the country.
 	DepositInsuredMinor    int64
 	DepositInsuredCurrency string
+	// ReportFreeIn are the countries an account abroad needs no yearly report
+	// on the money's moves in, while what came in over the year is no more than
+	// ReportFreeUpToMinor of TaxCurrency (decision Р-45); a country exchanging
+	// account data automatically frees it too, but its list changes and the
+	// family checks it. 0: no such report the application knows of.
+	ReportFreeIn        [4]string
+	ReportFreeUpToMinor int64
 }
 
 // TaxBand is a rate in hundredths of a percent on the part of a year's sum
@@ -151,6 +158,12 @@ var taxRules = map[string]TaxRules{
 		// insured up to 1,4 млн a person (АСВ, «Вопросы и ответы», 2026-10-14;
 		// 177-ФЗ); up to 10 млн in special cases for three months, not counted.
 		DepositInsuredMinor: 1_400_000_00, DepositInsuredCurrency: "RUB",
+		// No report on an account in a country of the Eurasian Economic Union —
+		// Armenia, Belarus, Kazakhstan, Kyrgyzstan — while what came in over the
+		// year (or, with nothing in, the balance at its end) is no more than
+		// 600 000 at the Central Bank's rate of 31 December (ч. 7 ст. 12
+		// 173-ФЗ; ФНС, «Порядок представления отчёта», 2026-10-14).
+		ReportFreeIn: [4]string{"AM", "BY", "KZ", "KG"}, ReportFreeUpToMinor: 600_000_00,
 		InvestmentBands: [2]TaxBand{{UpToMinor: 2_400_000_00, BP: 1300}, {BP: 1500}},
 		MainBands: [5]TaxBand{
 			{UpToMinor: 2_400_000_00, BP: 1300},

@@ -3,6 +3,8 @@ package taxyear
 import (
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -33,6 +35,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleGet)))))
 	srv.Mount("GET /api/v1/tax-year/foreign", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleForeign)))))
+	srv.Mount("GET /api/v1/tax-year/foreign-report", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleReport)))))
 	edit := func(fn http.HandlerFunc) http.Handler {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
 	}
@@ -221,6 +225,65 @@ func foreignAPI(f Foreign) apitypes.TaxYearForeign {
 			acc.OtherTaxes = append(acc.OtherTaxes, apitypes.TaxYearForeignTax{
 				On: t.On.Format(time.DateOnly), InstrumentId: paper(t.Instrument), Paper: t.Paper, Currency: t.Currency, WithheldMinor: t.Withheld,
 				Rate: rate(t.Known, t.Rate), WithheldBaseMinor: t.WithheldInBase,
+			})
+		}
+		out.Accounts = append(out.Accounts, acc)
+	}
+	return out
+}
+
+func (h *Handler) handleReport(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	year, err := parseYear(r.URL.Query().Get("year"), h.now())
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	rep, err := h.svc.ReportOf(r.Context(), p.SpaceID, year)
+	if errors.Is(err, ErrNoEstimate) {
+		httpjson.Write(w, http.StatusOK, apitypes.TaxYearForeignReport{
+			Year: year, Accounts: []apitypes.TaxYearReportAccount{},
+			DueBy: time.Date(year+1, time.June, 1, 0, 0, 0, 0, time.UTC).Format(time.DateOnly),
+		})
+		return
+	}
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, reportAPI(rep))
+}
+
+// thousands is a sum in thousands of its currency to three decimals — whole
+// units — as the form КНД 1112520 asks it.
+func thousands(minor int64) string {
+	return decimal.NewFromInt(minor).Div(decimal.NewFromInt(100_000)).StringFixed(3)
+}
+
+func reportAPI(r Report) apitypes.TaxYearForeignReport {
+	papers := func(m map[string]int64) []apitypes.TaxYearReportPapers {
+		out := make([]apitypes.TaxYearReportPapers, 0, len(m))
+		for c, minor := range m {
+			out = append(out, apitypes.TaxYearReportPapers{Currency: c, CurrencyCode: currencyCode(c), Minor: minor, Thousands: thousands(minor)})
+		}
+		slices.SortFunc(out, func(a, b apitypes.TaxYearReportPapers) int { return strings.Compare(a.Currency, b.Currency) })
+		return out
+	}
+	out := apitypes.TaxYearForeignReport{
+		Year: r.Year, Supported: true, Currency: r.Currency, FreeUpToMinor: r.FreeUpTo, DueBy: r.DueBy.Format(time.DateOnly),
+		Accounts: make([]apitypes.TaxYearReportAccount, 0, len(r.Accounts)),
+	}
+	for _, a := range r.Accounts {
+		acc := apitypes.TaxYearReportAccount{
+			AccountId: a.ID, Name: a.Name, UserId: a.Person, Country: a.Country, CountryCode: countryCode(a.Country),
+			Cash: make([]apitypes.TaxYearReportCash, 0, len(a.Moves.Cash)), PapersStart: papers(a.Moves.PapersStart),
+			PapersEnd: papers(a.Moves.PapersEnd), Unpriced: a.Moves.Unpriced, InMinor: a.In, NothingIn: a.NothingIn,
+			Verdict: apitypes.TaxYearReportAccountVerdict(a.Verdict),
+		}
+		for _, c := range a.Moves.Cash {
+			acc.Cash = append(acc.Cash, apitypes.TaxYearReportCash{
+				Currency: c.Currency, CurrencyCode: currencyCode(c.Currency), StartMinor: c.Start, InMinor: c.In, OutMinor: c.Out, EndMinor: c.End,
+				StartThousands: thousands(c.Start), InThousands: thousands(c.In), OutThousands: thousands(c.Out), EndThousands: thousands(c.End),
 			})
 		}
 		out.Accounts = append(out.Accounts, acc)

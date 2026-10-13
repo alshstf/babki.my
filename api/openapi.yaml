@@ -248,6 +248,23 @@ paths:
         "200": { description: The lines, content: { application/json: { schema: { $ref: "#/components/schemas/TaxYearForeign" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/tax-year/foreign-report:
+    get:
+      tags: [taxyear]
+      operationId: getTaxYearForeignReport
+      description: >-
+        The yearly report on the money's moves of each account at a broker abroad (decision Р-45, step 3; form
+        КНД 1112520, due by 1 June): the money by currency — at the start, what came in, what went out, at the
+        end — and the papers' full worth by currency at the start and the end; what came in over the year at the
+        Central Bank's rates of 31 December (with nothing in, the money at the end) against the limit, and
+        whether the report is due. supported is false, with no accounts, when the residency's rules know no such
+        report. 400 for a year past this one.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer }, description: "The year; this one when absent" }
+      responses:
+        "200": { description: The report, content: { application/json: { schema: { $ref: "#/components/schemas/TaxYearForeignReport" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/tax-year/wages/{operationId}:
     put:
       tags: [taxyear]
@@ -4442,6 +4459,54 @@ components:
         withheld_minor: { type: integer, format: int64 }
         rate: { type: string, nullable: true }
         withheld_base_minor: { type: integer, format: int64 }
+    TaxYearForeignReport:
+      type: object
+      required: [year, supported, currency, free_up_to_minor, due_by, accounts]
+      properties:
+        year: { type: integer }
+        supported: { type: boolean }
+        currency: { type: string, description: "The currency of in_minor and the limit" }
+        free_up_to_minor: { type: integer, format: int64, description: "What may come in over the year with no report, where the country frees it" }
+        due_by: { type: string, description: "Date YYYY-MM-DD: the last day to file" }
+        accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearReportAccount" } }
+    TaxYearReportAccount:
+      type: object
+      required: [account_id, name, user_id, country, country_code, cash, papers_start, papers_end, unpriced, in_minor, nothing_in, verdict]
+      properties:
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        user_id: { type: string, format: uuid }
+        country: { type: string, description: "The broker's country, ISO 3166 alpha-2; empty when unknown" }
+        country_code: { type: string, description: "The same as ОКСМ's digital code" }
+        cash: { type: array, items: { $ref: "#/components/schemas/TaxYearReportCash" }, description: "Лист 3: one block a currency" }
+        papers_start: { type: array, items: { $ref: "#/components/schemas/TaxYearReportPapers" }, description: "Лист 4: the papers' full worth at the end of the year before, by currency" }
+        papers_end: { type: array, items: { $ref: "#/components/schemas/TaxYearReportPapers" }, description: "The same at the end of this year" }
+        unpriced: { type: integer, description: "Papers no price struck on either day, left out of the worth" }
+        in_minor: { type: integer, format: int64, description: "What came in over the year at the rates of 31 December; with nothing in, the money at the end" }
+        nothing_in: { type: boolean }
+        verdict: { type: string, enum: [free, free_if_listed, due, unknown], description: "free: within the limit in a country the rules free; free_if_listed: within the limit, free if the country exchanges account data automatically; due: past the limit; unknown: a rate is missing" }
+    TaxYearReportCash:
+      type: object
+      required: [currency, currency_code, start_minor, in_minor, out_minor, end_minor, start_thousands, in_thousands, out_thousands, end_thousands]
+      properties:
+        currency: { type: string }
+        currency_code: { type: string, description: "ОКВ's digital code; empty when unknown" }
+        start_minor: { type: integer, format: int64 }
+        in_minor: { type: integer, format: int64 }
+        out_minor: { type: integer, format: int64 }
+        end_minor: { type: integer, format: int64 }
+        start_thousands: { type: string, description: "The same in thousands of the currency, three decimals, as the form asks" }
+        in_thousands: { type: string }
+        out_thousands: { type: string }
+        end_thousands: { type: string }
+    TaxYearReportPapers:
+      type: object
+      required: [currency, currency_code, minor, thousands]
+      properties:
+        currency: { type: string }
+        currency_code: { type: string }
+        minor: { type: integer, format: int64 }
+        thousands: { type: string, description: "In thousands of the currency, three decimals" }
     TaxYearWageEntry:
       type: object
       required: [gross_minor, withheld_minor]
