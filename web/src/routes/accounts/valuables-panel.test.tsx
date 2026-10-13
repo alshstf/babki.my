@@ -87,7 +87,7 @@ describe("ValuablesPanel", () => {
     expect(norm(rows[0].textContent)).toMatch(/без налога — владеете больше трёх лет/);
     expect(norm(rows[1].textContent)).toMatch(/иностранный заводнет сертификата/);
     expect(norm(rows[1].textContent)).toMatch(/без налога с 20\.05\.2099/);
-    expect(screen.getByText(/Ориентир программы — по обзорам/)).toBeTruthy();
+    expect(screen.getByText(/Ориентир программы — по ценам выкупа Сбера и ВТБ на 13\.10\.2026/)).toBeTruthy();
     expect(screen.queryByText("Добавить слиток или монету")).toBeNull();
   });
 

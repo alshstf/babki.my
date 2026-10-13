@@ -176,7 +176,8 @@ func TestABoxIsWorthItsPiecesOnADay(t *testing.T) {
 		t.Fatalf("worths: %v, %v", ok, err)
 	}
 	// Before the bar; the bar at 10 000 (5 % off: 950 000); the silver bought
-	// the day before its first price — not valued; both at the new prices.
+	// the day before its first price — not valued; both at the new prices,
+	// the silver 6 % off.
 	want := []struct {
 		ops, unpriced    int
 		minor, fullMinor int64
@@ -184,7 +185,7 @@ func TestABoxIsWorthItsPiecesOnADay(t *testing.T) {
 		{0, 0, 0, 0},
 		{1, 0, 95_000_000, 100_000_000},
 		{2, 1, 95_000_000, 100_000_000},
-		{2, 0, 104_500_000 + 11_250_000, 110_000_000 + 15_000_000},
+		{2, 0, 104_500_000 + 14_100_000, 110_000_000 + 15_000_000},
 	}
 	for i, w := range want {
 		g := got[i]
@@ -208,7 +209,7 @@ func TestABoxIsWorthItsPiecesOnADay(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _, err = svc.Worths(t.Context(), spaceOf(t, pool), box, []time.Time{on("2026-03-05")})
-	if err != nil || got[0].Minor != 1_157_500 || got[0].FullMinor != 1_250_000 || got[0].ByCurrency["RUB"] != 115_750_000 {
+	if err != nil || got[0].Minor != 1_186_000 || got[0].FullMinor != 1_250_000 || got[0].ByCurrency["RUB"] != 118_600_000 {
 		t.Errorf("in dollars: %+v, %v", got, err)
 	}
 }

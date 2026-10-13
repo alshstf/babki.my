@@ -3826,7 +3826,7 @@ components:
         until: { type: string, nullable: true, description: "Date YYYY-MM-DD the box's rent or the custody contract runs to" }
         fee_minor: { type: integer, format: int64, nullable: true, minimum: 0, description: "What the box or the custody costs a period, in roubles' minor units; null with fee_period" }
         fee_period: { type: string, nullable: true, enum: [month, year] }
-        buyback_percent: { type: string, nullable: true, description: "Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal and weight" }
+        buyback_percent: { type: string, nullable: true, description: "Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal" }
     ValuablesItemInput:
       type: object
       required: [kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed, bought_on, cost_minor, currency, owner_user_id, note]
@@ -3855,7 +3855,7 @@ components:
             pure_grams: { type: string, description: "Decimal: grams of metal in it, weight × fineness / 1000" }
             market_minor: { type: integer, format: int64, nullable: true, description: "Its worth by the central bank's accounting price of price_on, in roubles' minor units; null before the bank has a price" }
             sell_minor: { type: integer, format: int64, nullable: true, description: "What it would sell for now (decision Р-40 Г), in roubles' minor units; null before there is a price" }
-            sell_by: { type: string, enum: [bank_price, storage_percent, guide_percent, no_price], description: "bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet" }
+            sell_by: { type: string, enum: [bank_price, storage_percent, guide_percent, no_price], description: "bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal; no_price: nothing to value it by yet" }
             buyback_percent: { type: string, nullable: true, description: "Decimal: the percent sell_minor is below market_minor; null by the bank's price" }
             bank_price_on: { type: string, nullable: true, description: "Date of the bank's price used" }
             price_on: { type: string, nullable: true, description: "Date of the central bank's price used" }

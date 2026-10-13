@@ -153,24 +153,18 @@ func (it Item) HardToSell() []Hard {
 }
 
 // Guide is the program's guess of what below the central bank's price a bank
-// buys a piece back for, in percent, by metal and weight (decision Р-40 Г).
-// Read off surveys, not banks' own prices — to be checked against them
-// (alshstf/babki.my#510); a storage's own percent stands before it.
-func Guide(metal marketdata.Metal, weight decimal.Decimal) decimal.Decimal {
+// buys a piece back for, in percent, by metal (decision Р-40 Г); a storage's
+// own percent stands before it. Checked against the banks (alshstf/babki.my#510):
+// on 12–13.10.2026 Сбер bought gold back at 10 712 ₽ a gram for any bar from
+// 1 g to 1 kg, 5,2 % under the central bank's 11 294,38, and ВТБ a gram at
+// 10 725,20, 5,0 % under; Сбер's silver and platinum 6,2 % under. Сбер does not
+// buy palladium back — its guide is a survey's, unchecked.
+func Guide(metal marketdata.Metal) decimal.Decimal {
 	switch metal {
 	case marketdata.Gold:
-		switch {
-		case weight.GreaterThanOrEqual(decimal.NewFromInt(100)):
-			return decimal.NewFromInt(5)
-		case weight.GreaterThanOrEqual(decimal.NewFromInt(20)):
-			return decimal.NewFromInt(7)
-		case weight.GreaterThanOrEqual(decimal.NewFromInt(5)):
-			return decimal.NewFromInt(10)
-		}
-		return decimal.NewFromInt(15)
-	case marketdata.Silver:
-		// Silver is bought with 20 % VAT, which a buyback does not return.
-		return decimal.NewFromInt(25)
+		return decimal.NewFromInt(5)
+	case marketdata.Silver, marketdata.Platinum:
+		return decimal.NewFromInt(6)
 	}
 	return decimal.NewFromInt(15)
 }
@@ -232,7 +226,7 @@ func Valuing(it Item, cbr *marketdata.MetalPrice, st Storage, bank []BankPrice, 
 	}
 	marketDec := pure.Mul(cbr.Price).Mul(decimal.NewFromInt(100))
 	market := marketDec.Round(0).IntPart()
-	percent, by := Guide(it.Metal, it.Weight), SellByGuide
+	percent, by := Guide(it.Metal), SellByGuide
 	if st.Buyback != nil {
 		percent, by = *st.Buyback, SellByStorage
 	}

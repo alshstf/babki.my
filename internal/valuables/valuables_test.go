@@ -65,27 +65,14 @@ func TestWhatMakesAPieceHardToSell(t *testing.T) {
 	}
 }
 
-// The guide by metal and weight, at each edge.
+// The guide by metal, the bars' weight aside: the banks buy a gram back at one
+// price whatever the bar.
 func TestTheGuide(t *testing.T) {
-	for _, c := range []struct {
-		metal  marketdata.Metal
-		weight string
-		want   string
-	}{
-		{marketdata.Gold, "1000", "5"},
-		{marketdata.Gold, "100", "5"},
-		{marketdata.Gold, "99.99", "7"},
-		{marketdata.Gold, "20", "7"},
-		{marketdata.Gold, "19.9", "10"},
-		{marketdata.Gold, "5", "10"},
-		{marketdata.Gold, "4.99", "15"},
-		{marketdata.Gold, "1", "15"},
-		{marketdata.Silver, "1000", "25"},
-		{marketdata.Platinum, "100", "15"},
-		{marketdata.Palladium, "10", "15"},
+	for metal, want := range map[marketdata.Metal]string{
+		marketdata.Gold: "5", marketdata.Silver: "6", marketdata.Platinum: "6", marketdata.Palladium: "15",
 	} {
-		if got := Guide(c.metal, dec(c.weight)); !got.Equal(dec(c.want)) {
-			t.Errorf("%s %s g: %s %%, want %s", c.metal, c.weight, got, c.want)
+		if got := Guide(metal); !got.Equal(dec(want)) {
+			t.Errorf("%s: %s %%, want %s", metal, got, want)
 		}
 	}
 }

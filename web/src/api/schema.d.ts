@@ -2938,7 +2938,7 @@ export interface components {
             fee_minor: number | null;
             /** @enum {string|null} */
             fee_period: "month" | "year" | null;
-            /** @description Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal and weight */
+            /** @description Decimal, 0 to below 100, to hundredths: what below the central bank's price the bank buys the metal back for; null for the program's guide by metal */
             buyback_percent: string | null;
         };
         ValuablesItemInput: {
@@ -2993,7 +2993,7 @@ export interface components {
              */
             sell_minor: number | null;
             /**
-             * @description bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal and weight; no_price: nothing to value it by yet
+             * @description bank_price: the bank's price written in, no older than 30 days; storage_percent: the storage's buyback percent off the central bank's price; guide_percent: the program's guide by metal; no_price: nothing to value it by yet
              * @enum {string}
              */
             sell_by: "bank_price" | "storage_percent" | "guide_percent" | "no_price";
