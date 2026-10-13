@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -35,6 +36,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/taxyear"
 	"babki.my/babki/internal/valuables"
 )
 
@@ -86,6 +88,10 @@ type valuableSets interface {
 	Entered(ctx context.Context, spaceID, accountID uuid.UUID) (valuables.Storage, []valuables.BankPrice, []valuables.Item, bool, error)
 }
 
+type wageEntries interface {
+	Entries(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]taxyear.Entry, error)
+}
+
 type allocations interface {
 	Settings(ctx context.Context, spaceID uuid.UUID) (allocation.Settings, error)
 }
@@ -113,6 +119,7 @@ type Handler struct {
 	receipts    receipts
 	allocations allocations
 	valuables   valuableSets
+	wages       wageEntries
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
@@ -130,6 +137,12 @@ func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events
 // WithValuables writes valuables accounts' bars and coins into the export.
 func (h *Handler) WithValuables(v valuableSets) *Handler {
 	h.valuables = v
+	return h
+}
+
+// WithWages writes the wage payments' payslips into the export.
+func (h *Handler) WithWages(w wageEntries) *Handler {
+	h.wages = w
 	return h
 }
 
@@ -173,6 +186,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		CategoryRules:    []apitypes.CategoryRule{},
 		BudgetLimits:     []apitypes.BudgetLimit{},
 		Receipts:         []apitypes.Receipt{},
+		WageEntries:      []apitypes.ExportWageEntry{},
 	}
 	usernames := make(map[uuid.UUID]string, len(members))
 	for _, m := range members {
@@ -264,7 +278,10 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	for _, c := range cats {
 		out := apitypes.ExportCategory{
 			Id: c.ID, Kind: string(c.Kind), Name: c.Name, ParentId: nullable.NewNullNullable[uuid.UUID](),
-			Archived: c.Archived, Position: c.Position,
+			Archived: c.Archived, Position: c.Position, TaxMark: nullable.NewNullNullable[string](),
+		}
+		if c.TaxMark != nil {
+			out.TaxMark = nullable.NewNullableWithValue(string(*c.TaxMark))
 		}
 		if c.ParentID != nil {
 			out.ParentId = nullable.NewNullableWithValue(*c.ParentID)
@@ -294,6 +311,18 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	}
 	for _, r := range receipts {
 		doc.Receipts = append(doc.Receipts, receipt.API(r))
+	}
+	if h.wages != nil {
+		entries, err := h.wages.Entries(ctx, spaceID)
+		if err != nil {
+			return apitypes.SpaceExport{}, err
+		}
+		for id, e := range entries {
+			doc.WageEntries = append(doc.WageEntries, apitypes.ExportWageEntry{OperationId: id, GrossMinor: e.Gross, WithheldMinor: e.Withheld})
+		}
+		slices.SortFunc(doc.WageEntries, func(a, b apitypes.ExportWageEntry) int {
+			return strings.Compare(a.OperationId.String(), b.OperationId.String())
+		})
 	}
 	targets, err := h.allocations.Settings(ctx, spaceID)
 	if err != nil {

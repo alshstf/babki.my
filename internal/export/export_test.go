@@ -30,6 +30,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/taxyear"
 	"babki.my/babki/internal/valuables"
 )
 
@@ -62,10 +63,12 @@ func newStack(t *testing.T) stack {
 	cardSvc := creditcard.NewService(pool, accStore, opStore, category.NewStore(pool))
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
+	taxSvc := taxyear.NewService(accStore, nil, famStore, md).WithEarnings(opStore, category.NewStore(pool)).WithEntries(pool, opStore)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
 		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore, category.NewStore(pool), operation.NewService(opStore)),
-		allocation.NewService(pool, nil), auth, sm).WithValuables(valuables.NewService(pool, accStore, md)).Mount(srv)
+		allocation.NewService(pool, nil), auth, sm).WithValuables(valuables.NewService(pool, accStore, md)).WithWages(taxSvc).Mount(srv)
 	valuables.NewHandler(valuables.NewService(pool, accStore, md), auth, sm).Mount(srv)
+	taxyear.NewHandler(taxSvc, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -219,8 +222,8 @@ func TestTheExportHoldsTheWholeSpace(t *testing.T) {
 	}
 }
 
-// The family's categories leave with the journal, and so does how each row was
-// filed and with whom.
+// The family's categories leave with the journal, each with its mark for tax,
+// and so does how each row was filed and with whom, and a wage's payslip.
 func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 	s := newStack(t)
 	card := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Карта","type":"checking","currency":"RUB"}`, http.StatusCreated)["id"].(string)
@@ -239,7 +242,12 @@ func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 			salary = c.ID
 		}
 	}
-	post(t, s.c, s.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-09-05","amount_minor":18000000,"currency":"RUB","category_id":%q,"counterparty":"ООО Ромашка"}`, card, salary), http.StatusCreated)
+	pay := post(t, s.c, s.url+"/api/v1/operations", fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-09-05","amount_minor":18000000,"currency":"RUB","category_id":%q,"counterparty":"ООО Ромашка"}`, card, salary), http.StatusCreated)["id"].(string)
+	req, _ := http.NewRequest(http.MethodPut, s.url+"/api/v1/tax-year/wages/"+pay, strings.NewReader(`{"gross_minor":20689700,"withheld_minor":2689700}`))
+	req.Header.Set("Content-Type", "application/json")
+	if r, err := s.c.Do(req); err != nil || r.StatusCode != http.StatusNoContent {
+		t.Fatalf("the payslip = %v %v", r, err)
+	}
 	post(t, s.c, s.url+"/api/v1/category-rules", fmt.Sprintf(`{"category_id":%q,"field":"counterparty","pattern":"Ромашка"}`, salary), http.StatusCreated)
 
 	raw, _ := io.ReadAll(get(t, s.c, s.url+"/api/v1/export").Body)
@@ -247,7 +255,13 @@ func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 		Categories []struct {
 			ID       string  `json:"id"`
 			ParentID *string `json:"parent_id"`
+			TaxMark  *string `json:"tax_mark"`
 		} `json:"categories"`
+		Wages []struct {
+			OperationID string `json:"operation_id"`
+			Gross       int64  `json:"gross_minor"`
+			Withheld    int64  `json:"withheld_minor"`
+		} `json:"wage_entries"`
 		Accounts []struct {
 			Operations []struct {
 				CategoryID   *string `json:"category_id"`
@@ -271,6 +285,12 @@ func TestTheExportKeepsTheFamilysFiling(t *testing.T) {
 			t.Errorf("category %s comes before its parent", c.ID)
 		}
 		seen[c.ID] = true
+		if c.ID == salary && (c.TaxMark == nil || *c.TaxMark != "wages") {
+			t.Errorf("the salary's tax mark = %v", c.TaxMark)
+		}
+	}
+	if len(doc.Wages) != 1 || doc.Wages[0].OperationID != pay || doc.Wages[0].Gross != 20_689_700 || doc.Wages[0].Withheld != 2_689_700 {
+		t.Errorf("the payslips = %+v", doc.Wages)
 	}
 	if len(doc.Rules) != 1 || doc.Rules[0].CategoryID != salary || doc.Rules[0].Pattern != "Ромашка" {
 		t.Errorf("rules = %+v", doc.Rules)

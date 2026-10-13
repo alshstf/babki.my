@@ -157,7 +157,9 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore)
 	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
 	// The family's income tax for a year, an estimate (decisions Р-41, Р-42).
-	taxyear.NewHandler(taxyear.NewService(accStore, positions, famStore, mdStore).WithEarnings(opStore, category.NewStore(r.pool)).WithProperty(valuablesSvc), famAuth, famSM).Mount(srv)
+	taxSvc := taxyear.NewService(accStore, positions, famStore, mdStore).WithEarnings(opStore, category.NewStore(r.pool)).
+		WithProperty(valuablesSvc).WithEntries(r.pool, opStore)
+	taxyear.NewHandler(taxSvc, famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)
@@ -208,7 +210,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
 	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, category.NewStore(r.pool),
-		loanSvc, cardSvc, budgetSvc, receiptSvc, allocationSvc, famAuth, famSM).WithValuables(valuablesSvc).Mount(srv)
+		loanSvc, cardSvc, budgetSvc, receiptSvc, allocationSvc, famAuth, famSM).WithValuables(valuablesSvc).WithWages(taxSvc).Mount(srv)
 	// A hand entry is followed by the registry at once (a purchase before a
 	// known split must not wait for the sweep); opSvc is the one service every
 	// hand-entry door writes through.

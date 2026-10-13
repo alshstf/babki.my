@@ -176,6 +176,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tax-year/wages/{operationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Writes a wage payment's gross and the tax withheld from it as its payslip says, over the program's reckoning from what reached the account (decision Р-41). 400 when the payment is not an earning filed under a category marked wages, or the sums do not fit; 404 without such a payment. */
+        put: operations["enterTaxYearWage"];
+        post?: never;
+        /** @description Drops what was written for the payment; the program's reckoning stands again. */
+        delete: operations["deleteTaxYearWage"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/allocation/rebalance": {
         parameters: {
             query?: never;
@@ -2362,6 +2380,16 @@ export interface components {
             };
             /** @description The cash receipts, by their time; operation_id names the row each completes */
             receipts: components["schemas"]["Receipt"][];
+            /** @description Wage payments' gross and withheld tax written from their payslips; operation_id names the row */
+            wage_entries: components["schemas"]["ExportWageEntry"][];
+        };
+        ExportWageEntry: {
+            /** Format: uuid */
+            operation_id: string;
+            /** Format: int64 */
+            gross_minor: number;
+            /** Format: int64 */
+            withheld_minor: number;
         };
         ExportCategory: {
             /** Format: uuid */
@@ -2373,6 +2401,8 @@ export interface components {
             parent_id: string | null;
             archived: boolean;
             position: number;
+            /** @description wages or interest: what the earning category means for tax */
+            tax_mark: string | null;
         };
         ExportSpace: {
             /** Format: uuid */
@@ -3137,7 +3167,7 @@ export interface components {
             wages_net_minor: number;
             /**
              * Format: int64
-             * @description Wages before tax: earnings under categories marked wages, each employer's reckoned from what reached the account by the wages' scale over the year
+             * @description Wages before tax: earnings under categories marked wages, a payment's as its payslip says where written, else reckoned from what reached the account by the wages' scale over the employer's year
              */
             wages_minor: number;
             /**
@@ -3157,6 +3187,8 @@ export interface components {
             wages_to_pay_minor: number;
             /** @description In the order they first paid */
             employers: components["schemas"]["TaxYearEmployer"][];
+            /** @description The wage payments one by one, in the order they came */
+            wage_payments: components["schemas"]["TaxYearWagePayment"][];
             /**
              * Format: int64
              * @description What the bars and coins sold in the year brought, those held three years and more left out
@@ -3188,10 +3220,41 @@ export interface components {
             net_minor: number;
             /**
              * Format: int64
-             * @description Before tax, as the program reckons it
+             * @description Before tax: the payslips' where written, else as the program reckons it
              */
             gross_minor: number;
             /** Format: int64 */
+            withheld_minor: number;
+        };
+        TaxYearWagePayment: {
+            /** Format: uuid */
+            operation_id: string;
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** @description The row's counterparty; empty when it names none */
+            employer: string;
+            /**
+             * Format: int64
+             * @description What reached the account
+             */
+            net_minor: number;
+            /**
+             * Format: int64
+             * @description Before tax
+             */
+            gross_minor: number;
+            /** Format: int64 */
+            withheld_minor: number;
+            /** @description True when the gross and the tax withheld were written from the payslip; false when the program reckoned them from net_minor by the scale over the employer's year */
+            entered: boolean;
+        };
+        TaxYearWageEntry: {
+            /** Format: int64 */
+            gross_minor: number;
+            /**
+             * Format: int64
+             * @description At most gross_minor
+             */
             withheld_minor: number;
         };
         TaxYearAccount: {
@@ -5742,6 +5805,56 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    enterTaxYearWage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaxYearWageEntry"];
+            };
+        };
+        responses: {
+            /** @description Written */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteTaxYearWage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dropped */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     getAllocationRebalance: {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/google/uuid"
 	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/family"
@@ -14,7 +15,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 )
 
-// Handler serves GET /api/v1/tax-year.
+// Handler serves GET /api/v1/tax-year and the wages written by hand.
 type Handler struct {
 	svc  *Service
 	auth *family.Auth
@@ -29,6 +30,43 @@ func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handle
 func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/tax-year", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleGet)))))
+	edit := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
+	}
+	srv.Mount("PUT /api/v1/tax-year/wages/{operationId}", edit(h.handleEnter))
+	srv.Mount("DELETE /api/v1/tax-year/wages/{operationId}", edit(h.handleUnenter))
+}
+
+func (h *Handler) handleEnter(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("operationId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "operationId must be a uuid")
+		return
+	}
+	var req apitypes.TaxYearWageEntry
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	if err := h.svc.Enter(r.Context(), p.SpaceID, id, Entry{Gross: req.GrossMinor, Withheld: req.WithheldMinor}); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleUnenter(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("operationId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "operationId must be a uuid")
+		return
+	}
+	if err := h.svc.Unenter(r.Context(), p.SpaceID, id); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +110,7 @@ func YearAPI(y Year) apitypes.TaxYear {
 			WithheldMinor: p.Withheld, CreditMinor: p.Credit, ToPayMinor: p.ToPay + p.WagesToPay, RefundMinor: p.Refund, Unvalued: p.Unvalued,
 			WagesNetMinor: p.WagesNet, WagesMinor: p.Wages, WagesTaxMinor: p.WagesTax, WagesWithheldMinor: p.WagesWithheld, WagesToPayMinor: p.WagesToPay,
 			Employers:         make([]apitypes.TaxYearEmployer, 0, len(p.Employers)),
+			WagePayments:      make([]apitypes.TaxYearWagePayment, 0, len(p.WagePayments)),
 			PropertySoldMinor: p.PropertySold, PropertyGainMinor: p.PropertyGain, PropertyBaseMinor: p.PropertyBase, PropertyFree: p.PropertyFree,
 			InterestMinor: p.Interest, InterestFreeMinor: nullable.NewNullNullable[int64](), ByNoticeMinor: p.ByNotice,
 			Accounts: make([]apitypes.TaxYearAccount, 0, len(p.Accounts)),
@@ -86,6 +125,12 @@ func YearAPI(y Year) apitypes.TaxYear {
 		}
 		for _, e := range p.Employers {
 			person.Employers = append(person.Employers, apitypes.TaxYearEmployer{Name: e.Name, NetMinor: e.Net, GrossMinor: e.Gross, WithheldMinor: e.Withheld})
+		}
+		for _, w := range p.WagePayments {
+			person.WagePayments = append(person.WagePayments, apitypes.TaxYearWagePayment{
+				OperationId: w.OperationID, On: w.On.Format(time.DateOnly), Employer: w.Employer,
+				NetMinor: w.Net, GrossMinor: w.Gross, WithheldMinor: w.Withheld, Entered: w.Entered,
+			})
 		}
 		if p.InterestFree != nil {
 			person.InterestFreeMinor = nullable.NewNullableWithValue(*p.InterestFree)
