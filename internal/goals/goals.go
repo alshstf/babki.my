@@ -48,14 +48,17 @@ const (
 	NoStatus Status = "none"
 )
 
-// Progress is a goal against its target today: Saved what its funds come to;
-// with a date, Projected what the plan comes to by it and Needed the
-// contribution a month that reaches the target; without a date but with a
-// contribution, ReachOn the month it reaches the target.
+// Progress is a goal against its target today: Saved what its funds come to
+// and Percent of the target; with a date, Projected what the plan comes to by
+// it, Short what it falls short by and Needed the contribution a month that
+// reaches the target; with a contribution and no date or a date missed,
+// ReachOn the month it reaches the target.
 type Progress struct {
 	Saved     int64
+	Percent   int
 	Status    Status
 	Projected *int64
+	Short     *int64
 	Needed    *int64
 	ReachOn   *time.Time
 	Months    int
@@ -96,39 +99,56 @@ func progress(g Goal, saved int64, today time.Time) Progress {
 	}
 	target := *g.Target
 	if saved >= target {
-		out.Status = Done
+		out.Status, out.Percent = Done, 100
 		return out
 	}
+	out.Percent = int(max(saved, 0) * 100 / target)
 	monthly := int64(0)
 	if g.Monthly != nil {
 		monthly = *g.Monthly
 	}
-	switch {
-	case g.TargetOn != nil:
-		n := monthsBetween(today, *g.TargetOn)
-		out.Months = n
-		fv := future(saved, monthly, n, g.Yield).Round(0).IntPart()
-		out.Projected = &fv
-		needed := neededMonthly(saved, target, n, g.Yield)
-		out.Needed = &needed
-		switch {
-		case decimal.NewFromInt(fv).GreaterThanOrEqual(decimal.NewFromInt(target).Mul(decimal.RequireFromString("1.05"))):
-			out.Status = Ahead
-		case fv >= target:
-			out.Status = OnTrack
-		default:
-			out.Status = AtRisk
+	if g.TargetOn == nil {
+		if monthly > 0 {
+			out.ReachOn, out.Months = reach(saved, monthly, target, g.Yield, today)
 		}
-	case monthly > 0:
-		for n := 1; n <= 600; n++ {
-			if future(saved, monthly, n, g.Yield).GreaterThanOrEqual(decimal.NewFromInt(target)) {
-				on := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, n, 0)
-				out.ReachOn, out.Months = &on, n
-				break
-			}
+		return out
+	}
+	n := monthsBetween(today, *g.TargetOn)
+	out.Months = n
+	fv := future(saved, monthly, n, g.Yield).Round(0).IntPart()
+	out.Projected = &fv
+	needed := neededMonthly(saved, target, n, g.Yield)
+	out.Needed = &needed
+	switch {
+	case decimal.NewFromInt(fv).GreaterThanOrEqual(decimal.NewFromInt(target).Mul(decimal.RequireFromString("1.05"))):
+		out.Status = Ahead
+	case fv >= target:
+		out.Status = OnTrack
+	default:
+		out.Status = AtRisk
+		short := target - fv
+		out.Short = &short
+		if monthly > 0 {
+			out.ReachOn, _ = reach(saved, monthly, target, g.Yield, today)
 		}
 	}
 	return out
+}
+
+// reach is the months until saved and the contribution come to the target,
+// and the earliest first of a month that, set as the date, is on track; nil
+// past fifty years.
+func reach(saved, monthly, target int64, yield decimal.Decimal, today time.Time) (*time.Time, int) {
+	for n := 1; n <= 600; n++ {
+		if future(saved, monthly, n, yield).GreaterThanOrEqual(decimal.NewFromInt(target)) {
+			on := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, n, 0)
+			if today.Day() != 1 {
+				on = on.AddDate(0, 1, 0)
+			}
+			return &on, n
+		}
+	}
+	return nil, 0
 }
 
 // neededMonthly is the contribution a month that brings saved to target in n

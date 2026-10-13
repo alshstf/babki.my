@@ -2265,6 +2265,8 @@ export interface components {
             saved_minor: number;
             /** @enum {string} */
             status: "done" | "ahead" | "on_track" | "at_risk" | "none";
+            /** @description Saved as a whole percent of the target, 0–100; 0 without a target */
+            percent: number;
             /**
              * Format: int64
              * @description With a date: what saved and the contribution come to by it at the yield
@@ -2272,10 +2274,15 @@ export interface components {
             projected_minor: number | null;
             /**
              * Format: int64
+             * @description At risk: what the plan falls short of the target by
+             */
+            short_minor: number | null;
+            /**
+             * Format: int64
              * @description With a date: the contribution a month that reaches the target
              */
             needed_minor: number | null;
-            /** @description Without a date but with a contribution: the month, YYYY-MM-DD of its first day, the target is reached */
+            /** @description With a contribution and no date, or a date missed: the earliest first of a month, YYYY-MM-DD, that as the date is on track */
             reach_on: string | null;
             /** @description Months to the date, or to reach_on */
             months: number;

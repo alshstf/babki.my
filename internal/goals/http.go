@@ -127,7 +127,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, spaceID uuid.UUI
 		g := apitypes.Goal{
 			Id: v.ID, Name: v.Name, TargetMinor: of(v.Target), MonthlyMinor: of(v.Monthly), YieldPercent: v.Yield.StringFixed(2),
 			TargetOn: nullable.NewNullNullable[string](), SavedMinor: v.Progress.Saved, Status: apitypes.GoalStatus(v.Progress.Status),
-			ProjectedMinor: of(v.Progress.Projected), NeededMinor: of(v.Progress.Needed), ReachOn: nullable.NewNullNullable[string](),
+			Percent: v.Progress.Percent, ProjectedMinor: of(v.Progress.Projected), ShortMinor: of(v.Progress.Short), NeededMinor: of(v.Progress.Needed), ReachOn: nullable.NewNullNullable[string](),
 			Months: v.Progress.Months, Funds: make([]apitypes.GoalFund, 0, len(v.Funds)), Overdrawn: v.Overdrawn,
 		}
 		if g.Overdrawn == nil {

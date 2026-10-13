@@ -3267,7 +3267,7 @@ components:
         goals: { type: array, items: { $ref: "#/components/schemas/Goal" } }
     Goal:
       type: object
-      required: [id, name, target_minor, target_on, monthly_minor, yield_percent, funds, saved_minor, status, projected_minor, needed_minor, reach_on, months, overdrawn]
+      required: [id, name, target_minor, target_on, monthly_minor, yield_percent, funds, saved_minor, percent, status, projected_minor, short_minor, needed_minor, reach_on, months, overdrawn]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -3278,9 +3278,11 @@ components:
         funds: { type: array, items: { $ref: "#/components/schemas/GoalFund" } }
         saved_minor: { type: integer, format: int64, description: "What the funds come to now" }
         status: { type: string, enum: [done, ahead, on_track, at_risk, none] }
+        percent: { type: integer, description: "Saved as a whole percent of the target, 0–100; 0 without a target" }
         projected_minor: { type: integer, format: int64, nullable: true, description: "With a date: what saved and the contribution come to by it at the yield" }
+        short_minor: { type: integer, format: int64, nullable: true, description: "At risk: what the plan falls short of the target by" }
         needed_minor: { type: integer, format: int64, nullable: true, description: "With a date: the contribution a month that reaches the target" }
-        reach_on: { type: string, nullable: true, description: "Without a date but with a contribution: the month, YYYY-MM-DD of its first day, the target is reached" }
+        reach_on: { type: string, nullable: true, description: "With a contribution and no date, or a date missed: the earliest first of a month, YYYY-MM-DD, that as the date is on track" }
         months: { type: integer, description: "Months to the date, or to reach_on" }
         overdrawn: { type: array, items: { type: string, format: uuid }, description: "Accounts whose sums across the goals come to more than they hold" }
     GoalFund:

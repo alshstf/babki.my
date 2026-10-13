@@ -3833,15 +3833,21 @@ type Goal struct {
 	// Overdrawn Accounts whose sums across the goals come to more than they hold
 	Overdrawn []openapi_types.UUID `json:"overdrawn"`
 
+	// Percent Saved as a whole percent of the target, 0–100; 0 without a target
+	Percent int `json:"percent"`
+
 	// ProjectedMinor With a date: what saved and the contribution come to by it at the yield
 	ProjectedMinor nullable.Nullable[int64] `json:"projected_minor"`
 
-	// ReachOn Without a date but with a contribution: the month, YYYY-MM-DD of its first day, the target is reached
+	// ReachOn With a contribution and no date, or a date missed: the earliest first of a month, YYYY-MM-DD, that as the date is on track
 	ReachOn nullable.Nullable[string] `json:"reach_on"`
 
 	// SavedMinor What the funds come to now
-	SavedMinor int64      `json:"saved_minor"`
-	Status     GoalStatus `json:"status"`
+	SavedMinor int64 `json:"saved_minor"`
+
+	// ShortMinor At risk: what the plan falls short of the target by
+	ShortMinor nullable.Nullable[int64] `json:"short_minor"`
+	Status     GoalStatus               `json:"status"`
 
 	// TargetMinor In the base currency
 	TargetMinor nullable.Nullable[int64] `json:"target_minor"`
