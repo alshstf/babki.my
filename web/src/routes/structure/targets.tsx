@@ -23,50 +23,13 @@ import { useSession } from "@/api/session";
 import { formatMinorCompact, minorToInput, parseToMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { hundredths, percent } from "@/lib/percent";
+import { currencyName, kindName } from "@/lib/allocation-names";
 
 // The kinds targets are set for, in the server's order.
 const KINDS = ["shares", "bonds", "funds", "foreign_currency", "metals", "deposits", "crypto", "other", "broker_cash"];
 
 // A gap past this many points is worth looking at (the plan's threshold).
 const NOTABLE_GAP = 5;
-
-// kindName is a kind's words; a switch with literal keys for
-// scripts/check-i18n.mjs.
-function kindName(t: (key: string, v?: Record<string, unknown>) => string, key: string, base: string): string {
-  switch (key) {
-    case "shares":
-      return t("allocation.kinds.shares");
-    case "bonds":
-      return t("allocation.kinds.bonds");
-    case "funds":
-      return t("allocation.kinds.funds");
-    case "foreign_currency":
-      return t("allocation.kinds.foreignCurrency");
-    case "metals":
-      return t("allocation.kinds.metals");
-    case "deposits":
-      return t("allocation.kinds.deposits");
-    case "crypto":
-      return t("allocation.kinds.crypto");
-    case "broker_cash":
-      return t("allocation.kinds.brokerCash", { currency: base });
-    default:
-      return t("allocation.kinds.other");
-  }
-}
-
-// A currency's words: gold and the other metals held as money by name.
-function currencyName(t: (key: string) => string, key: string): string {
-  switch (key) {
-    case "XAU":
-      return t("allocation.metalCodes.gold");
-    case "XAG":
-      return t("allocation.metalCodes.silver");
-    default:
-      return key;
-  }
-}
-
 
 // TargetsCard is the worth against the family's target shares (decision
 // Р-37): by kind of asset — what the suggestions will bring to the targets —
