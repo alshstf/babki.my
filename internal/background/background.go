@@ -135,6 +135,9 @@ func NewWorkers(
 		tinvestDeps.Box, tinvestDeps.NewClient, log))
 	river.AddWorker(workers, tinvest.NewDividendsWorker(tinvestDeps.Store, mdStore,
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
+	// Papers' country of risk and sector, from the broker's passports (Р-46).
+	river.AddWorker(workers, tinvest.NewClassesWorker(tinvestDeps.Store, instrument.NewStore(pool),
+		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	// The corporate-actions registry. The refresh worker is registered only
 	// when the quote provider can also answer about splits — the same rule the
 	// gold worker follows above and for the same reason: the interface is the
@@ -228,6 +231,7 @@ func Schedule() []jobs.Periodic {
 		{Every: tinvestQuotesInterval, Args: tinvest.RefreshQuotesArgs{}},
 		{Every: backfillFxInterval, Args: tinvest.BackfillQuotesArgs{}},
 		{Every: tinvestDividendsInterval, Args: tinvest.RefreshDividendsArgs{}},
+		{Every: tinvestSyncInterval, Args: tinvest.RefreshClassesArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshMoexSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshForeignSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RecordKnownConversionsArgs{}},
@@ -262,6 +266,7 @@ var sources = []jobs.SourceKind{
 	{Kind: marketdata.RefreshIndexesArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshMetalPricesArgs{}.Kind(), Every: refreshFxInterval},
 	{Kind: marketdata.RefreshKeyRatesArgs{}.Kind(), Every: refreshFxInterval},
+	{Kind: tinvest.RefreshClassesArgs{}.Kind(), Every: tinvestSyncInterval},
 }
 
 // Sources reads how each source's jobs last ended.

@@ -43,6 +43,8 @@ function sourceName(t: TFunction, kind: string): string {
       return t("dataSources.kinds.metalPrices");
     case "marketdata.refresh_key_rates":
       return t("dataSources.kinds.keyRates");
+    case "tinvest.refresh_classes":
+      return t("dataSources.kinds.classes");
     default:
       return kind;
   }

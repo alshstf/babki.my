@@ -13,6 +13,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
@@ -39,7 +40,7 @@ func TestTheSourcesAreTheOutsideFeedsInTheirOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 17 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() || list[16].Kind != (marketdata.RefreshKeyRatesArgs{}).Kind() {
+	if len(list) != 18 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() || list[17].Kind != (tinvest.RefreshClassesArgs{}).Kind() {
 		t.Errorf("sources = %d starting with %q, want the seventeen in their fixed order", len(list), list[0].Kind)
 	}
 }
