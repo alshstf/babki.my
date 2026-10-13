@@ -26,6 +26,10 @@ func serve(t *testing.T, chart string) *yahoo.Client {
 			// TSMC's ADR, by its ticker (recorded 2026-10-06, trimmed).
 			_, _ = w.Write([]byte(`{"quotes":[{"symbol":"TSM","quoteType":"EQUITY"},{"symbol":"TSMC34.SA","quoteType":"EQUITY"}]}`))
 			return
+		case r.URL.Path == "/v1/finance/search" && r.URL.Query().Get("q") == "US0378331005":
+			// Apple by its ISIN (live, 2026-10-13, trimmed).
+			_, _ = w.Write([]byte(`{"quotes":[{"symbol":"AAPL","quoteType":"EQUITY","sector":"Technology","industry":"Consumer Electronics"}]}`))
+			return
 		case r.URL.Path == "/v1/finance/search" && r.URL.Query().Get("q") == "T":
 			_, _ = w.Write([]byte(`{"quotes":[{"symbol":"TT","quoteType":"EQUITY"}]}`))
 			return
@@ -157,5 +161,16 @@ func TestSplitsAreReadFromTheChartsEvents(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].On.Format(time.DateOnly) != "2022-06-06" || got[0].Numerator.String() != "20" || got[0].Denominator.String() != "1" {
 		t.Errorf("splits = %+v, want 20:1 on 2022-06-06", got)
+	}
+}
+
+// A share's sector by its ISIN; none for a paper the search does not find.
+func TestASharesSectorIsFoundByItsISIN(t *testing.T) {
+	c := serve(t, "")
+	if sector, ok, err := c.SectorFor(t.Context(), "US0378331005"); err != nil || !ok || sector != "Technology" {
+		t.Errorf("Apple = %q, %v, %v", sector, ok, err)
+	}
+	if _, ok, err := c.SectorFor(t.Context(), "RU000A0ZZZZ0"); err != nil || ok {
+		t.Errorf("unknown = %v, %v", ok, err)
 	}
 }

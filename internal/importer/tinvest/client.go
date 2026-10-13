@@ -389,6 +389,40 @@ func (c *Client) InstrumentByUID(ctx context.Context, uid string) (InstrumentBri
 	}, nil
 }
 
+// Passport is what the broker's passport of a share, bond or fund says of its
+// business: the country of risk (ISO code), the sector, a fund's focus.
+type Passport struct {
+	Country, Sector, Focus string
+}
+
+// passportRPCs are the calls that answer a passport with its sector, by the
+// search's instrument kind; GetInstrumentBy has the country but no sector.
+var passportRPCs = map[string]string{
+	"INSTRUMENT_TYPE_SHARE": "InstrumentsService/ShareBy",
+	"INSTRUMENT_TYPE_BOND":  "InstrumentsService/BondBy",
+	"INSTRUMENT_TYPE_ETF":   "InstrumentsService/EtfBy",
+}
+
+// PassportByUID asks the passport of a listing of the given kind.
+func (c *Client) PassportByUID(ctx context.Context, uid, kind string) (Passport, error) {
+	rpc, ok := passportRPCs[kind]
+	if !ok {
+		return Passport{}, fmt.Errorf("tinvest: no passport call for kind %q", kind)
+	}
+	var resp struct {
+		Instrument struct {
+			CountryOfRisk string `json:"countryOfRisk"`
+			Sector        string `json:"sector"`
+			FocusType     string `json:"focusType"`
+		} `json:"instrument"`
+	}
+	if err := c.do(ctx, rpc, instrumentByRequest{IDType: instrumentIDTypeUID, ID: uid}, &resp); err != nil {
+		return Passport{}, err
+	}
+	i := resp.Instrument
+	return Passport{Country: strings.ToUpper(strings.TrimSpace(i.CountryOfRisk)), Sector: i.Sector, Focus: i.FocusType}, nil
+}
+
 // Listing is one of the broker's tradable lines for a security; one paper has
 // several (Apple's ISIN: nine, under three tickers). It has no currency because
 // the search result has none (live, 2026-08-10); ask the passport.

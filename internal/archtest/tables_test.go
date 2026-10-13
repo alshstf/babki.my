@@ -36,6 +36,7 @@ var owners = map[string]string{
 	"valuables_items":             "internal/valuables",
 	"valuables_bank_prices":       "internal/valuables",
 	"wage_entries":                "internal/taxyear",
+	"instrument_classes":          "internal/instrument",
 	"receipts":                    "internal/receipt",
 	"mailboxes":                   "internal/mailbox",
 	"loans":                       "internal/loan",

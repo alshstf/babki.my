@@ -61,13 +61,16 @@ const (
 // ReferenceSources are the feeds beyond the exchange and the broker: the full
 // valuation's reference prices (decision Р-11), the dividend calendar of
 // papers no broker's calendar covers (Р-14), foreign papers' splits and
-// cryptocurrencies' prices (Р-20). A nil one is not fetched.
+// cryptocurrencies' prices (Р-20), shares' sectors (Р-46). A nil one is not
+// fetched.
 type ReferenceSources struct {
 	NAV       []marketdata.NAVProvider
 	Foreign   marketdata.ForeignQuoteProvider
 	Dividends marketdata.DividendFeed
 	Splits    corporateaction.ForeignSplitsProvider
 	Crypto    marketdata.CryptoQuoteProvider
+	// Sectors names a share's sector where the broker's passport does not.
+	Sectors tinvest.SectorFeed
 }
 
 // TinvestDeps is what the T-Invest workers need. Clients are made per token
@@ -135,6 +138,9 @@ func NewWorkers(
 		tinvestDeps.Box, tinvestDeps.NewClient, log))
 	river.AddWorker(workers, tinvest.NewDividendsWorker(tinvestDeps.Store, mdStore,
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
+	// Papers' country of risk and sector, from the broker's passports (Р-46).
+	river.AddWorker(workers, tinvest.NewClassesWorker(tinvestDeps.Store, instrument.NewStore(pool),
+		references.Sectors, tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	// The corporate-actions registry. The refresh worker is registered only
 	// when the quote provider can also answer about splits — the same rule the
 	// gold worker follows above and for the same reason: the interface is the
@@ -228,6 +234,7 @@ func Schedule() []jobs.Periodic {
 		{Every: tinvestQuotesInterval, Args: tinvest.RefreshQuotesArgs{}},
 		{Every: backfillFxInterval, Args: tinvest.BackfillQuotesArgs{}},
 		{Every: tinvestDividendsInterval, Args: tinvest.RefreshDividendsArgs{}},
+		{Every: tinvestSyncInterval, Args: tinvest.RefreshClassesArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshMoexSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RefreshForeignSplitsArgs{}},
 		{Every: corporateActionsInterval, Args: corporateaction.RecordKnownConversionsArgs{}},
@@ -262,6 +269,7 @@ var sources = []jobs.SourceKind{
 	{Kind: marketdata.RefreshIndexesArgs{}.Kind(), Every: tinvestDividendsInterval},
 	{Kind: marketdata.RefreshMetalPricesArgs{}.Kind(), Every: refreshFxInterval},
 	{Kind: marketdata.RefreshKeyRatesArgs{}.Kind(), Every: refreshFxInterval},
+	{Kind: tinvest.RefreshClassesArgs{}.Kind(), Every: tinvestSyncInterval},
 }
 
 // Sources reads how each source's jobs last ended.

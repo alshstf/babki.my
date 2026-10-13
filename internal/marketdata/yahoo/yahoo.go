@@ -57,7 +57,24 @@ type wireSearch struct {
 	Quotes []struct {
 		Symbol    string `json:"symbol"`
 		QuoteType string `json:"quoteType"`
+		Sector    string `json:"sector"`
 	} `json:"quotes"`
+}
+
+// SectorFor is the sector Yahoo's search names for the share with this ISIN
+// (Apple's: "Technology", 2026-10-13); ok is false when it finds none.
+func (c *Client) SectorFor(ctx context.Context, isin string) (string, bool, error) {
+	q := url.Values{"q": {isin}, "quotesCount": {"5"}, "newsCount": {"0"}}
+	var resp wireSearch
+	if err := c.get(ctx, c.searchURL+"?"+q.Encode(), &resp); err != nil {
+		return "", false, err
+	}
+	for _, r := range resp.Quotes {
+		if r.QuoteType == "EQUITY" && r.Sector != "" {
+			return r.Sector, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // SymbolFor is the symbol of the first share or fund the search finds for

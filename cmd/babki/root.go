@@ -336,6 +336,7 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 		Dividends: feed,
 		Splits:    feed,
 		Crypto:    coingecko.New(&http.Client{Timeout: referenceHTTPTimeout}, ""),
+		Sectors:   feed,
 	}
 	workers := background.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, references, tinvestDeps, caStore, caMaterializer, enqueuer)
