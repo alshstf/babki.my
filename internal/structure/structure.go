@@ -101,6 +101,16 @@ const (
 	NotAtBroker       = ""
 )
 
+// InsuranceRow is what a person holds in a bank — cards, current and savings
+// accounts, deposits — and what of it deposit insurance covers; Known false
+// for a bank the catalog does not know, whose limit is not counted.
+type InsuranceRow struct {
+	Person              uuid.UUID
+	Bank                string
+	Held, Insured, Over int64
+	Known               bool
+}
+
 // Valuation picks the worth a paper is struck at (decision Р-11).
 type Valuation string
 
@@ -140,6 +150,12 @@ type Structure struct {
 	Papers, AtBrokers int64
 	ByBroker, ByBank  []Slice
 	AtBanks           int64
+	// Insurance is what each person holds in each bank against deposit
+	// insurance (decision Р-47), InsuredLimit the country's limit in the base
+	// currency; empty when the country has none counted or the base currency
+	// is not the limit's.
+	Insurance    []InsuranceRow
+	InsuredLimit int64
 	// Unpriced counts the papers left out for want of a price; MissingRates
 	// the currencies left out for want of a rate.
 	Unpriced     int
@@ -182,6 +198,19 @@ type Service struct {
 	rates     marketdata.RateSource
 	valuables worths
 	classes   classes
+	members   members
+}
+
+type members interface {
+	ListMembers(ctx context.Context, spaceID uuid.UUID) ([]family.Member, error)
+}
+
+// WithMembers lets the structure tell whose money is in a bank, for deposit
+// insurance (decision Р-47): a personal account's owner, a shared one's
+// person for tax, else the space's owner.
+func (s *Service) WithMembers(m members) *Service {
+	s.members = m
+	return s
 }
 
 type classes interface {
@@ -223,9 +252,11 @@ type piece struct {
 	sector string
 	held   string
 	// holder is the catalog's id of the bank or broker holding the account,
-	// UnknownHolder when not known; holderKind which, empty for neither.
+	// UnknownHolder when not known; holderKind which, empty for neither;
+	// person whose money it is, for deposit insurance, nil when not a deposit.
 	holder     string
 	holderKind intermediary.Kind
+	person     *uuid.UUID
 	// change is a planned change's piece: negative is less of what is held,
 	// not a debt.
 	change bool
@@ -291,11 +322,20 @@ func (s *Service) OfWith(ctx context.Context, spaceID uuid.UUID, valuation Valua
 		}
 		pieces = append(pieces, p)
 	}
-	holders(list, pieces)
+	owner, err := s.spaceOwner(ctx, spaceID)
+	if err != nil {
+		return Structure{}, err
+	}
+	holders(list, pieces, owner)
 	if err := s.classify(ctx, spaceID, pieces); err != nil {
 		return Structure{}, err
 	}
-	return out, s.lay(ctx, &out, pieces)
+	rules := sp.CostBasisRules()
+	var limit int64
+	if rules.DepositInsuredMinor > 0 && sp.BaseCurrency == rules.DepositInsuredCurrency {
+		limit = rules.DepositInsuredMinor
+	}
+	return out, s.lay(ctx, &out, pieces, limit)
 }
 
 // UnknownHolder is a bank or broker the catalog does not know.
@@ -303,7 +343,7 @@ const UnknownHolder = "-"
 
 // holders gives each piece the bank or broker holding its account: a broker
 // for a brokerage account, a bank for any other but cash and valuables.
-func holders(list []account.WithBalance, pieces []piece) {
+func holders(list []account.WithBalance, pieces []piece, owner *uuid.UUID) {
 	byID := map[uuid.UUID]account.Account{}
 	for _, a := range list {
 		byID[a.ID] = a.Account
@@ -321,7 +361,41 @@ func holders(list []account.WithBalance, pieces []piece) {
 		if found, _, ok := account.IntermediaryOf(a); ok {
 			pieces[i].holder = found.ID
 		}
+		if insurable[a.Type] && owner != nil {
+			person := owner
+			switch {
+			case a.OwnerUserID != nil:
+				person = a.OwnerUserID
+			case a.TaxOwnerUserID != nil:
+				person = a.TaxOwnerUserID
+			}
+			pieces[i].person = person
+		}
 	}
+}
+
+// insurable are the accounts deposit insurance covers: a bank's money on
+// cards, current and savings accounts and deposits.
+var insurable = map[account.Type]bool{
+	account.TypeChecking: true, account.TypeSavings: true, account.TypeDeposit: true, account.TypeCreditCard: true,
+}
+
+// spaceOwner is the space's owner, nil without members to ask.
+func (s *Service) spaceOwner(ctx context.Context, spaceID uuid.UUID) (*uuid.UUID, error) {
+	if s.members == nil {
+		return nil, nil
+	}
+	list, err := s.members.ListMembers(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range list {
+		if m.Role == family.RoleOwner {
+			id := m.ID
+			return &id, nil
+		}
+	}
+	return nil, nil
 }
 
 // classify gives each paper its country of risk and sector from its class;
@@ -575,8 +649,9 @@ func issuerCountry(isin string) string {
 
 // lay converts every piece into the base currency at today's rate and sums
 // the breakdowns; a negative piece is a debt.
-func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error {
+func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece, insuredLimit int64) error {
 	memo := marketdata.NewRateMemo(s.rates)
+	deposits := map[insuredKey]int64{}
 	today := time.Now().UTC()
 	missing := map[string]bool{}
 	sums := map[string]map[string]int64{
@@ -640,6 +715,9 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 			sums["bank"][p.holder] += inBase
 			out.AtBanks += inBase
 		}
+		if p.person != nil && !p.change {
+			deposits[insuredKey{*p.person, p.holder}] += inBase
+		}
 	}
 	for c := range missing {
 		out.MissingRates = append(out.MissingRates, c)
@@ -652,9 +730,45 @@ func (s *Service) lay(ctx context.Context, out *Structure, pieces []piece) error
 	}
 	out.BySector, out.ByHolding = slicesOf(sums["sector"]), slicesOf(sums["holding"])
 	out.ByBroker, out.ByBank = slicesOf(sums["broker"]), slicesOf(sums["bank"])
+	if insuredLimit > 0 {
+		out.InsuredLimit = insuredLimit
+		out.Insurance = insurance(deposits, insuredLimit)
+	}
 	out.ByKind, out.ByTargetCurrency = slicesOf(sums["kind"]), slicesOf(sums["targetCurrency"])
 	out.Unsellable = slicesOf(sums["unsellable"])
 	return nil
+}
+
+type insuredKey struct {
+	person uuid.UUID
+	bank   string
+}
+
+// insurance sets what each person holds in each bank against the limit, the
+// most held first.
+func insurance(deposits map[insuredKey]int64, limit int64) []InsuranceRow {
+	out := []InsuranceRow{}
+	for k, held := range deposits {
+		if held <= 0 {
+			continue
+		}
+		r := InsuranceRow{Person: k.person, Bank: k.bank, Held: held, Known: k.bank != UnknownHolder}
+		if r.Known {
+			r.Insured = min(held, limit)
+			r.Over = held - r.Insured
+		}
+		out = append(out, r)
+	}
+	slices.SortFunc(out, func(a, b InsuranceRow) int {
+		if a.Held != b.Held {
+			if a.Held > b.Held {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Bank+a.Person.String(), b.Bank+b.Person.String())
+	})
+	return out
 }
 
 // slicesOf is a breakdown, largest first.

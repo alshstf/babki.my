@@ -2315,6 +2315,19 @@ type AllocationTopUp struct {
 	WorthAfterMinor int64 `json:"worth_after_minor"`
 }
 
+// AllocationUninsured defines model for AllocationUninsured.
+type AllocationUninsured struct {
+	// AfterMinor Over the limit after it
+	AfterMinor int64 `json:"after_minor"`
+
+	// Bank The bank's id in GET /intermediaries
+	Bank string `json:"bank"`
+
+	// BeforeMinor Over the limit before the plan
+	BeforeMinor int64              `json:"before_minor"`
+	UserId      openapi_types.UUID `json:"user_id"`
+}
+
 // AllocationWhatIf defines model for AllocationWhatIf.
 type AllocationWhatIf struct {
 	BaseCurrency string `json:"base_currency"`
@@ -2329,6 +2342,9 @@ type AllocationWhatIf struct {
 
 	// TaxRate Decimal percent
 	TaxRate nullable.Nullable[string] `json:"tax_rate"`
+
+	// Uninsured A person's money in a bank whose part over the deposit insurance limit the plan raises (decision Р-47)
+	Uninsured []AllocationUninsured `json:"uninsured"`
 }
 
 // Arrival defines model for Arrival.
@@ -5111,6 +5127,12 @@ type Structure struct {
 	// DebtsMinor Negative or zero
 	DebtsMinor int64 `json:"debts_minor"`
 
+	// Insurance What each person holds in each bank against deposit insurance (decision Р-47), the most held first; empty when the country's limit is not counted or the base currency is not the limit's
+	Insurance []StructureInsurance `json:"insurance"`
+
+	// InsuredLimitMinor What insurance pays a person per bank, in the base currency; 0 when not counted
+	InsuredLimitMinor int64 `json:"insured_limit_minor"`
+
 	// MissingRates Currencies left out for want of today's rate
 	MissingRates []string `json:"missing_rates"`
 
@@ -5124,6 +5146,25 @@ type Structure struct {
 
 // StructureValuation defines model for Structure.Valuation.
 type StructureValuation string
+
+// StructureInsurance defines model for StructureInsurance.
+type StructureInsurance struct {
+	// Bank The bank's id in GET /intermediaries, «-» for one not known
+	Bank string `json:"bank"`
+
+	// HeldMinor Cards, current and savings accounts, deposits at the bank
+	HeldMinor    int64 `json:"held_minor"`
+	InsuredMinor int64 `json:"insured_minor"`
+
+	// Known False for a bank the catalog does not know: insured_minor and over_minor are not counted
+	Known bool `json:"known"`
+
+	// OverMinor What is above the limit, not insured
+	OverMinor int64 `json:"over_minor"`
+
+	// UserId Whose: a personal account's owner, a shared one's person for tax, else the space's owner
+	UserId openapi_types.UUID `json:"user_id"`
+}
 
 // StructureSlice defines model for StructureSlice.
 type StructureSlice struct {

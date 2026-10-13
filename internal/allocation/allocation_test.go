@@ -3,6 +3,7 @@ package allocation
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/structure"
@@ -184,5 +185,24 @@ func TestVerdict(t *testing.T) {
 		if got := verdict(d(c.before), d(c.after), d(c.target), c.ceiling); got != c.want {
 			t.Errorf("%s → %s against %s (ceiling %v): %s, want %s", c.before, c.after, c.target, c.ceiling, got, c.want)
 		}
+	}
+}
+
+// A plan that raises what is over the insurance limit is said; one that does
+// not, or at a bank the catalog does not know, is not.
+func TestUninsured(t *testing.T) {
+	maria, alex := uuid.New(), uuid.New()
+	before := []structure.InsuranceRow{
+		{Person: maria, Bank: "tbank", Held: 1_300_000_00, Insured: 1_300_000_00, Known: true},
+		{Person: alex, Bank: "sber", Held: 1_500_000_00, Insured: 1_400_000_00, Over: 100_000_00, Known: true},
+	}
+	after := []structure.InsuranceRow{
+		{Person: maria, Bank: "tbank", Held: 1_800_000_00, Insured: 1_400_000_00, Over: 400_000_00, Known: true},
+		{Person: alex, Bank: "sber", Held: 1_450_000_00, Insured: 1_400_000_00, Over: 50_000_00, Known: true},
+		{Person: alex, Bank: "-", Held: 2_000_000_00},
+	}
+	got := uninsured(before, after)
+	if len(got) != 1 || got[0].Person != maria || got[0].Before != 0 || got[0].After != 400_000_00 {
+		t.Errorf("uninsured = %+v", got)
 	}
 }

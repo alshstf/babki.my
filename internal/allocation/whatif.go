@@ -67,6 +67,14 @@ type Cut struct {
 	Rows      []CutRow
 }
 
+// Uninsured is what of a person's money in a bank is over the insurance
+// limit, before and after a plan.
+type Uninsured struct {
+	Person        uuid.UUID
+	Bank          string
+	Before, After int64
+}
+
 // PaperSale is what selling part of a paper is estimated to gain.
 type PaperSale struct {
 	Instrument uuid.UUID
@@ -79,6 +87,9 @@ type PaperSale struct {
 type WhatIf struct {
 	BaseCurrency string
 	Cuts         []Cut
+	// Uninsured are the people's deposits in a bank whose part over the
+	// insurance limit the plan raises (decision Р-47).
+	Uninsured    []Uninsured
 	Sales        []PaperSale
 	Tax          *int64
 	TaxRate      *decimal.Decimal
@@ -180,12 +191,28 @@ func (s *Service) WhatIf(ctx context.Context, spaceID uuid.UUID, valuation struc
 			{ByBank, cut(vb.Banks, va.Banks, true)},
 		},
 	}
+	out.Uninsured = uninsured(before.Insurance, after.Insurance)
 	if len(sold) > 0 {
 		if err := s.salesOf(ctx, spaceID, before.BaseCurrency, sold, soldCurrency, &out); err != nil {
 			return WhatIf{}, err
 		}
 	}
 	return out, nil
+}
+
+// uninsured are the deposits whose part over the limit grows.
+func uninsured(before, after []structure.InsuranceRow) []Uninsured {
+	was := map[string]int64{}
+	for _, r := range before {
+		was[r.Person.String()+"|"+r.Bank] = r.Over
+	}
+	out := []Uninsured{}
+	for _, r := range after {
+		if b := was[r.Person.String()+"|"+r.Bank]; r.Known && r.Over > b {
+			out = append(out, Uninsured{Person: r.Person, Bank: r.Bank, Before: b, After: r.Over})
+		}
+	}
+	return out
 }
 
 // cut sets a dimension's rows before and after against each other; ceilings

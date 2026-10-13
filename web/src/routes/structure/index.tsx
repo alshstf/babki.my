@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { TargetsCard } from "./targets";
 import { CeilingsCard } from "./ceilings";
 import { PlanCard } from "./plan";
+import { InsuranceCard } from "./insurance";
 
 // The words for each place papers are held; a switch with literal keys for
 // scripts/check-i18n.mjs.
@@ -187,6 +188,7 @@ export function StructurePage() {
               note={t("structure.holdingNote")}
             />
           </div>
+          <InsuranceCard data={data} />
         </>
       )}
     </div>

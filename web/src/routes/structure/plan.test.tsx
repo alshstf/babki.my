@@ -36,6 +36,7 @@ const answer = {
     { dimension: "country", rows: [{ key: "US", before_minor: 750_000_00, after_minor: 840_000_00, share_before: "25.00", share_after: "27.25", target: "20.00", verdict: "further" }] },
     { dimension: "sector", rows: [] },
   ],
+  uninsured: [{ user_id: "u-maria", bank: "tbank", before_minor: 0, after_minor: 400_000_00 }],
   sales: [], tax_minor: null, tax_rate: null, missing_rates: [],
 };
 
@@ -46,6 +47,8 @@ function show() {
     if (url.pathname.endsWith("/accounts")) return json([account("a-card", "Карта", "checking"), account("a-broker", "Freedom", "brokerage")]);
     if (url.pathname.endsWith("/instruments")) return json({ instruments: [qqqm], has_more: false });
     if (url.pathname.endsWith("/what-if")) return json(answer);
+    if (url.pathname.endsWith("/members")) return json([{ id: "u-maria", username: "m", display_name: "Мария", role: "editor" }]);
+    if (url.pathname.endsWith("/intermediaries")) return json({ checked_on: "2026-10-14", intermediaries: [{ id: "tbank", name: "Т-Банк", kind: "bank", country: "RU", insured: true, reg_number: 2673, bank_id: null, aliases: [] }] });
     return json(null);
   });
   render(
@@ -84,6 +87,7 @@ describe("PlanCard", () => {
     expect(within(result).queryByTestId("plan-cut-currency")).toBeNull();
     expect(norm(within(result).getByTestId("plan-cut-country").textContent)).toMatch(/дальше от цели25 % → 27,25 % · потолок 20 %/);
     expect(norm(result.textContent)).toMatch(/Денег у брокеров не хватит: не хватает 40\s000/);
+    await waitFor(() => expect(norm(within(result).getByTestId("plan-uninsured").textContent)).toMatch(/Мария · Т-Банк: сверх страховки вкладов станет 400\s000 ₽/));
     fireEvent.click(within(result).getByRole("button", { name: "Показать все разрезы" }));
     expect(within(result).getByTestId("plan-cut-kind").textContent).toMatch(/Облигации.*без изменений/);
   });

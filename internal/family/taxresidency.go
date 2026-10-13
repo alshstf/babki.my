@@ -100,6 +100,11 @@ type TaxRules struct {
 	// may take off such sales of a year instead of what the things cost.
 	PropertyFreeYears      int
 	PropertyDeductionMinor int64
+	// DepositInsuredMinor is what deposit insurance pays a person per bank,
+	// in DepositInsuredCurrency (decision Р-47); 0: none the application
+	// counts for the country.
+	DepositInsuredMinor    int64
+	DepositInsuredCurrency string
 }
 
 // TaxBand is a rate in hundredths of a percent on the part of a year's sum
@@ -142,6 +147,10 @@ var taxRules = map[string]TaxRules{
 		// 17.1 ст. 217); otherwise 250 000 a year may be taken off instead of the
 		// cost (ст. 220 п. 2 пп. 1).
 		PropertyFreeYears: 3, PropertyDeductionMinor: 250_000_00,
+		// Deposits, savings and current accounts and cards at one bank are
+		// insured up to 1,4 млн a person (АСВ, «Вопросы и ответы», 2026-10-14;
+		// 177-ФЗ); up to 10 млн in special cases for three months, not counted.
+		DepositInsuredMinor: 1_400_000_00, DepositInsuredCurrency: "RUB",
 		InvestmentBands: [2]TaxBand{{UpToMinor: 2_400_000_00, BP: 1300}, {BP: 1500}},
 		MainBands: [5]TaxBand{
 			{UpToMinor: 2_400_000_00, BP: 1300},

@@ -3829,6 +3829,16 @@ components:
       properties:
         country: { type: string, nullable: true }
         sector: { type: string, nullable: true }
+    StructureInsurance:
+      type: object
+      required: [user_id, bank, held_minor, insured_minor, over_minor, known]
+      properties:
+        user_id: { type: string, format: uuid, description: "Whose: a personal account's owner, a shared one's person for tax, else the space's owner" }
+        bank: { type: string, description: "The bank's id in GET /intermediaries, «-» for one not known" }
+        held_minor: { type: integer, format: int64, description: "Cards, current and savings accounts, deposits at the bank" }
+        insured_minor: { type: integer, format: int64 }
+        over_minor: { type: integer, format: int64, description: "What is above the limit, not insured" }
+        known: { type: boolean, description: "False for a bank the catalog does not know: insured_minor and over_minor are not counted" }
     StructureSlice:
       type: object
       required: [key, minor]
@@ -3887,10 +3897,11 @@ components:
         amount_minor: { type: integer, format: int64, minimum: 1, description: "The sum bought, sold, put in, taken out or moved" }
     AllocationWhatIf:
       type: object
-      required: [base_currency, cuts, sales, tax_minor, tax_rate, missing_rates]
+      required: [base_currency, cuts, uninsured, sales, tax_minor, tax_rate, missing_rates]
       properties:
         base_currency: { type: string }
         cuts: { type: array, items: { $ref: "#/components/schemas/AllocationCut" }, description: "kind, currency, country, sector, broker, bank — in that order" }
+        uninsured: { type: array, items: { $ref: "#/components/schemas/AllocationUninsured" }, description: "A person's money in a bank whose part over the deposit insurance limit the plan raises (decision Р-47)" }
         sales: { type: array, items: { $ref: "#/components/schemas/AllocationPaperSale" } }
         tax_minor: { type: integer, format: int64, nullable: true, description: "The sales' tax at the rules' rate on the gain not freed, gains and losses offset; null when a sale's gain is not known or the rules estimate none" }
         tax_rate: { type: string, nullable: true, description: "Decimal percent" }
@@ -3912,6 +3923,14 @@ components:
         share_after: { type: string }
         target: { type: string, nullable: true, description: "The target — for countries and sectors the ceiling" }
         verdict: { type: string, enum: [closer, further, same, none], description: "Closer to the target or under the ceiling by more, further from it, the same, or no target" }
+    AllocationUninsured:
+      type: object
+      required: [user_id, bank, before_minor, after_minor]
+      properties:
+        user_id: { type: string, format: uuid }
+        bank: { type: string, description: "The bank's id in GET /intermediaries" }
+        before_minor: { type: integer, format: int64, description: "Over the limit before the plan" }
+        after_minor: { type: integer, format: int64, description: "Over the limit after it" }
     AllocationPaperSale:
       type: object
       required: [instrument_id, gain_minor, free_minor, known]
@@ -4164,7 +4183,7 @@ components:
         targets: { type: array, items: { $ref: "#/components/schemas/AllocationTarget" } }
     Structure:
       type: object
-      required: [base_currency, valuation, assets_minor, debts_minor, by_class, by_currency, by_account, by_country, by_sector, by_holding, papers_minor, at_brokers_minor, by_broker, by_bank, at_banks_minor, unpriced, missing_rates]
+      required: [base_currency, valuation, assets_minor, debts_minor, by_class, by_currency, by_account, by_country, by_sector, by_holding, papers_minor, at_brokers_minor, by_broker, by_bank, at_banks_minor, insurance, insured_limit_minor, unpriced, missing_rates]
       properties:
         base_currency: { type: string }
         valuation: { type: string, enum: [liquid, full] }
@@ -4181,6 +4200,8 @@ components:
         by_broker: { type: array, items: { $ref: "#/components/schemas/StructureSlice" }, description: "What each broker holds, by its id in GET /intermediaries; «-» for one the catalog does not know (decision Р-47)" }
         by_bank: { type: array, items: { $ref: "#/components/schemas/StructureSlice" }, description: "What each bank holds — cards, current and savings accounts, deposits — by its id in GET /intermediaries; «-» for one not known" }
         at_banks_minor: { type: integer, format: int64, description: "What the banks hold: the base of the shares by bank" }
+        insurance: { type: array, items: { $ref: "#/components/schemas/StructureInsurance" }, description: "What each person holds in each bank against deposit insurance (decision Р-47), the most held first; empty when the country's limit is not counted or the base currency is not the limit's" }
+        insured_limit_minor: { type: integer, format: int64, description: "What insurance pays a person per bank, in the base currency; 0 when not counted" }
         unpriced: { type: integer, description: "Papers left out for want of a price" }
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
     LoanTerms:
