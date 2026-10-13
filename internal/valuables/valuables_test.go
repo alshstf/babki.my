@@ -42,6 +42,18 @@ func TestAPieceIsItsPureMetal(t *testing.T) {
 	}
 }
 
+// Grams on a metal account sell at the bank's price: nothing makes them hard
+// to sell, whatever the piece's fields say.
+func TestAMetalAccountIsNeverHardToSell(t *testing.T) {
+	oms := Item{Kind: KindAccount, Metal: marketdata.Gold, Weight: dec("31.1"), Fineness: dec("1000"), ForeignMade: true}
+	if h := oms.HardToSell(); len(h) != 0 {
+		t.Errorf("a metal account: %v", h)
+	}
+	if p := oms.Pure(); !p.Equal(dec("31.1")) {
+		t.Errorf("pure = %s", p)
+	}
+}
+
 func TestWhatMakesAPieceHardToSell(t *testing.T) {
 	if h := noteBar().HardToSell(); len(h) != 0 {
 		t.Errorf("a sealed Russian bar with its certificate: %v", h)

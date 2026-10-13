@@ -3792,7 +3792,7 @@ components:
       type: object
       required: [kind, metal, weight, fineness, maker, foreign_made, serial, certificate, sealed, bought_on, cost_minor, currency, owner_user_id, note]
       properties:
-        kind: { type: string, enum: [bar, coin] }
+        kind: { type: string, enum: [bar, coin, account], description: "account: a bank's unallocated metal account (ОМС) — grams on the account as weight, fineness 1000, the bank as maker, the account's number as serial" }
         metal: { $ref: "#/components/schemas/Metal" }
         weight: { type: string, description: "Decimal, grams, to ten-thousandths: what the piece weighs" }
         fineness: { type: string, description: "Decimal, thousandths, to tenths: 999.9 is 99.99 % metal" }

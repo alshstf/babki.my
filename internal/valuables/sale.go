@@ -134,8 +134,11 @@ func (s *Service) item(ctx context.Context, accountID, itemID uuid.UUID) (Item, 
 // saleNote is the money's row's words: what was sold.
 func saleNote(it Item) string {
 	what := "Продажа слитка"
-	if it.Kind == KindCoin {
+	switch it.Kind {
+	case KindCoin:
 		what = "Продажа монеты"
+	case KindAccount:
+		what = "Продажа с металлического счёта"
 	}
 	note := fmt.Sprintf("%s: %s г, %s", what, it.Weight.String(), metalName[it.Metal])
 	if it.Serial != "" {
@@ -201,6 +204,39 @@ func (s *Service) SoldIn(ctx context.Context, spaceID uuid.UUID, year int) ([]So
 				out = append(out, SoldPiece{Item: it, AccountOwner: a.OwnerUserID})
 			}
 		}
+	}
+	return out, nil
+}
+
+// StorageAt is a valuables account's storage with the account's name and
+// personal owner, for reminders.
+type StorageAt struct {
+	AccountID uuid.UUID
+	Name      string
+	Owner     *uuid.UUID
+	Storage   Storage
+}
+
+// Storages are the space's active valuables accounts' storages.
+func (s *Service) Storages(ctx context.Context, spaceID uuid.UUID) ([]StorageAt, error) {
+	l, ok := s.accounts.(lister)
+	if !ok {
+		return nil, errors.New("valuables: the accounts cannot be listed")
+	}
+	list, err := l.ListWithBalance(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	var out []StorageAt
+	for _, a := range list {
+		if a.Type != account.TypeValuables || a.Status != account.StatusActive {
+			continue
+		}
+		st, err := s.load(ctx, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, StorageAt{AccountID: a.ID, Name: a.Name, Owner: a.OwnerUserID, Storage: st.Storage})
 	}
 	return out, nil
 }
