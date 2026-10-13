@@ -176,6 +176,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tax-year/foreign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The year of each account at a broker abroad line by line, as the tax return lists it (decision Р-45, step 1): every dividend, coupon and interest with its income kind of Приложение 2 (001 dividends, 003 operations with securities — sales and, as the Ministry of Finance reads ст. 214.1, coupons — 013 interest from abroad), the issuer's country as its ISIN tells, the Central Bank's rate of its day, the sum in the year's currency, the tax withheld on it, the Russian tax at the first band's rate and what the withheld tax offsets of it; every sale with the lots it gave up, each at its own day's rate; and Приложение 8's income and expenses. An estimate from the journal, to check against the broker's report. supported is false, with no accounts, when the space's tax residency has no rules. 400 for a year past this one. */
+        get: operations["getTaxYearForeign"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tax-year/wages/{operationId}": {
         parameters: {
             query?: never;
@@ -3681,6 +3698,146 @@ export interface components {
             /** @description True when the gross and the tax withheld were written from the payslip; false when the program reckoned them from net_minor by the scale over the employer's year */
             entered: boolean;
         };
+        TaxYearForeign: {
+            year: number;
+            supported: boolean;
+            /** @description The year's tax currency, every *_base_minor's */
+            currency: string;
+            accounts: components["schemas"]["TaxYearForeignAccount"][];
+        };
+        TaxYearForeignAccount: {
+            /** Format: uuid */
+            account_id: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description Whose income it is for tax
+             */
+            user_id: string;
+            /** @description The broker's country, ISO 3166 alpha-2 — where the money is credited (line 011); empty when the program does not know the broker */
+            country: string;
+            payouts: components["schemas"]["TaxYearForeignPayout"][];
+            sales: components["schemas"]["TaxYearForeignSale"][];
+            /** @description Tax rows set against no payment: another day than the paper's payment, or no paper */
+            other_taxes: components["schemas"]["TaxYearForeignTax"][];
+            /**
+             * Format: int64
+             * @description Приложение 8, line 020: the sales' proceeds
+             */
+            income_base_minor: number;
+            /**
+             * Format: int64
+             * @description Приложение 8, line 030: the lots' cost and the sales' fees
+             */
+            expenses_base_minor: number;
+            /** @description Lines left out of the sums for a missing rate or a lot's missing day */
+            unvalued: number;
+        };
+        TaxYearForeignPayout: {
+            /** @description Date YYYY-MM-DD, line 040 */
+            on: string;
+            /** @enum {string} */
+            type: "dividend" | "coupon" | "interest";
+            /** @description Line 031: 001, 003 or 013 */
+            kind: string;
+            /** Format: uuid */
+            instrument_id: string | null;
+            paper: string;
+            isin: string;
+            /** @description The issuer's country by its ISIN, ISO 3166 alpha-2 (line 010); empty without an ISIN */
+            country: string;
+            /** @description Line 030 */
+            currency: string;
+            /**
+             * Format: int64
+             * @description Line 060, before the tax
+             */
+            amount_minor: number;
+            /**
+             * Format: int64
+             * @description Line 130: the tax rows of the same paper, day and currency
+             */
+            withheld_minor: number;
+            /** @description Line 050: the day's rate to the year's currency; null when there is none */
+            rate: string | null;
+            /**
+             * Format: int64
+             * @description Line 070
+             */
+            amount_base_minor: number;
+            /**
+             * Format: int64
+             * @description Line 140, at the payment's rate
+             */
+            withheld_base_minor: number;
+            /**
+             * Format: int64
+             * @description Line 160: the Russian tax on it at the first band's rate
+             */
+            tax_ru_minor: number;
+            /**
+             * Format: int64
+             * @description Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged
+             */
+            credit_minor: number;
+        };
+        TaxYearForeignSale: {
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** @description The day whose rate prices the proceeds and fee */
+            settled_on: string;
+            /** Format: uuid */
+            instrument_id: string;
+            paper: string;
+            isin: string;
+            /** @description Decimal; 0 for an amortization */
+            quantity: string;
+            currency: string;
+            /** Format: int64 */
+            proceeds_minor: number;
+            /** Format: int64 */
+            fee_minor: number;
+            rate: string | null;
+            /** Format: int64 */
+            proceeds_base_minor: number;
+            /** Format: int64 */
+            fee_base_minor: number;
+            lots: components["schemas"]["TaxYearForeignLot"][];
+            /**
+             * Format: int64
+             * @description Proceeds less fee less the lots' cost; null when a rate or a lot's day is missing
+             */
+            result_base_minor: number | null;
+            /**
+             * Format: int64
+             * @description Of the result, what lots held longer than the long-holding years gained
+             */
+            long_base_minor: number;
+        };
+        TaxYearForeignLot: {
+            /** @description Date YYYY-MM-DD; null when the journal does not know it */
+            acquired_on: string | null;
+            quantity: string;
+            currency: string;
+            /** Format: int64 */
+            cost_minor: number;
+            /** @description The rate of the purchase's settlement day */
+            rate: string | null;
+            /** Format: int64 */
+            cost_base_minor: number;
+        };
+        TaxYearForeignTax: {
+            on: string;
+            /** Format: uuid */
+            instrument_id: string | null;
+            paper: string;
+            currency: string;
+            /** Format: int64 */
+            withheld_minor: number;
+            rate: string | null;
+            /** Format: int64 */
+            withheld_base_minor: number;
+        };
         TaxYearWageEntry: {
             /** Format: int64 */
             gross_minor: number;
@@ -6272,6 +6429,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaxYear"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    getTaxYearForeign: {
+        parameters: {
+            query?: {
+                /** @description The year; this one when absent */
+                year?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The lines */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxYearForeign"];
                 };
             };
             400: components["responses"]["Error"];

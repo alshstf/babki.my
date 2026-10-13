@@ -228,6 +228,26 @@ paths:
         "200": { description: The year, content: { application/json: { schema: { $ref: "#/components/schemas/TaxYear" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/tax-year/foreign:
+    get:
+      tags: [taxyear]
+      operationId: getTaxYearForeign
+      description: >-
+        The year of each account at a broker abroad line by line, as the tax return lists it (decision Р-45,
+        step 1): every dividend, coupon and interest with its income kind of Приложение 2 (001 dividends, 003
+        operations with securities — sales and, as the Ministry of Finance reads ст. 214.1, coupons — 013
+        interest from abroad), the issuer's country as its ISIN tells, the Central Bank's rate of its day, the
+        sum in the year's currency, the tax withheld on it, the Russian tax at the first band's rate and what
+        the withheld tax offsets of it; every sale with the lots it gave up, each at its own day's rate; and
+        Приложение 8's income and expenses. An estimate from the journal, to check against the broker's report.
+        supported is false, with no accounts, when the space's tax residency has no rules. 400 for a year past
+        this one.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer }, description: "The year; this one when absent" }
+      responses:
+        "200": { description: The lines, content: { application/json: { schema: { $ref: "#/components/schemas/TaxYearForeign" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/tax-year/wages/{operationId}:
     put:
       tags: [taxyear]
@@ -4300,6 +4320,87 @@ components:
         gross_minor: { type: integer, format: int64, description: "Before tax" }
         withheld_minor: { type: integer, format: int64 }
         entered: { type: boolean, description: "True when the gross and the tax withheld were written from the payslip; false when the program reckoned them from net_minor by the scale over the employer's year" }
+    TaxYearForeign:
+      type: object
+      required: [year, supported, currency, accounts]
+      properties:
+        year: { type: integer }
+        supported: { type: boolean }
+        currency: { type: string, description: "The year's tax currency, every *_base_minor's" }
+        accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignAccount" } }
+    TaxYearForeignAccount:
+      type: object
+      required: [account_id, name, user_id, country, payouts, sales, other_taxes, income_base_minor, expenses_base_minor, unvalued]
+      properties:
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        user_id: { type: string, format: uuid, description: "Whose income it is for tax" }
+        country: { type: string, description: "The broker's country, ISO 3166 alpha-2 — where the money is credited (line 011); empty when the program does not know the broker" }
+        payouts: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignPayout" } }
+        sales: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignSale" } }
+        other_taxes: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignTax" }, description: "Tax rows set against no payment: another day than the paper's payment, or no paper" }
+        income_base_minor: { type: integer, format: int64, description: "Приложение 8, line 020: the sales' proceeds" }
+        expenses_base_minor: { type: integer, format: int64, description: "Приложение 8, line 030: the lots' cost and the sales' fees" }
+        unvalued: { type: integer, description: "Lines left out of the sums for a missing rate or a lot's missing day" }
+    TaxYearForeignPayout:
+      type: object
+      required: [on, type, kind, instrument_id, paper, isin, country, currency, amount_minor, withheld_minor, rate, amount_base_minor, withheld_base_minor, tax_ru_minor, credit_minor]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD, line 040" }
+        type: { type: string, enum: [dividend, coupon, interest] }
+        kind: { type: string, description: "Line 031: 001, 003 or 013" }
+        instrument_id: { type: string, format: uuid, nullable: true }
+        paper: { type: string }
+        isin: { type: string }
+        country: { type: string, description: "The issuer's country by its ISIN, ISO 3166 alpha-2 (line 010); empty without an ISIN" }
+        currency: { type: string, description: "Line 030" }
+        amount_minor: { type: integer, format: int64, description: "Line 060, before the tax" }
+        withheld_minor: { type: integer, format: int64, description: "Line 130: the tax rows of the same paper, day and currency" }
+        rate: { type: string, nullable: true, description: "Line 050: the day's rate to the year's currency; null when there is none" }
+        amount_base_minor: { type: integer, format: int64, description: "Line 070" }
+        withheld_base_minor: { type: integer, format: int64, description: "Line 140, at the payment's rate" }
+        tax_ru_minor: { type: integer, format: int64, description: "Line 160: the Russian tax on it at the first band's rate" }
+        credit_minor: { type: integer, format: int64, description: "Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged" }
+    TaxYearForeignSale:
+      type: object
+      required: [on, settled_on, instrument_id, paper, isin, quantity, currency, proceeds_minor, fee_minor, rate, proceeds_base_minor, fee_base_minor, lots, result_base_minor, long_base_minor]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        settled_on: { type: string, description: "The day whose rate prices the proceeds and fee" }
+        instrument_id: { type: string, format: uuid }
+        paper: { type: string }
+        isin: { type: string }
+        quantity: { type: string, description: "Decimal; 0 for an amortization" }
+        currency: { type: string }
+        proceeds_minor: { type: integer, format: int64 }
+        fee_minor: { type: integer, format: int64 }
+        rate: { type: string, nullable: true }
+        proceeds_base_minor: { type: integer, format: int64 }
+        fee_base_minor: { type: integer, format: int64 }
+        lots: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignLot" } }
+        result_base_minor: { type: integer, format: int64, nullable: true, description: "Proceeds less fee less the lots' cost; null when a rate or a lot's day is missing" }
+        long_base_minor: { type: integer, format: int64, description: "Of the result, what lots held longer than the long-holding years gained" }
+    TaxYearForeignLot:
+      type: object
+      required: [acquired_on, quantity, currency, cost_minor, rate, cost_base_minor]
+      properties:
+        acquired_on: { type: string, nullable: true, description: "Date YYYY-MM-DD; null when the journal does not know it" }
+        quantity: { type: string }
+        currency: { type: string }
+        cost_minor: { type: integer, format: int64 }
+        rate: { type: string, nullable: true, description: "The rate of the purchase's settlement day" }
+        cost_base_minor: { type: integer, format: int64 }
+    TaxYearForeignTax:
+      type: object
+      required: [on, instrument_id, paper, currency, withheld_minor, rate, withheld_base_minor]
+      properties:
+        on: { type: string }
+        instrument_id: { type: string, format: uuid, nullable: true }
+        paper: { type: string }
+        currency: { type: string }
+        withheld_minor: { type: integer, format: int64 }
+        rate: { type: string, nullable: true }
+        withheld_base_minor: { type: integer, format: int64 }
     TaxYearWageEntry:
       type: object
       required: [gross_minor, withheld_minor]
