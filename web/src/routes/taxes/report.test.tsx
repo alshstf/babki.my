@@ -58,12 +58,18 @@ describe("ForeignReport", () => {
     expect(norm((await screen.findByTestId("tax-report")).textContent)).toMatch(/^Отчёт о движении средств за 2026 год — до 01\.06\.2027/);
     const [kz, us] = screen.getAllByTestId("tax-report-account");
     expect(norm(within(kz).getByTestId("tax-report-verdict").textContent)).toBe(
-      "Отчёт не нужен: брокер в стране ЕАЭС, за год зачислено 400 000,00 ₽ по курсу ЦБ на 31 декабря — не больше 600 000,00 ₽.",
+      "Отчёт не нужен: брокер в стране ЕАЭС, за год зачислено 400 000,00 ₽ по курсу ЦБ на 31.12.2026 — не больше 600 000,00 ₽.",
     );
     expect(norm(within(kz).getByTestId("tax-report-currency").textContent)).toBe("USD (840)0.0005.0001.0004.000");
     expect(norm(within(kz).getByTestId("tax-report-papers").textContent)).toMatch(/на начало года — 0 тыс\. · на конец — 3\.000 USD тыс\./);
     expect(norm(within(us).getByTestId("tax-report-verdict").textContent)).toMatch(/^Отчёт нужен: за год зачислено 640 000,00 ₽/);
     expect(within(us).queryByTestId("tax-report-papers")).toBeNull();
+  });
+
+  it("says the papers no price struck, even with none valued", async () => {
+    show({ ...report, accounts: [{ ...report.accounts[1], unpriced: 3 }] });
+    const papers = await screen.findByTestId("tax-report-papers");
+    expect(norm(papers.textContent)).toMatch(/Бумаг без цены на одну из дат — не вошли в стоимость: 3\./);
   });
 
   it("says a running year is counted to today", async () => {

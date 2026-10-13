@@ -58,7 +58,12 @@ function AccountReport({ account: a, report: r, person }: { account: Account; re
         className={cn("text-sm", a.verdict === "due" ? "font-medium" : a.verdict === "unknown" && "text-amber-700 dark:text-amber-400")}
         data-testid="tax-report-verdict"
       >
-        {verdict(t, a.verdict, a.nothing_in ? t("taxReport.atEnd", { amount: came }) : t("taxReport.cameIn", { amount: came }), limit)}
+        {verdict(
+          t,
+          a.verdict,
+          a.nothing_in ? t("taxReport.atEnd", { amount: came, date: formatDate(r.until) }) : t("taxReport.cameIn", { amount: came, date: formatDate(r.until) }),
+          limit,
+        )}
       </p>
       <div className="overflow-x-auto">
         <Table data-testid="tax-report-cash">
@@ -88,7 +93,7 @@ function AccountReport({ account: a, report: r, person }: { account: Account; re
         </Table>
       </div>
       <p className="text-xs text-muted-foreground">{t("taxReport.cashNote")}</p>
-      {(a.papers_start.length > 0 || a.papers_end.length > 0) && (
+      {(a.papers_start.length > 0 || a.papers_end.length > 0 || a.unpriced > 0) && (
         <div className="grid gap-1 text-sm" data-testid="tax-report-papers">
           <p className="font-medium">{t("taxReport.papers")}</p>
           <p>
