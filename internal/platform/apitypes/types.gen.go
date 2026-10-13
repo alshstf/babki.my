@@ -1411,6 +1411,27 @@ func (e StructureValuation) Valid() bool {
 	}
 }
 
+// Defines values for TaxYearForeignPayoutType.
+const (
+	TaxYearForeignPayoutTypeCoupon   TaxYearForeignPayoutType = "coupon"
+	TaxYearForeignPayoutTypeDividend TaxYearForeignPayoutType = "dividend"
+	TaxYearForeignPayoutTypeInterest TaxYearForeignPayoutType = "interest"
+)
+
+// Valid indicates whether the value is a known member of the TaxYearForeignPayoutType enum.
+func (e TaxYearForeignPayoutType) Valid() bool {
+	switch e {
+	case TaxYearForeignPayoutTypeCoupon:
+		return true
+	case TaxYearForeignPayoutTypeDividend:
+		return true
+	case TaxYearForeignPayoutTypeInterest:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TinvestConnectionStatus.
 const (
 	TinvestConnectionStatusActive       TinvestConnectionStatus = "active"
@@ -5450,6 +5471,138 @@ type TaxYearEmployer struct {
 	WithheldMinor int64 `json:"withheld_minor"`
 }
 
+// TaxYearForeign defines model for TaxYearForeign.
+type TaxYearForeign struct {
+	Accounts []TaxYearForeignAccount `json:"accounts"`
+
+	// Currency The year's tax currency, every *_base_minor's
+	Currency  string `json:"currency"`
+	Supported bool   `json:"supported"`
+	Year      int    `json:"year"`
+}
+
+// TaxYearForeignAccount defines model for TaxYearForeignAccount.
+type TaxYearForeignAccount struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// Country The broker's country, ISO 3166 alpha-2 — where the money is credited (line 011); empty when the program does not know the broker
+	Country string `json:"country"`
+
+	// ExpensesBaseMinor Приложение 8, line 030: the lots' cost and the sales' fees
+	ExpensesBaseMinor int64 `json:"expenses_base_minor"`
+
+	// IncomeBaseMinor Приложение 8, line 020: the sales' proceeds
+	IncomeBaseMinor int64  `json:"income_base_minor"`
+	Name            string `json:"name"`
+
+	// OtherTaxes Tax rows set against no payment: another day than the paper's payment, or no paper
+	OtherTaxes []TaxYearForeignTax    `json:"other_taxes"`
+	Payouts    []TaxYearForeignPayout `json:"payouts"`
+	Sales      []TaxYearForeignSale   `json:"sales"`
+
+	// Unvalued Lines left out of the sums for a missing rate or a lot's missing day
+	Unvalued int `json:"unvalued"`
+
+	// UserId Whose income it is for tax
+	UserId openapi_types.UUID `json:"user_id"`
+}
+
+// TaxYearForeignLot defines model for TaxYearForeignLot.
+type TaxYearForeignLot struct {
+	// AcquiredOn Date YYYY-MM-DD; null when the journal does not know it
+	AcquiredOn    nullable.Nullable[string] `json:"acquired_on"`
+	CostBaseMinor int64                     `json:"cost_base_minor"`
+	CostMinor     int64                     `json:"cost_minor"`
+	Currency      string                    `json:"currency"`
+	Quantity      string                    `json:"quantity"`
+
+	// Rate The rate of the purchase's settlement day
+	Rate nullable.Nullable[string] `json:"rate"`
+}
+
+// TaxYearForeignPayout defines model for TaxYearForeignPayout.
+type TaxYearForeignPayout struct {
+	// AmountBaseMinor Line 070
+	AmountBaseMinor int64 `json:"amount_base_minor"`
+
+	// AmountMinor Line 060, before the tax
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Country The issuer's country by its ISIN, ISO 3166 alpha-2 (line 010); empty without an ISIN
+	Country string `json:"country"`
+
+	// CreditMinor Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged
+	CreditMinor int64 `json:"credit_minor"`
+
+	// Currency Line 030
+	Currency     string                                `json:"currency"`
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id"`
+	Isin         string                                `json:"isin"`
+
+	// Kind Line 031: 001, 003 or 013
+	Kind string `json:"kind"`
+
+	// On Date YYYY-MM-DD, line 040
+	On    string `json:"on"`
+	Paper string `json:"paper"`
+
+	// Rate Line 050: the day's rate to the year's currency; null when there is none
+	Rate nullable.Nullable[string] `json:"rate"`
+
+	// TaxRuMinor Line 160: the Russian tax on it at the first band's rate
+	TaxRuMinor int64                    `json:"tax_ru_minor"`
+	Type       TaxYearForeignPayoutType `json:"type"`
+
+	// WithheldBaseMinor Line 140, at the payment's rate
+	WithheldBaseMinor int64 `json:"withheld_base_minor"`
+
+	// WithheldMinor Line 130: the tax rows of the same paper, day and currency
+	WithheldMinor int64 `json:"withheld_minor"`
+}
+
+// TaxYearForeignPayoutType defines model for TaxYearForeignPayout.Type.
+type TaxYearForeignPayoutType string
+
+// TaxYearForeignSale defines model for TaxYearForeignSale.
+type TaxYearForeignSale struct {
+	Currency     string             `json:"currency"`
+	FeeBaseMinor int64              `json:"fee_base_minor"`
+	FeeMinor     int64              `json:"fee_minor"`
+	InstrumentId openapi_types.UUID `json:"instrument_id"`
+	Isin         string             `json:"isin"`
+
+	// LongBaseMinor Of the result, what lots held longer than the long-holding years gained
+	LongBaseMinor int64               `json:"long_base_minor"`
+	Lots          []TaxYearForeignLot `json:"lots"`
+
+	// On Date YYYY-MM-DD
+	On                string `json:"on"`
+	Paper             string `json:"paper"`
+	ProceedsBaseMinor int64  `json:"proceeds_base_minor"`
+	ProceedsMinor     int64  `json:"proceeds_minor"`
+
+	// Quantity Decimal; 0 for an amortization
+	Quantity string                    `json:"quantity"`
+	Rate     nullable.Nullable[string] `json:"rate"`
+
+	// ResultBaseMinor Proceeds less fee less the lots' cost; null when a rate or a lot's day is missing
+	ResultBaseMinor nullable.Nullable[int64] `json:"result_base_minor"`
+
+	// SettledOn The day whose rate prices the proceeds and fee
+	SettledOn string `json:"settled_on"`
+}
+
+// TaxYearForeignTax defines model for TaxYearForeignTax.
+type TaxYearForeignTax struct {
+	Currency          string                                `json:"currency"`
+	InstrumentId      nullable.Nullable[openapi_types.UUID] `json:"instrument_id"`
+	On                string                                `json:"on"`
+	Paper             string                                `json:"paper"`
+	Rate              nullable.Nullable[string]             `json:"rate"`
+	WithheldBaseMinor int64                                 `json:"withheld_base_minor"`
+	WithheldMinor     int64                                 `json:"withheld_minor"`
+}
+
 // TaxYearPerson defines model for TaxYearPerson.
 type TaxYearPerson struct {
 	Accounts []TaxYearAccount `json:"accounts"`
@@ -6523,6 +6676,12 @@ type GetStructureParamsValuation string
 
 // GetTaxYearParams defines parameters for GetTaxYear.
 type GetTaxYearParams struct {
+	// Year The year; this one when absent
+	Year *int `form:"year,omitempty" json:"year,omitempty"`
+}
+
+// GetTaxYearForeignParams defines parameters for GetTaxYearForeign.
+type GetTaxYearForeignParams struct {
 	// Year The year; this one when absent
 	Year *int `form:"year,omitempty" json:"year,omitempty"`
 }

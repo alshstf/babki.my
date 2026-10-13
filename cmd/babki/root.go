@@ -163,7 +163,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	allocation.NewHandler(allocationSvc, famAuth, famSM).Mount(srv)
 	// The family's income tax for a year, an estimate (decisions Р-41, Р-42).
 	taxSvc := taxyear.NewService(accStore, positions, famStore, mdStore).WithEarnings(opStore, category.NewStore(r.pool)).
-		WithProperty(valuablesSvc).WithEntries(r.pool, opStore)
+		WithProperty(valuablesSvc).WithEntries(r.pool, opStore).WithForeign(positions, instStore)
 	taxyear.NewHandler(taxSvc, famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))

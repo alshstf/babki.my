@@ -8,6 +8,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
 	"github.com/oapi-codegen/nullable"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/apitypes"
@@ -30,6 +31,8 @@ func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handle
 func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/tax-year", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleGet)))))
+	srv.Mount("GET /api/v1/tax-year/foreign", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleForeign)))))
 	edit := func(fn http.HandlerFunc) http.Handler {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
 	}
@@ -138,6 +141,87 @@ func YearAPI(y Year) apitypes.TaxYear {
 		out.People = append(out.People, person)
 		out.ToPayMinor += p.ToPay + p.WagesToPay
 		out.RefundMinor += p.Refund
+	}
+	return out
+}
+
+func (h *Handler) handleForeign(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	year, err := parseYear(r.URL.Query().Get("year"), h.now())
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	f, err := h.svc.ForeignOf(r.Context(), p.SpaceID, year)
+	if errors.Is(err, ErrNoEstimate) {
+		httpjson.Write(w, http.StatusOK, apitypes.TaxYearForeign{Year: year, Accounts: []apitypes.TaxYearForeignAccount{}})
+		return
+	}
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, foreignAPI(f))
+}
+
+func foreignAPI(f Foreign) apitypes.TaxYearForeign {
+	rate := func(known bool, r decimal.Decimal) nullable.Nullable[string] {
+		if !known {
+			return nullable.NewNullNullable[string]()
+		}
+		return nullable.NewNullableWithValue(r.String())
+	}
+	paper := func(id *uuid.UUID) nullable.Nullable[uuid.UUID] {
+		if id == nil {
+			return nullable.NewNullNullable[uuid.UUID]()
+		}
+		return nullable.NewNullableWithValue(*id)
+	}
+	day := func(t *time.Time) nullable.Nullable[string] {
+		if t == nil {
+			return nullable.NewNullNullable[string]()
+		}
+		return nullable.NewNullableWithValue(t.Format(time.DateOnly))
+	}
+	out := apitypes.TaxYearForeign{Year: f.Year, Supported: true, Currency: f.Currency, Accounts: make([]apitypes.TaxYearForeignAccount, 0, len(f.Accounts))}
+	for _, a := range f.Accounts {
+		acc := apitypes.TaxYearForeignAccount{
+			AccountId: a.ID, Name: a.Name, UserId: a.Person, Country: a.Country, IncomeBaseMinor: a.Income, ExpensesBaseMinor: a.Expenses,
+			Unvalued: a.Unvalued, Payouts: make([]apitypes.TaxYearForeignPayout, 0, len(a.Payouts)),
+			Sales: make([]apitypes.TaxYearForeignSale, 0, len(a.Sales)), OtherTaxes: make([]apitypes.TaxYearForeignTax, 0, len(a.Taxes)),
+		}
+		for _, p := range a.Payouts {
+			acc.Payouts = append(acc.Payouts, apitypes.TaxYearForeignPayout{
+				On: p.On.Format(time.DateOnly), Type: apitypes.TaxYearForeignPayoutType(p.Type), Kind: p.Kind, InstrumentId: paper(p.Instrument),
+				Paper: p.Paper, Isin: p.ISIN, Country: p.Country, Currency: p.Currency, AmountMinor: p.Minor, WithheldMinor: p.Withheld,
+				Rate: rate(p.Known, p.Rate), AmountBaseMinor: p.InBase, WithheldBaseMinor: p.WithheldInBase, TaxRuMinor: p.TaxRU, CreditMinor: p.Credit,
+			})
+		}
+		for _, s := range a.Sales {
+			sale := apitypes.TaxYearForeignSale{
+				On: s.On.Format(time.DateOnly), SettledOn: s.RateOn.Format(time.DateOnly), InstrumentId: s.Instrument, Paper: s.Paper, Isin: s.ISIN,
+				Quantity: s.Quantity.String(), Currency: s.Currency, ProceedsMinor: s.Proceeds, FeeMinor: s.Fee, Rate: rate(!s.Rate.IsZero(), s.Rate),
+				ProceedsBaseMinor: s.ProceedsInBase, FeeBaseMinor: s.FeeInBase, Lots: make([]apitypes.TaxYearForeignLot, 0, len(s.Lots)),
+				ResultBaseMinor: nullable.NewNullNullable[int64](), LongBaseMinor: s.Long,
+			}
+			if s.Known {
+				sale.ResultBaseMinor = nullable.NewNullableWithValue(s.Result)
+			}
+			for _, l := range s.Lots {
+				sale.Lots = append(sale.Lots, apitypes.TaxYearForeignLot{
+					AcquiredOn: day(l.AcquiredOn), Quantity: l.Quantity.String(), Currency: l.Currency, CostMinor: l.Cost,
+					Rate: rate(!l.Rate.IsZero(), l.Rate), CostBaseMinor: l.CostInBase,
+				})
+			}
+			acc.Sales = append(acc.Sales, sale)
+		}
+		for _, t := range a.Taxes {
+			acc.OtherTaxes = append(acc.OtherTaxes, apitypes.TaxYearForeignTax{
+				On: t.On.Format(time.DateOnly), InstrumentId: paper(t.Instrument), Paper: t.Paper, Currency: t.Currency, WithheldMinor: t.Withheld,
+				Rate: rate(t.Known, t.Rate), WithheldBaseMinor: t.WithheldInBase,
+			})
+		}
+		out.Accounts = append(out.Accounts, acc)
 	}
 	return out
 }

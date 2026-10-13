@@ -59,6 +59,9 @@ type Service struct {
 	// For the wages written by hand (WithEntries).
 	db  db.Executor
 	ops operations
+	// For the lines of the accounts abroad (WithForeign).
+	rows   rows
+	papers papers
 }
 
 type soldPieces interface {
