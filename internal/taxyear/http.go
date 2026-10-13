@@ -244,6 +244,7 @@ func (h *Handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusOK, apitypes.TaxYearForeignReport{
 			Year: year, Accounts: []apitypes.TaxYearReportAccount{},
 			DueBy: time.Date(year+1, time.June, 1, 0, 0, 0, 0, time.UTC).Format(time.DateOnly),
+			Until: time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC).Format(time.DateOnly),
 		})
 		return
 	}
@@ -270,7 +271,7 @@ func reportAPI(r Report) apitypes.TaxYearForeignReport {
 		return out
 	}
 	out := apitypes.TaxYearForeignReport{
-		Year: r.Year, Supported: true, Currency: r.Currency, FreeUpToMinor: r.FreeUpTo, DueBy: r.DueBy.Format(time.DateOnly),
+		Year: r.Year, Supported: true, Currency: r.Currency, FreeUpToMinor: r.FreeUpTo, DueBy: r.DueBy.Format(time.DateOnly), Until: r.Until.Format(time.DateOnly),
 		Accounts: make([]apitypes.TaxYearReportAccount, 0, len(r.Accounts)),
 	}
 	for _, a := range r.Accounts {

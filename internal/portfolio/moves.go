@@ -33,15 +33,16 @@ type CashMoves struct {
 	Start, In, Out, End int64
 }
 
-// YearMoves reads the account's journal for year.
-func (s *Service) YearMoves(ctx context.Context, spaceID, accountID uuid.UUID, year int) (YearMoves, error) {
+// YearMoves reads the account's journal for year, up to the end of until:
+// the year's last day, or today while the year runs.
+func (s *Service) YearMoves(ctx context.Context, spaceID, accountID uuid.UUID, year int, until time.Time) (YearMoves, error) {
 	ops, err := s.ops.ListForEngine(ctx, spaceID, accountID)
 	if err != nil {
 		return YearMoves{}, err
 	}
 	byCurrency := map[string]*CashMoves{}
 	for _, o := range ops {
-		if o.OccurredOn.Year() > year {
+		if o.OccurredOn.Year() > year || o.OccurredOn.After(until) {
 			continue
 		}
 		effect, moves, err := cashEffect(o)
@@ -75,8 +76,7 @@ func (s *Service) YearMoves(ctx context.Context, spaceID, accountID uuid.UUID, y
 	}
 	slices.SortFunc(out.Cash, func(a, b CashMoves) int { return strings.Compare(a.Currency, b.Currency) })
 	start := time.Date(year-1, time.December, 31, 0, 0, 0, 0, time.UTC)
-	end := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
-	values, err := s.ValuesOn(ctx, spaceID, accountID, []time.Time{start, end})
+	values, err := s.ValuesOn(ctx, spaceID, accountID, []time.Time{start, until})
 	if err != nil {
 		return YearMoves{}, err
 	}

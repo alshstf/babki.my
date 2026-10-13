@@ -14,7 +14,7 @@ const fetchMock = vi.hoisted(() => {
 // Two brokers abroad in 2026 (decision Р-45): Freedom in Kazakhstan with
 // 400 000 ₽ in — no report; IBKR with 640 000 ₽ in — the report is due.
 const report: TaxYearForeignReport = {
-  year: 2026, supported: true, currency: "RUB", free_up_to_minor: 600_000_00, due_by: "2027-06-01",
+  year: 2026, supported: true, currency: "RUB", free_up_to_minor: 600_000_00, due_by: "2027-06-01", until: "2026-12-31",
   accounts: [
     {
       account_id: "a-kz", name: "Freedom KZ", user_id: "u-alex", country: "KZ", country_code: "398",
@@ -64,6 +64,14 @@ describe("ForeignReport", () => {
     expect(norm(within(kz).getByTestId("tax-report-papers").textContent)).toMatch(/на начало года — 0 тыс\. · на конец — 3\.000 USD тыс\./);
     expect(norm(within(us).getByTestId("tax-report-verdict").textContent)).toMatch(/^Отчёт нужен: за год зачислено 640 000,00 ₽/);
     expect(within(us).queryByTestId("tax-report-papers")).toBeNull();
+  });
+
+  it("says a running year is counted to today", async () => {
+    show({ ...report, until: "2026-10-14" });
+    expect(norm((await screen.findByTestId("tax-report-running")).textContent)).toMatch(/^Год ещё идёт — посчитано на 14\.10\.2026/);
+    const [kz] = screen.getAllByTestId("tax-report-account");
+    expect(within(kz).getByRole("columnheader", { name: "На 14.10.2026, тыс." })).toBeTruthy();
+    expect(norm(within(kz).getByTestId("tax-report-papers").textContent)).toMatch(/на 14\.10\.2026 — 3\.000 USD тыс\./);
   });
 
   it("is not there without accounts abroad", async () => {

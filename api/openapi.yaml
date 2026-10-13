@@ -4461,10 +4461,11 @@ components:
         withheld_base_minor: { type: integer, format: int64 }
     TaxYearForeignReport:
       type: object
-      required: [year, supported, currency, free_up_to_minor, due_by, accounts]
+      required: [year, supported, currency, free_up_to_minor, due_by, until, accounts]
       properties:
         year: { type: integer }
         supported: { type: boolean }
+        until: { type: string, description: "Date YYYY-MM-DD the year is counted to: its last day, or today while it runs" }
         currency: { type: string, description: "The currency of in_minor and the limit" }
         free_up_to_minor: { type: integer, format: int64, description: "What may come in over the year with no report, where the country frees it" }
         due_by: { type: string, description: "Date YYYY-MM-DD: the last day to file" }

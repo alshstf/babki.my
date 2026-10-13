@@ -18,7 +18,7 @@ import (
 )
 
 type moves interface {
-	YearMoves(ctx context.Context, spaceID, accountID uuid.UUID, year int) (portfolio.YearMoves, error)
+	YearMoves(ctx context.Context, spaceID, accountID uuid.UUID, year int, until time.Time) (portfolio.YearMoves, error)
 }
 
 // WithReport lets the service lay out the yearly report on the money's moves
@@ -52,6 +52,9 @@ type Report struct {
 	// rules know no such report.
 	FreeUpTo int64
 	DueBy    time.Time
+	// Until is the day the year is counted to: its last, or today while it
+	// runs.
+	Until    time.Time
 	Accounts []ReportAccount
 }
 
@@ -103,11 +106,17 @@ func (s *Service) ReportOf(ctx context.Context, spaceID uuid.UUID, year int) (Re
 	}
 	memo := marketdata.NewRateMemo(s.rates)
 	lastDay := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	now := s.now().UTC()
+	if today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC); today.Before(lastDay) {
+		out.Until = today
+	} else {
+		out.Until = lastDay
+	}
 	for _, a := range list {
 		if a.Status != account.StatusActive || a.Type != account.TypeBrokerage || !a.ForeignBroker {
 			continue
 		}
-		m, err := s.moves.YearMoves(ctx, spaceID, a.ID, year)
+		m, err := s.moves.YearMoves(ctx, spaceID, a.ID, year, out.Until)
 		if err != nil {
 			return Report{}, fmt.Errorf("taxyear: account %s: %w", a.ID, err)
 		}
@@ -123,7 +132,7 @@ func (s *Service) ReportOf(ctx context.Context, spaceID uuid.UUID, year int) (Re
 		for _, c := range m.Cash {
 			r := decimal.NewFromInt(1)
 			if c.Currency != rules.TaxCurrency {
-				got := memo.Rate(ctx, c.Currency, rules.TaxCurrency, lastDay)
+				got := memo.Rate(ctx, c.Currency, rules.TaxCurrency, out.Until)
 				if errors.Is(got.Err, marketdata.ErrNoRate) {
 					known = false
 					continue

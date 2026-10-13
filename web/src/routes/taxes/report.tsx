@@ -28,6 +28,11 @@ export function ForeignReport({ year }: { year: number }) {
         <p className="text-sm text-muted-foreground">{t("taxReport.hint")}</p>
       </CardHeader>
       <CardContent className="grid gap-6">
+        {data.until !== `${data.year}-12-31` && (
+          <p className="text-sm text-amber-700 dark:text-amber-400" data-testid="tax-report-running">
+            {t("taxReport.running", { date: formatDate(data.until) })}
+          </p>
+        )}
         {data.accounts.map((a) => (
           <AccountReport key={a.account_id} account={a} report={data} person={person(a.user_id)} />
         ))}
@@ -41,6 +46,7 @@ function AccountReport({ account: a, report: r, person }: { account: Account; re
   const { t } = useTranslation();
   const broker = a.country ? `${countryName(a.country)}${a.country_code ? ` (${a.country_code})` : ""}` : t("taxReturn.brokerUnknown");
   const limit = formatMinor(r.free_up_to_minor, r.currency);
+  const running = r.until !== `${r.year}-12-31`;
   const came = formatMinor(a.in_minor, r.currency);
   return (
     <div className="grid gap-3" data-testid="tax-report-account">
@@ -62,7 +68,7 @@ function AccountReport({ account: a, report: r, person }: { account: Account; re
               <TableHead className="text-right">{t("taxReport.col.start")}</TableHead>
               <TableHead className="text-right">{t("taxReport.col.in")}</TableHead>
               <TableHead className="text-right">{t("taxReport.col.out")}</TableHead>
-              <TableHead className="text-right">{t("taxReport.col.end")}</TableHead>
+              <TableHead className="text-right">{running ? t("taxReport.col.endOn", { date: formatDate(r.until) }) : t("taxReport.col.end")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -88,7 +94,9 @@ function AccountReport({ account: a, report: r, person }: { account: Account; re
           <p>
             {t("taxReport.papersStart", { value: a.papers_start.map((p) => `${p.thousands} ${p.currency}`).join(", ") || "0" })}
             {" · "}
-            {t("taxReport.papersEnd", { value: a.papers_end.map((p) => `${p.thousands} ${p.currency}`).join(", ") || "0" })}
+            {running
+              ? t("taxReport.papersOn", { date: formatDate(r.until), value: a.papers_end.map((p) => `${p.thousands} ${p.currency}`).join(", ") || "0" })
+              : t("taxReport.papersEnd", { value: a.papers_end.map((p) => `${p.thousands} ${p.currency}`).join(", ") || "0" })}
           </p>
           <p className="text-xs text-muted-foreground">{t("taxReport.papersNote")}</p>
           {a.unpriced > 0 && <p className="text-xs text-amber-700 dark:text-amber-400">{t("taxReport.unpriced", { count: a.unpriced })}</p>}

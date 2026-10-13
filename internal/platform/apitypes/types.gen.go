@@ -5643,7 +5643,10 @@ type TaxYearForeignReport struct {
 	// FreeUpToMinor What may come in over the year with no report, where the country frees it
 	FreeUpToMinor int64 `json:"free_up_to_minor"`
 	Supported     bool  `json:"supported"`
-	Year          int   `json:"year"`
+
+	// Until Date YYYY-MM-DD the year is counted to: its last day, or today while it runs
+	Until string `json:"until"`
+	Year  int    `json:"year"`
 }
 
 // TaxYearForeignSale defines model for TaxYearForeignSale.

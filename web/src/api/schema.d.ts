@@ -3899,6 +3899,8 @@ export interface components {
         TaxYearForeignReport: {
             year: number;
             supported: boolean;
+            /** @description Date YYYY-MM-DD the year is counted to: its last day, or today while it runs */
+            until: string;
             /** @description The currency of in_minor and the limit */
             currency: string;
             /**

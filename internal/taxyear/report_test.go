@@ -15,7 +15,7 @@ import (
 
 type fakeMoves map[uuid.UUID]portfolio.YearMoves
 
-func (f fakeMoves) YearMoves(_ context.Context, _, id uuid.UUID, _ int) (portfolio.YearMoves, error) {
+func (f fakeMoves) YearMoves(_ context.Context, _, id uuid.UUID, _ int, _ time.Time) (portfolio.YearMoves, error) {
 	return f[id], nil
 }
 
@@ -53,11 +53,12 @@ func TestTheReportOnAccountsAbroad(t *testing.T) {
 	}
 	svc := NewService(fakeAccounts{kz, us, idle, cny}, fakeFacts{}, fakeSpaces{residency: "RU", members: []family.Member{alex}}, fakeKeys{}).
 		WithReport(moves, fakeDollar{})
+	svc.now = func() time.Time { return time.Date(2027, 2, 1, 10, 0, 0, 0, time.UTC) }
 	got, err := svc.ReportOf(t.Context(), uuid.New(), 2026)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.FreeUpTo != 600_000_00 || got.DueBy.Format(time.DateOnly) != "2027-06-01" || len(got.Accounts) != 4 {
+	if got.FreeUpTo != 600_000_00 || got.DueBy.Format(time.DateOnly) != "2027-06-01" || got.Until.Format(time.DateOnly) != "2026-12-31" || len(got.Accounts) != 4 {
 		t.Fatalf("report = %+v", got)
 	}
 	verdicts := map[string]string{}
@@ -84,5 +85,11 @@ func TestTheReportOnAccountsAbroad(t *testing.T) {
 			a.Cash[0].EndMinor != 400_000 || a.Cash[0].InThousands != "5.000" || a.PapersEnd[0].Thousands != "3.000" || a.Verdict != "free") {
 			t.Errorf("API Freedom = %+v", a)
 		}
+	}
+
+	// While the year runs, it is counted to today.
+	svc.now = func() time.Time { return time.Date(2026, 10, 14, 2, 0, 0, 0, time.UTC) }
+	if got, _ := svc.ReportOf(t.Context(), uuid.New(), 2026); got.Until.Format(time.DateOnly) != "2026-10-14" {
+		t.Errorf("until = %s, want today", got.Until.Format(time.DateOnly))
 	}
 }

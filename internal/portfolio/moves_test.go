@@ -47,7 +47,7 @@ func TestTheYearsMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := portfolio.NewService(operation.NewStore(pool), instrument.NewStore(pool), md, conv, family.NewStore(pool))
-	got, err := svc.YearMoves(t.Context(), space, uuid.MustParse(acc.ID), 2026)
+	got, err := svc.YearMoves(t.Context(), space, uuid.MustParse(acc.ID), 2026, yearDay("2026-12-31"))
 	if err != nil {
 		t.Fatal(err)
 	}
