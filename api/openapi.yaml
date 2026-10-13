@@ -3261,10 +3261,12 @@ components:
         foreign_broker: { type: boolean, description: "See AccountWithBalance.foreign_broker. Omitted, false." }
     Goals:
       type: object
-      required: [base_currency, goals]
+      required: [base_currency, goals, monthly_minor, broker_monthly_minor]
       properties:
         base_currency: { type: string }
         goals: { type: array, items: { $ref: "#/components/schemas/Goal" } }
+        monthly_minor: { type: integer, format: int64, description: "What the goals not yet reached take a month, their contributions summed" }
+        broker_monthly_minor: { type: integer, format: int64, description: "Of monthly_minor, the goals' with money on a brokerage account: a top-up to invest" }
     Goal:
       type: object
       required: [id, name, target_minor, target_on, monthly_minor, yield_percent, funds, saved_minor, percent, status, projected_minor, short_minor, needed_minor, reach_on, months, overdrawn]
@@ -4793,7 +4795,7 @@ components:
         overdue: { type: boolean, description: "A regular payment whose day has passed without it: expected today" }
     Forecast:
       type: object
-      required: [base_currency, days, start_minor, accounts_counted, series, events, lowest, next_income, free_until_income_minor, missing_rates]
+      required: [base_currency, days, start_minor, accounts_counted, series, events, lowest, next_income, free_until_income_minor, reserved_minor, missing_rates]
       properties:
         base_currency: { type: string }
         days: { type: integer }
@@ -4811,7 +4813,8 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: "The lowest the money gets before next_income: what can be spent until then without going below zero (below zero: what is short)"
+          description: "The lowest the money gets before next_income, less reserved_minor: what can be spent until then without going below zero or into the goals' money (below zero: what is short)"
+        reserved_minor: { type: integer, format: int64, description: "Of the money today, what the savings goals set aside on these accounts (decision Р-44)" }
         missing_rates: { type: array, items: { type: string }, description: "Currencies left out for want of today's rate" }
     Loan:
       type: object

@@ -23,6 +23,7 @@ type structures interface {
 
 type accounts interface {
 	ByID(ctx context.Context, spaceID, id uuid.UUID) (account.WithBalance, error)
+	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
 }
 
 // Service keeps the goals and values them.
@@ -51,6 +52,9 @@ type Valued struct {
 	// Overdrawn: the sums out of one account across the goals come to more
 	// than it holds.
 	Overdrawn []uuid.UUID
+	// OnBroker: some of its money is on a brokerage account, where a
+	// contribution is a top-up to invest (Р-37).
+	OnBroker bool
 }
 
 // List is the space's goals, in their order, each against its target.
@@ -68,6 +72,14 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 		if id, err := uuid.Parse(a.Key); err == nil {
 			held[id] = a.Minor
 		}
+	}
+	all, err := s.accounts.ListWithBalance(ctx, spaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	broker := map[uuid.UUID]bool{}
+	for _, a := range all {
+		broker[a.ID] = a.Type == account.TypeBrokerage
 	}
 	parts := map[uuid.UUID]int64{}
 	for _, g := range list {
@@ -88,6 +100,7 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 				value = min(*f.Minor, value)
 			}
 			v.FundValues[f.Account] = value
+			v.OnBroker = v.OnBroker || broker[f.Account]
 			saved += value
 			if f.Minor != nil && parts[f.Account] > held[f.Account] {
 				v.Overdrawn = append(v.Overdrawn, f.Account)
@@ -97,6 +110,36 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 		out = append(out, v)
 	}
 	return out, worth.BaseCurrency, nil
+}
+
+// Reserve is what the goals set aside on an account: the whole of it, or
+// Minor in the base currency.
+type Reserve struct {
+	Whole bool
+	Minor int64
+}
+
+// SetAside is what the goals set aside on each account, a reached goal's
+// too: its money is still for it until spent (the forecast's «можно
+// потратить» leaves it out, Р-44).
+func (s *Service) SetAside(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]Reserve, error) {
+	list, err := s.load(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]Reserve{}
+	for _, g := range list {
+		for _, f := range g.Funds {
+			r := out[f.Account]
+			if f.Minor == nil {
+				r.Whole = true
+			} else {
+				r.Minor += *f.Minor
+			}
+			out[f.Account] = r
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) load(ctx context.Context, spaceID uuid.UUID) ([]Goal, error) {

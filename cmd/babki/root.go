@@ -155,7 +155,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	intermediary.NewHandler(famAuth, famSM).Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
 	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore).WithMembers(famStore)
-	goals.NewHandler(goals.NewService(r.pool, structureSvc, accStore), famAuth, famSM).Mount(srv)
+	goalsSvc := goals.NewService(r.pool, structureSvc, accStore)
+	goals.NewHandler(goalsSvc, famAuth, famSM).Mount(srv)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore).WithCatalog(instStore, converter)
@@ -192,7 +193,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	recurringSvc := recurring.NewService(opStore, accStore, recurringHidden)
 	recurring.NewHandler(recurringSvc, recurringHidden, famAuth, famSM).Mount(srv)
 	forecast.NewHandler(forecast.NewService(accStore, positions, famStore, recurringSvc,
-		loanSvc, cardSvc, budgetSvc, converter).WithStorages(valuablesSvc), famAuth, famSM).Mount(srv)
+		loanSvc, cardSvc, budgetSvc, converter).WithStorages(valuablesSvc).WithGoals(goalsSvc), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
 		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)), instStore, famAuth, famSM).Mount(srv)
 

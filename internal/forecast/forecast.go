@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
@@ -80,11 +81,14 @@ type Forecast struct {
 	Lowest   Day
 	// NextIncome is the next salary — the next regular income of at least
 	// half the largest — and FreeUntilIncome the lowest the money gets before
-	// it comes, now included: what can be spent until then. Both nil without
-	// a regular income in sight.
+	// it comes, now included, less Reserved: what can be spent until then.
+	// Both nil without a regular income in sight.
 	NextIncome      *Event
 	FreeUntilIncome *int64
-	MissingRates    []string
+	// Reserved is what the savings goals set aside out of Start; what can be
+	// spent leaves it out (Р-44).
+	Reserved     int64
+	MissingRates []string
 }
 
 // Horizon bounds, in days.
@@ -135,6 +139,10 @@ type storages interface {
 	Storages(ctx context.Context, spaceID uuid.UUID) ([]valuables.StorageAt, error)
 }
 
+type savings interface {
+	SetAside(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]goals.Reserve, error)
+}
+
 // Service builds forecasts.
 type Service struct {
 	accounts  accounts
@@ -145,6 +153,7 @@ type Service struct {
 	cards     cards
 	budgets   budgets
 	storages  storages
+	goals     savings
 	rates     marketdata.RateSource
 	now       func() time.Time
 }
@@ -156,6 +165,12 @@ func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c
 // WithStorages puts the bars' storages' fees in the forecast.
 func (s *Service) WithStorages(st storages) *Service {
 	s.storages = st
+	return s
+}
+
+// WithGoals leaves what the savings goals set aside out of what can be spent.
+func (s *Service) WithGoals(g savings) *Service {
+	s.goals = g
 	return s
 }
 
@@ -179,6 +194,12 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 	if err != nil {
 		return Forecast{}, err
 	}
+	var aside map[uuid.UUID]goals.Reserve
+	if s.goals != nil {
+		if aside, err = s.goals.SetAside(ctx, spaceID); err != nil {
+			return Forecast{}, err
+		}
+	}
 	inScope := map[uuid.UUID]bool{}
 	// markedOn is the day of the balance an account is counted by: a payment
 	// due on or before it is in that balance already, if it came at all.
@@ -196,13 +217,23 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 		if err != nil {
 			return Forecast{}, err
 		}
+		var worth int64
 		for currency, minor := range held {
 			v, ok, err := conv.inBase(ctx, minor, currency)
 			if err != nil {
 				return Forecast{}, err
 			}
 			if ok {
-				out.Start += v
+				worth += v
+			}
+		}
+		out.Start += worth
+		// A goal's sum out of an account is never more than it holds.
+		if r, ok := aside[a.ID]; ok && worth > 0 {
+			if r.Whole {
+				out.Reserved += worth
+			} else {
+				out.Reserved += min(r.Minor, worth)
 			}
 		}
 	}
@@ -305,6 +336,10 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 		return strings.Compare(a.Name, b.Name)
 	})
 	out.Series, out.Lowest, out.NextIncome, out.FreeUntilIncome = lay(out.Start, out.Events, today, days)
+	if out.FreeUntilIncome != nil {
+		free := *out.FreeUntilIncome - out.Reserved
+		out.FreeUntilIncome = &free
+	}
 	for c := range conv.missing {
 		out.MissingRates = append(out.MissingRates, c)
 	}

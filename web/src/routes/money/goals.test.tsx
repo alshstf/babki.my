@@ -39,6 +39,8 @@ const base: Omit<Goal, "id" | "name"> = {
 // of the brokerage account ahead at 10 %.
 const family: Goals = {
   base_currency: "RUB",
+  monthly_minor: 65_000_00,
+  broker_monthly_minor: 30_000_00,
   goals: [
     {
       ...base, id: "g-cushion", name: "Подушка", target_minor: 570_000_00, monthly_minor: 15_000_00, yield_percent: "14.00",
@@ -154,12 +156,12 @@ describe("GoalsCard", () => {
   });
 
   it("shows nothing to a viewer without goals and the empty card to an editor", async () => {
-    answer("viewer", { base_currency: "RUB", goals: [] });
+    answer("viewer", { base_currency: "RUB", goals: [], monthly_minor: 0, broker_monthly_minor: 0 });
     show();
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByTestId("money-goals")).toBeNull();
     cleanup();
-    answer("editor", { base_currency: "RUB", goals: [] });
+    answer("editor", { base_currency: "RUB", goals: [], monthly_minor: 0, broker_monthly_minor: 0 });
     show();
     expect(await screen.findByTestId("goals-empty")).toBeTruthy();
   });

@@ -169,3 +169,19 @@ func neededMonthly(saved, target int64, n int, yield decimal.Decimal) int64 {
 	}
 	return left.Mul(r).Div(g.Sub(decimal.NewFromInt(1))).Ceil().IntPart()
 }
+
+// Contributions is what the goals not yet reached take a month: in all, and
+// of it the goals' on a brokerage account — for the budget's «отложить на
+// цели» and the top-up of «куда направить пополнение» (Р-44).
+func Contributions(list []Valued) (all, onBroker int64) {
+	for _, v := range list {
+		if v.Monthly == nil || v.Progress.Status == Done {
+			continue
+		}
+		all += *v.Monthly
+		if v.OnBroker {
+			onBroker += *v.Monthly
+		}
+	}
+	return all, onBroker
+}
