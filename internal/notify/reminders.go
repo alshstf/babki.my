@@ -10,6 +10,7 @@ import (
 
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/valuables"
 )
 
@@ -159,6 +160,43 @@ func StorageReminders(list []valuables.StorageAt, today time.Time) []Reminder {
 			continue
 		}
 		out = append(out, r)
+	}
+	return out
+}
+
+// GoalReminders are the savings goals' pushes (decision Р-44): once a month
+// for a goal that will not make its date, and on the date how it ended.
+func GoalReminders(list []goals.Valued, currency string, today time.Time) []Reminder {
+	var out []Reminder
+	for _, g := range list {
+		if g.Target == nil || g.TargetOn == nil {
+			continue
+		}
+		target, on, p := *g.Target, *g.TargetOn, g.Progress
+		key := "goal:" + g.ID.String()
+		switch {
+		case on.Equal(today) && p.Status == goals.Done:
+			out = append(out, Reminder{
+				Key: key + ":due:" + day(on), Title: g.Name, URL: "/money",
+				Body: fmt.Sprintf("Срок цели — сегодня, и она достигнута: накоплено %s из %s.", amount(p.Saved, currency), amount(target, currency)),
+			})
+		case on.Equal(today):
+			out = append(out, Reminder{
+				Key: key + ":due:" + day(on), Title: g.Name, URL: "/money",
+				Body: fmt.Sprintf("Срок цели — сегодня: накоплено %s из %s, не хватает %s. Перенесите срок или поменяйте сумму.",
+					amount(p.Saved, currency), amount(target, currency), amount(target-p.Saved, currency)),
+			})
+		case on.After(today) && p.Status == goals.AtRisk && p.Projected != nil && p.Needed != nil:
+			plan := "без взносов"
+			if g.Monthly != nil {
+				plan = "при взносе " + amount(*g.Monthly, currency) + " в месяц"
+			}
+			out = append(out, Reminder{
+				Key: key + ":risk:" + today.Format("2006-01"), Title: g.Name, URL: "/money",
+				Body: fmt.Sprintf("Не успеваете к %s: %s будет %s из %s. Чтобы успеть — %s в месяц.",
+					on.Format("02.01.2006"), plan, amount(*p.Projected, currency), amount(target, currency), amount(*p.Needed, currency)),
+			})
+		}
 	}
 	return out
 }

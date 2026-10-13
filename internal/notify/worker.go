@@ -11,6 +11,7 @@ import (
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/valuables"
 )
 
@@ -41,6 +42,10 @@ type storages interface {
 	Storages(ctx context.Context, spaceID uuid.UUID) ([]valuables.StorageAt, error)
 }
 
+type savings interface {
+	List(ctx context.Context, spaceID uuid.UUID) ([]goals.Valued, string, error)
+}
+
 type remindersWorker struct {
 	river.WorkerDefaults[SendRemindersArgs]
 	store      *Store
@@ -48,6 +53,7 @@ type remindersWorker struct {
 	budgets    budgets
 	categories categories
 	storages   storages
+	goals      savings
 	sender     Sender
 	log        *slog.Logger
 	now        func() time.Time
@@ -63,6 +69,14 @@ func NewRemindersWorker(store *Store, c cards, b budgets, cats categories, sende
 func WithStorages(w river.Worker[SendRemindersArgs], s storages) river.Worker[SendRemindersArgs] {
 	if r, ok := w.(*remindersWorker); ok {
 		r.storages = s
+	}
+	return w
+}
+
+// WithGoals adds the savings goals to what is reminded of.
+func WithGoals(w river.Worker[SendRemindersArgs], g savings) river.Worker[SendRemindersArgs] {
+	if r, ok := w.(*remindersWorker); ok {
+		r.goals = g
 	}
 	return w
 }
@@ -97,6 +111,16 @@ func (w *remindersWorker) Work(ctx context.Context, _ *river.Job[SendRemindersAr
 				return err
 			}
 			more = append(more, StorageReminders(list, today)...)
+		}
+		// The goals are valued as «Итого» values them, prices and all; a
+		// failure there keeps the other reminders going.
+		if w.goals != nil {
+			list, currency, err := w.goals.List(ctx, spaceID)
+			if err != nil {
+				w.log.Error("goal reminders", "space", spaceID, "error", err)
+			} else {
+				more = append(more, GoalReminders(list, currency, today)...)
+			}
 		}
 		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, append(reminders, more...)); err != nil {
 			return err
