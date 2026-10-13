@@ -19,6 +19,7 @@ import { sectorName } from "@/lib/sectors";
 import { cn } from "@/lib/utils";
 import { TargetsCard } from "./targets";
 import { CeilingsCard } from "./ceilings";
+import { PlanCard } from "./plan";
 
 // The words for each place papers are held; a switch with literal keys for
 // scripts/check-i18n.mjs.
@@ -130,6 +131,7 @@ export function StructurePage() {
           )}
           <TargetsCard valuation={valuation} />
           <CeilingsCard valuation={valuation} />
+          <PlanCard valuation={valuation} />
           <div className="grid gap-6 lg:grid-cols-2">
             <Breakdown title={t("structure.byClass")} slices={data.by_class} total={data.assets_minor} currency={data.base_currency} name={(k) => className(t, k)} testId="structure-class" />
             <Breakdown title={t("structure.byCurrency")} slices={data.by_currency} total={data.assets_minor} currency={data.base_currency} name={(k) => k} testId="structure-currency" />

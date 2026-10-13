@@ -92,3 +92,21 @@ export function useSetAllocationMode() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["allocation"] }),
   });
 }
+
+export type AllocationWhatIf = components["schemas"]["AllocationWhatIf"];
+export type AllocationPlanOperation = components["schemas"]["AllocationPlanOperation"];
+
+// What a plan of operations would do against the targets and ceilings
+// (POST /api/v1/allocation/what-if, decision Р-48); nothing is written.
+export function useWhatIf(valuation: "liquid" | "full") {
+  return useMutation({
+    mutationFn: async (operations: AllocationPlanOperation[]): Promise<AllocationWhatIf> => {
+      const { data, error, response } = await api.POST("/api/v1/allocation/what-if", {
+        params: { query: { valuation } },
+        body: { operations },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
