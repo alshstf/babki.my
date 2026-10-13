@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/alexedwards/scs/v2"
@@ -50,6 +51,75 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/instruments", view(h.handleSearch))
 	srv.Mount("POST /api/v1/instruments", edit(h.handleCreate))
 	srv.Mount("PATCH /api/v1/instruments/{instrumentId}", edit(h.handleUpdate))
+	srv.Mount("GET /api/v1/instruments/{instrumentId}/class", view(h.handleClass))
+	srv.Mount("PUT /api/v1/instruments/{instrumentId}/class", edit(h.handleSetClass))
+}
+
+func (h *Handler) handleClass(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInstrumentID(w, r)
+	if !ok {
+		return
+	}
+	h.writeClass(w, r, id)
+}
+
+func (h *Handler) handleSetClass(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInstrumentID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.InstrumentClassInput
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	p, _ := family.PrincipalFromContext(r.Context())
+	if err := h.store.SetClassByHand(r.Context(), p.SpaceID, id, nullableString(req.Country), nullableString(req.Sector)); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	h.writeClass(w, r, id)
+}
+
+// writeClass answers with the paper's class as the space sees it and the
+// source's; a paper not in the catalog is a 404.
+func (h *Handler) writeClass(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	if _, err := h.store.ByID(r.Context(), id); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	p, _ := family.PrincipalFromContext(r.Context())
+	ids := []uuid.UUID{id}
+	source, err := h.store.Classes(r.Context(), ids)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	seen, err := h.store.ClassesFor(r.Context(), p.SpaceID, ids)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	src, c := source[id], seen[id]
+	out := apitypes.InstrumentClass{
+		Country: c.Country, Sector: string(c.Sector), CountryByHand: c.CountryByHand, SectorByHand: c.SectorByHand,
+		Source: apitypes.InstrumentClassSource(src.Source), Raw: src.Raw, FetchedAt: nullable.NewNullNullable[time.Time](),
+		SourceCountry: src.Country, SourceSector: string(src.Sector), Sectors: make([]string, 0, len(Sectors)),
+	}
+	if !src.FetchedAt.IsZero() {
+		out.FetchedAt = nullable.NewNullableWithValue(src.FetchedAt)
+	}
+	for _, s := range Sectors {
+		out.Sectors = append(out.Sectors, string(s))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func nullableString(v nullable.Nullable[string]) *string {
+	if !v.IsSpecified() || v.IsNull() {
+		return nil
+	}
+	s := v.MustGet()
+	return &s
 }
 
 func toAPI(i Instrument) apitypes.Instrument {

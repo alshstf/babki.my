@@ -15,52 +15,12 @@ import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 import { formatMinorCompact } from "@/lib/money";
 import { countryName } from "@/lib/country";
+import { sectorName } from "@/lib/sectors";
 import { cn } from "@/lib/utils";
 import { TargetsCard } from "./targets";
 
-// The words for each sector (decision Р-46) and each place papers are held;
-// switches with literal keys for scripts/check-i18n.mjs.
-function sectorName(t: (key: string) => string, key: string): string {
-  switch (key) {
-    case "financials":
-      return t("structure.sectors.financials");
-    case "energy":
-      return t("structure.sectors.energy");
-    case "it":
-      return t("structure.sectors.it");
-    case "consumer":
-      return t("structure.sectors.consumer");
-    case "telecom":
-      return t("structure.sectors.telecom");
-    case "utilities":
-      return t("structure.sectors.utilities");
-    case "materials":
-      return t("structure.sectors.materials");
-    case "industrials":
-      return t("structure.sectors.industrials");
-    case "health_care":
-      return t("structure.sectors.healthCare");
-    case "real_estate":
-      return t("structure.sectors.realEstate");
-    case "government":
-      return t("structure.sectors.government");
-    case "municipal":
-      return t("structure.sectors.municipal");
-    case "funds_equity":
-      return t("structure.sectors.fundsEquity");
-    case "funds_bonds":
-      return t("structure.sectors.fundsBonds");
-    case "funds_money":
-      return t("structure.sectors.fundsMoney");
-    case "funds_gold":
-      return t("structure.sectors.fundsGold");
-    case "funds_mixed":
-      return t("structure.sectors.fundsMixed");
-    default:
-      return t("structure.sectors.unknown");
-  }
-}
-
+// The words for each place papers are held; a switch with literal keys for
+// scripts/check-i18n.mjs.
 function holdingName(t: (key: string) => string, key: string): string {
   switch (key) {
     case "domestic":

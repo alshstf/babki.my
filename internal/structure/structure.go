@@ -179,7 +179,7 @@ type Service struct {
 }
 
 type classes interface {
-	Classes(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Class, error)
+	ClassesFor(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]instrument.Class, error)
 }
 
 // WithClasses lets the structure tell papers by their country of risk and
@@ -253,7 +253,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation
 			currency: a.Currency, account: a.ID, country: NoCountry, minor: a.Balance.AmountMinor,
 		})
 	}
-	if err := s.classify(ctx, pieces); err != nil {
+	if err := s.classify(ctx, spaceID, pieces); err != nil {
 		return Structure{}, err
 	}
 	return out, s.lay(ctx, &out, pieces)
@@ -261,7 +261,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, valuation Valuation
 
 // classify gives each paper its country of risk and sector from its class;
 // a paper with no country known keeps its ISIN's, marked so.
-func (s *Service) classify(ctx context.Context, pieces []piece) error {
+func (s *Service) classify(ctx context.Context, spaceID uuid.UUID, pieces []piece) error {
 	ids := []uuid.UUID{}
 	for _, p := range pieces {
 		if p.paper != nil {
@@ -271,7 +271,7 @@ func (s *Service) classify(ctx context.Context, pieces []piece) error {
 	known := map[uuid.UUID]instrument.Class{}
 	if s.classes != nil && len(ids) > 0 {
 		var err error
-		if known, err = s.classes.Classes(ctx, ids); err != nil {
+		if known, err = s.classes.ClassesFor(ctx, spaceID, ids); err != nil {
 			return err
 		}
 	}
