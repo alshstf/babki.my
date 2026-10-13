@@ -28,6 +28,7 @@ import (
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/forecast"
+	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
@@ -154,6 +155,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	intermediary.NewHandler(famAuth, famSM).Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
 	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore).WithMembers(famStore)
+	goals.NewHandler(goals.NewService(r.pool, structureSvc, accStore), famAuth, famSM).Mount(srv)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).
 	allocationSvc := allocation.NewService(r.pool, structureSvc).WithSales(accStore, positions, famStore).WithCatalog(instStore, converter)

@@ -38,6 +38,8 @@ var owners = map[string]string{
 	"wage_entries":                "internal/taxyear",
 	"instrument_classes":          "internal/instrument",
 	"instrument_class_overrides":  "internal/instrument",
+	"savings_goals":               "internal/goals",
+	"savings_goal_funds":          "internal/goals",
 	"receipts":                    "internal/receipt",
 	"mailboxes":                   "internal/mailbox",
 	"loans":                       "internal/loan",
