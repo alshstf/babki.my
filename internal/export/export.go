@@ -37,6 +37,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/recurring"
 	"babki.my/babki/internal/taxyear"
 	"babki.my/babki/internal/valuables"
 )
@@ -79,6 +80,7 @@ type loans interface {
 type cards interface {
 	AllTerms(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Terms, error)
 	Installments(ctx context.Context, spaceID, accountID uuid.UUID) (map[uuid.UUID]creditcard.Plan, error)
+	BankFigures(ctx context.Context, spaceID, accountID uuid.UUID) (*creditcard.BankFigures, error)
 }
 
 type receipts interface {
@@ -113,6 +115,10 @@ type savedPlans interface {
 	Plans(ctx context.Context, spaceID uuid.UUID) ([]allocation.SavedPlan, error)
 }
 
+type hiddenPayments interface {
+	All(ctx context.Context, spaceID uuid.UUID) (map[recurring.Key]bool, error)
+}
+
 type prices interface {
 	PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]marketdata.Quote, error)
 }
@@ -136,6 +142,7 @@ type Handler struct {
 	classes     handClasses
 	goals       savingsGoals
 	plans       savedPlans
+	hidden      hiddenPayments
 	auth        *family.Auth
 	sm          *scs.SessionManager
 	now         func() time.Time
@@ -166,6 +173,12 @@ func (h *Handler) WithWages(w wageEntries) *Handler {
 // savings goals and the saved what-if plans into the export.
 func (h *Handler) WithPlanning(c handClasses, g savingsGoals, p savedPlans) *Handler {
 	h.classes, h.goals, h.plans = c, g, p
+	return h
+}
+
+// WithHidden writes the payments the family said are not regular.
+func (h *Handler) WithHidden(p hiddenPayments) *Handler {
+	h.hidden = p
 	return h
 }
 
@@ -268,6 +281,13 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 				return apitypes.SpaceExport{}, err
 			}
 			out.CreditCardInstallments = creditcard.InstallmentsExport(plans)
+			bank, err := h.cards.BankFigures(ctx, spaceID, a.ID)
+			if err != nil {
+				return apitypes.SpaceExport{}, err
+			}
+			if bank != nil {
+				out.CreditCardBankFigures = nullable.NewNullableWithValue(creditcard.BankFiguresAPI(*bank))
+			}
 		}
 		if a.Type == account.TypeValuables && h.valuables != nil {
 			st, bank, items, ok, err := h.valuables.Entered(ctx, spaceID, a.ID)
@@ -364,9 +384,23 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 }
 
 // addPlanning adds the family's own countries and sectors of papers, the
-// savings goals and the saved plans, noting the papers they name.
+// savings goals, the saved plans and the payments said not to be regular,
+// noting the papers they name.
 func (h *Handler) addPlanning(ctx context.Context, doc *apitypes.SpaceExport, spaceID uuid.UUID, papers map[uuid.UUID]bool) error {
 	doc.InstrumentClasses, doc.SavingsGoals, doc.AllocationPlans = []apitypes.ExportInstrumentClass{}, []apitypes.ExportSavingsGoal{}, []apitypes.AllocationSavedPlan{}
+	doc.HiddenRegular = []apitypes.ExportHiddenRegular{}
+	if h.hidden != nil {
+		hidden, err := h.hidden.All(ctx, spaceID)
+		if err != nil {
+			return err
+		}
+		for k := range hidden {
+			doc.HiddenRegular = append(doc.HiddenRegular, apitypes.ExportHiddenRegular{Payee: k.Payee, Incoming: k.Incoming, Currency: k.Currency})
+		}
+		slices.SortFunc(doc.HiddenRegular, func(a, b apitypes.ExportHiddenRegular) int {
+			return cmp.Or(strings.Compare(a.Payee, b.Payee), strings.Compare(a.Currency, b.Currency), cmp.Compare(boolInt(a.Incoming), boolInt(b.Incoming)))
+		})
+	}
 	if h.classes != nil {
 		list, err := h.classes.ByHand(ctx, spaceID)
 		if err != nil {
@@ -413,6 +447,13 @@ func (h *Handler) addPlanning(ctx context.Context, doc *apitypes.SpaceExport, sp
 		}
 	}
 	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func of[T any](p *T) nullable.Nullable[T] {
@@ -483,6 +524,7 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		LoanPrepayments:        []apitypes.LoanPrepayment{},
 		CreditCardInstallments: []apitypes.ExportCardInstallment{},
 		CreditCard:             nullable.NewNullNullable[apitypes.CreditCardTerms](),
+		CreditCardBankFigures:  nullable.NewNullNullable[apitypes.CreditCardBankFigures](),
 		Valuables:              nullable.NewNullNullable[apitypes.ExportValuables](),
 	}
 	for _, w := range stated {

@@ -2670,6 +2670,13 @@ export interface components {
             savings_goals: components["schemas"]["ExportSavingsGoal"][];
             /** @description The what-if plans the family saved (decision Р-48) */
             allocation_plans: components["schemas"]["AllocationSavedPlan"][];
+            /** @description Payments the family said are not regular, so the forecast leaves them out: the payee as the list folds it, the way the money goes, the currency */
+            hidden_regular: components["schemas"]["ExportHiddenRegular"][];
+        };
+        ExportHiddenRegular: {
+            payee: string;
+            incoming: boolean;
+            currency: string;
         };
         ExportInstrumentClass: {
             /** Format: uuid */
@@ -2771,6 +2778,8 @@ export interface components {
             loan_prepayments: components["schemas"]["LoanPrepayment"][];
             /** @description A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account */
             credit_card_installments: components["schemas"]["ExportCardInstallment"][];
+            /** @description What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated */
+            credit_card_bank_figures: components["schemas"]["CreditCardBankFigures"] | null;
             /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
             loan: components["schemas"]["LoanTerms"] | null;
             /** @description A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account */

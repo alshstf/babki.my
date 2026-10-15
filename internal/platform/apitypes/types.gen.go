@@ -3528,6 +3528,9 @@ type ExportAccount struct {
 	// CreditCard A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account
 	CreditCard nullable.Nullable[CreditCardTerms] `json:"credit_card"`
 
+	// CreditCardBankFigures What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated
+	CreditCardBankFigures nullable.Nullable[CreditCardBankFigures] `json:"credit_card_bank_figures"`
+
 	// CreditCardInstallments A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account
 	CreditCardInstallments []ExportCardInstallment `json:"credit_card_installments"`
 	Currency               string                  `json:"currency"`
@@ -3601,6 +3604,13 @@ type ExportGoalFund struct {
 
 	// AmountMinor A sum out of the account in the base currency; null: the whole account
 	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+}
+
+// ExportHiddenRegular defines model for ExportHiddenRegular.
+type ExportHiddenRegular struct {
+	Currency string `json:"currency"`
+	Incoming bool   `json:"incoming"`
+	Payee    string `json:"payee"`
 }
 
 // ExportInstrument defines model for ExportInstrument.
@@ -5253,6 +5263,9 @@ type SpaceExport struct {
 	CategoryRules []CategoryRule    `json:"category_rules"`
 	ExportedAt    time.Time         `json:"exported_at"`
 	Format        SpaceExportFormat `json:"format"`
+
+	// HiddenRegular Payments the family said are not regular, so the forecast leaves them out: the payee as the list folds it, the way the money goes, the currency
+	HiddenRegular []ExportHiddenRegular `json:"hidden_regular"`
 
 	// InstrumentClasses Papers' country of risk and sector the family set itself (decision Р-46); null keeps the source's
 	InstrumentClasses []ExportInstrumentClass `json:"instrument_classes"`
