@@ -3629,7 +3629,7 @@ components:
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     SpaceExport:
       type: object
-      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts, allocation, wage_entries, instrument_classes, savings_goals, allocation_plans]
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices, categories, category_rules, budget_limits, receipts, allocation, wage_entries, instrument_classes, savings_goals, allocation_plans, hidden_regular]
       properties:
         format: { type: string, enum: [babki.my/space-export] }
         version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
@@ -3694,6 +3694,17 @@ components:
           type: array
           description: "The what-if plans the family saved (decision Р-48)"
           items: { $ref: "#/components/schemas/AllocationSavedPlan" }
+        hidden_regular:
+          type: array
+          description: "Payments the family said are not regular, so the forecast leaves them out: the payee as the list folds it, the way the money goes, the currency"
+          items: { $ref: "#/components/schemas/ExportHiddenRegular" }
+    ExportHiddenRegular:
+      type: object
+      required: [payee, incoming, currency]
+      properties:
+        payee: { type: string }
+        incoming: { type: boolean }
+        currency: { type: string }
     ExportInstrumentClass:
       type: object
       required: [instrument_id, country, sector]
@@ -3762,7 +3773,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments, credit_card_bank_figures]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -3798,6 +3809,11 @@ components:
           type: array
           items: { $ref: "#/components/schemas/ExportCardInstallment" }
           description: "A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account"
+        credit_card_bank_figures:
+          nullable: true
+          description: "What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated"
+          allOf:
+            - $ref: "#/components/schemas/CreditCardBankFigures"
         loan:
           nullable: true
           description: "A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account"

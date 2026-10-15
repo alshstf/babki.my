@@ -588,3 +588,15 @@ func statusAPI(st Status) apitypes.CreditCardStatus {
 	}
 	return out
 }
+
+// BankFiguresAPI is what the bank said, as the family wrote it (for the
+// export; the card's view adds what is left of it).
+func BankFiguresAPI(b BankFigures) apitypes.CreditCardBankFigures {
+	due := func(d *Due) nullable.Nullable[apitypes.CreditCardDue] {
+		if d == nil {
+			return nullable.NewNullNullable[apitypes.CreditCardDue]()
+		}
+		return nullable.NewNullableWithValue(apitypes.CreditCardDue{On: date(d.On), AmountMinor: d.Amount})
+	}
+	return apitypes.CreditCardBankFigures{StatedOn: date(b.StatedOn), Grace: due(b.Grace), Minimum: due(b.Minimum)}
+}

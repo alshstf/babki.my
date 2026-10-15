@@ -31,16 +31,18 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/receipt"
+	"babki.my/babki/internal/recurring"
 	"babki.my/babki/internal/taxyear"
 	"babki.my/babki/internal/valuables"
 )
 
 type stack struct {
-	url   string
-	c     *http.Client
-	goals *goals.Service
-	md    *marketdata.Store
-	ca    *corporateaction.Store
+	url    string
+	c      *http.Client
+	goals  *goals.Service
+	hidden *recurring.Hidden
+	md     *marketdata.Store
+	ca     *corporateaction.Store
 }
 
 func newStack(t *testing.T) stack {
@@ -66,12 +68,12 @@ func newStack(t *testing.T) stack {
 	loan.NewHandler(loanSvc, auth, sm).Mount(srv)
 	creditcard.NewHandler(cardSvc, auth, sm).Mount(srv)
 	taxSvc := taxyear.NewService(accStore, nil, famStore, md).WithEarnings(opStore, category.NewStore(pool)).WithEntries(pool, opStore)
-	allocSvc, goalsSvc := allocation.NewService(pool, nil), goals.NewService(pool, nil, accStore)
+	allocSvc, goalsSvc, hidden := allocation.NewService(pool, nil), goals.NewService(pool, nil, accStore), recurring.NewHidden(pool)
 	allocation.NewHandler(allocSvc, auth, sm).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, ca, md, category.NewStore(pool), loanSvc, cardSvc,
 		budget.NewService(pool, nil, category.NewStore(pool)), receipt.NewService(pool, opStore, accStore, category.NewStore(pool), operation.NewService(opStore)),
 		allocSvc, auth, sm).WithValuables(valuables.NewService(pool, accStore, md)).WithWages(taxSvc).
-		WithPlanning(instStore, goalsSvc, allocSvc).Mount(srv)
+		WithPlanning(instStore, goalsSvc, allocSvc).WithHidden(hidden).Mount(srv)
 	valuables.NewHandler(valuables.NewService(pool, accStore, md), auth, sm).Mount(srv)
 	taxyear.NewHandler(taxSvc, auth, sm).Mount(srv)
 
@@ -80,7 +82,7 @@ func newStack(t *testing.T) stack {
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
 	post(t, c, ts.URL+"/api/v1/setup", `{"space_name":"Семья","username":"alex","display_name":"Алекс","password":"secret123"}`, http.StatusCreated)
-	return stack{url: ts.URL, c: c, goals: goalsSvc, md: md, ca: ca}
+	return stack{url: ts.URL, c: c, goals: goalsSvc, hidden: hidden, md: md, ca: ca}
 }
 
 func post(t *testing.T, c *http.Client, url, body string, want int) map[string]any {
@@ -364,12 +366,14 @@ func TestTheExportCarriesLoanAndCardTerms(t *testing.T) {
 	}
 	put(s.url+"/api/v1/accounts/"+mortgage+"/loan", `{"principal_minor":300000000,"annual_rate":"18.5","term_months":240,"issued_on":"2026-03-15","kind":"annuity"}`)
 	put(s.url+"/api/v1/accounts/"+card+"/credit-card", `{"limit_minor":15000000,"statement_day":1,"payment_days":20,"grace_kind":"long","grace_days":120,"min_percent":"3","min_floor_minor":30000,"annual_rate":"39.9","own_rate":"15"}`)
+	put(s.url+"/api/v1/accounts/"+card+"/credit-card/bank", `{"stated_on":"2026-01-05","grace":{"on":"2026-01-20","amount_minor":1234500},"minimum":null}`)
 
 	var doc struct {
 		Accounts []struct {
 			ID         string          `json:"id"`
 			Loan       json.RawMessage `json:"loan"`
 			CreditCard json.RawMessage `json:"credit_card"`
+			Bank       json.RawMessage `json:"credit_card_bank_figures"`
 		} `json:"accounts"`
 	}
 	resp := get(t, s.c, s.url+"/api/v1/export")
@@ -389,10 +393,13 @@ func TestTheExportCarriesLoanAndCardTerms(t *testing.T) {
 			if !strings.Contains(string(a.CreditCard), `"grace_days":120`) || !strings.Contains(string(a.CreditCard), `"own_rate":"15"`) || string(a.Loan) != "null" {
 				t.Errorf("card: card %s, loan %s", a.CreditCard, a.Loan)
 			}
+			if string(a.Bank) != `{"grace":{"amount_minor":1234500,"on":"2026-01-20"},"minimum":null,"stated_on":"2026-01-05"}` {
+				t.Errorf("card: what the bank said %s", a.Bank)
+			}
 		case current:
 			seen++
-			if string(a.Loan) != "null" || string(a.CreditCard) != "null" {
-				t.Errorf("current: loan %s, card %s", a.Loan, a.CreditCard)
+			if string(a.Loan) != "null" || string(a.CreditCard) != "null" || string(a.Bank) != "null" {
+				t.Errorf("current: loan %s, card %s, bank %s", a.Loan, a.CreditCard, a.Bank)
 			}
 		}
 	}
@@ -465,7 +472,8 @@ func TestTheExportCarriesValuables(t *testing.T) {
 
 // What the family planned is the family's too: its own country and sector of a
 // paper no journal holds, a savings goal on a whole account and a sum out of
-// another, a saved plan to buy that paper — and the paper with them.
+// another, a saved plan to buy that paper — and the paper with them — and a
+// payment it said is not regular.
 func TestTheExportCarriesThePlans(t *testing.T) {
 	s := newStack(t)
 	broker := post(t, s.c, s.url+"/api/v1/accounts", `{"name":"Брокер","type":"brokerage","currency":"RUB"}`, http.StatusCreated)["id"].(string)
@@ -492,10 +500,15 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := s.hidden.Hide(t.Context(), uuid.MustParse(who.SpaceID), recurring.KeyOf("ИП Смирнова", false, "RUB")); err != nil {
+		t.Fatal(err)
+	}
+
 	var doc struct {
 		Instruments []struct {
 			ID string `json:"id"`
 		} `json:"instruments"`
+		HiddenRegular     []map[string]any `json:"hidden_regular"`
 		InstrumentClasses []map[string]any `json:"instrument_classes"`
 		SavingsGoals      []map[string]any `json:"savings_goals"`
 		AllocationPlans   []map[string]any `json:"allocation_plans"`
@@ -512,6 +525,9 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 	}
 	if len(doc.AllocationPlans) != 1 || doc.AllocationPlans[0]["name"] != "Октябрь" {
 		t.Errorf("plans = %v", doc.AllocationPlans)
+	}
+	if len(doc.HiddenRegular) != 1 || doc.HiddenRegular[0]["payee"] != "ип смирнова" || doc.HiddenRegular[0]["incoming"] != false {
+		t.Errorf("hidden = %v", doc.HiddenRegular)
 	}
 	if len(doc.Instruments) != 1 || doc.Instruments[0].ID != paper {
 		t.Errorf("instruments = %v; the planned paper belongs with its plan", doc.Instruments)
