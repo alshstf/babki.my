@@ -147,4 +147,20 @@ func TestGoalsOverHTTP(t *testing.T) {
 			t.Errorf("car grows at %s, its funds' rates %v", g.GrowthPercent, rate)
 		}
 	}
+
+	// A deposit tied to Газпромбанк's «Ключевой момент» for 367 days and no
+	// rate by hand: the repairs grow at the bank's terms, the key rate of 17
+	// less 0,2 (Р-53 Б).
+	gpb := mk("Ключевой момент", "deposit", 300_000_00)
+	bind := `{"programme_id":"gazprombank-klyuchevoy-moment","variant_id":"end","opened_on":"2026-10-05","term":367,"amount_minor":30000000,"conditions":"manual"}`
+	if r := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+gpb+"/programme", bind); r.StatusCode != http.StatusOK {
+		t.Fatalf("programme = %d", r.StatusCode)
+	}
+	repairs := fmt.Sprintf(`{"name":"Ремонт","target_minor":100000000,"target_on":null,"monthly_minor":null,"yield_percent":"5","funds":[{"account_id":%q,"amount_minor":null}]}`, gpb)
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/goals", repairs), &got)
+	for _, g := range got.Goals {
+		if g.Name == "Ремонт" && (g.GrowthPercent != "16.800" || g.Funds[0].RatePercent.MustGet() != "16.800" || g.Funds[0].RateByHand) {
+			t.Errorf("repairs = %+v", g)
+		}
+	}
 }

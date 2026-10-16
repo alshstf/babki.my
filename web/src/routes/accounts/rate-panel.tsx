@@ -10,11 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { AccountWithBalance } from "@/api/accounts";
 import { useAccountRates, useDeleteAccountRate, useSetAccountRate, type AccountRate } from "@/api/account-rates";
 import { formatDate, localToday } from "@/lib/dates";
-
-// A rate as the API writes it ("15.500"), as people read it ("15,5 %").
-function rate(s: string): string {
-  return `${Number(s).toLocaleString("ru-RU", { maximumFractionDigits: 3 })} %`;
-}
+import { ProgrammeBlock, QuoteLine, rate } from "./programme-section";
 
 // A key-tied rate's margin with its sign: "+ 1 %", "− 1,5 %".
 function margin(s: string): string {
@@ -27,9 +23,11 @@ function terms(t: (key: string, o?: Record<string, string>) => string, r: Accoun
   return r.kind === "key" ? t("rates.keyTerms", { margin: margin(r.percent) }) : t("rates.fixedTerms", { percent: rate(r.percent) });
 }
 
-// RatePanel is a savings account's or a deposit's rate (decision Р-51 А): the
-// one in force today, written in by hand — fixed, or the key rate plus a
-// margin — and the ones before it. A goal on the account grows at it.
+// RatePanel is a savings account's or a deposit's rate: the one in force
+// today and where it comes from — the bank's terms of the programme the
+// account is tied to (Р-53 Б), or one written in by hand, which stands over
+// them (Р-51 А); then the programme with its conditions and the rates by
+// hand. A goal on the account grows at it.
 export function RatePanel({ account, canEdit }: { account: AccountWithBalance; canEdit: boolean }) {
   const { t } = useTranslation();
   const q = useAccountRates(account.id);
@@ -44,11 +42,12 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
   }
   const data = q.data;
   if (!data) return null;
-  const now = data.current;
+  const now = data.source === "by_hand" ? data.current : null;
+  const quote = data.quote;
   // A key-tied rate in force, but no key rate to strike it with yet.
-  const waitsForKey = !now && data.rates.some((r) => r.from_on <= localToday());
+  const waitsForKey = !now && !quote && data.rates.some((r) => r.from_on <= localToday());
   return (
-    <div className="grid gap-3" data-testid="account-rate">
+    <div className="grid gap-4" data-testid="account-rate">
       {now ? (
         <div className="grid gap-0.5">
           <div className="text-2xl font-bold tabular-nums" data-testid="account-rate-now">
@@ -59,6 +58,14 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
             {t("rates.since", { date: formatDate(now.from_on) })}
             {now.by_hand && ` · ${t("rates.byHand")}`}
           </div>
+          {quote && <div className="text-sm text-muted-foreground">{t("programme.wouldBe", { percent: rate(quote.percent) })}</div>}
+        </div>
+      ) : quote ? (
+        <div className="grid gap-0.5">
+          <div className="text-2xl font-bold tabular-nums" data-testid="account-rate-now">
+            {t("rates.now", { percent: rate(quote.percent) })}
+          </div>
+          <QuoteLine data={data} />
         </div>
       ) : waitsForKey ? (
         <p className="text-sm text-amber-700 dark:text-amber-400">{t("rates.noKey")}</p>
@@ -66,6 +73,13 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
         <p className="text-sm text-muted-foreground">{t("rates.none")}</p>
       )}
 
+      <div className="grid gap-2">
+        <h3 className="text-sm font-semibold">{t("programme.title")}</h3>
+        <ProgrammeBlock account={account} data={data} canEdit={canEdit} />
+      </div>
+
+      <div className="grid gap-2">
+        <h3 className="text-sm font-semibold">{t("rates.manualTitle")}</h3>
       {data.rates.length > 0 && (
         <ul className="grid gap-1 text-sm" data-testid="account-rate-history">
           {[...data.rates].reverse().map((r) => (
@@ -99,6 +113,7 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
         </div>
       )}
       <p className="text-xs text-muted-foreground">{t("rates.hint")}</p>
+      </div>
       {adding && <RateDialog account={account} keyRate={data.key_rate} onClose={() => setAdding(false)} />}
     </div>
   );

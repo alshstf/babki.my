@@ -144,7 +144,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, spaceID uuid.UUI
 			fund := apitypes.GoalFund{AccountId: f.Account, AmountMinor: of(f.Minor), ValueMinor: v.FundValues[f.Account], RatePercent: nullable.NewNullNullable[string]()}
 			if r, ok := v.RateNow[f.Account]; ok {
 				fund.RatePercent = nullable.NewNullableWithValue(r.StringFixed(3))
-				fund.RateByHand = v.FundRates[f.Account].ByHand
+				fund.RateByHand = v.FundRates[f.Account].ByHand()
 			}
 			g.Funds = append(g.Funds, fund)
 		}

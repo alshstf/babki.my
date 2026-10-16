@@ -1515,6 +1515,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/programme": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Ties a savings account or a deposit to its bank's programme in the program's catalog (decisions Р-52 Б, Р-53 Б): the variant chosen at opening, the day of opening or last prolongation, a deposit's term in the bank's unit and its sum at opening, and how its conditions are told. 400 for a programme of another kind, a variant it has not, a deposit's term or sum the catalog has no rate for on the day of opening. */
+        put: operations["setAccountProgramme"];
+        post?: never;
+        /** @description Unties the account from its programme; the marks of its conditions go with it. */
+        delete: operations["deleteAccountProgramme"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/marks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description The family's word on a condition of the account's programme (Р-53): from a day on it holds at a level — a bonus's step — or no longer holds. A month counts the last mark made in it or before. 400 for a condition the programme has not, or a level past its steps. */
+        put: operations["setConditionMark"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/marks/{condition}/{fromOn}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Forgets the mark of a condition made on the day. */
+        delete: operations["deleteConditionMark"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposit-programmes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The program's catalog of the banks' deposit and savings account programmes (decisions Р-52 Б, Р-53 Б), by bank and name, each with its latest edition's variants: what is chosen at opening, the terms and least sum the bank has a rate for, the conditions of the bonuses. */
+        get: operations["listDepositProgrammes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/summary": {
         parameters: {
             query?: never;
@@ -2771,11 +2840,169 @@ export interface components {
             by_hand: boolean;
         };
         AccountRates: {
+            /**
+             * @description Where today's rate comes from: written in by hand (over everything, Р-51), the programme's terms, or nowhere
+             * @enum {string}
+             */
+            source: "by_hand" | "programme" | "none";
+            /** @description The account's programme of its bank; null without one */
+            programme: components["schemas"]["AccountProgramme"] | null;
+            /** @description The rate today by the programme's terms on today's balance; null without a programme, or when the catalog cannot reckon it (a term it has no rate for, an edition not known yet, no key rate) */
+            quote: components["schemas"]["ProgrammeQuote"] | null;
+            /** @description The conditions of the programme's variant, with what the marks say of them this month */
+            conditions: components["schemas"]["ProgrammeCondition"][];
+            /** @description The marks of the conditions, by condition and day */
+            marks: components["schemas"]["ConditionMark"][];
             rates: components["schemas"]["AccountRate"][];
             /** @description The rate in force today; null without one by today, or a key-tied one without the key rate */
             current: components["schemas"]["AccountRateNow"] | null;
             /** @description The Central Bank's key rate today */
             key_rate: string | null;
+        };
+        AccountProgrammeInput: {
+            programme_id: string;
+            variant_id: string;
+            /** @description Date YYYY-MM-DD the account was opened or last prolonged */
+            opened_on: string;
+            /** @description A deposit's term in the variant's unit; null for a savings account */
+            term: number | null;
+            /**
+             * Format: int64
+             * @description A deposit's sum at opening; null for a savings account
+             */
+            amount_minor: number | null;
+            /**
+             * @description How the conditions are told: by the family's marks, or by the program from its data where it can (Р-53)
+             * @enum {string}
+             */
+            conditions: "manual" | "auto";
+        };
+        AccountProgramme: {
+            programme_id: string;
+            programme_name: string;
+            bank_id: string;
+            bank_name: string;
+            /** @enum {string} */
+            kind: "deposit" | "savings";
+            variant_id: string;
+            variant_name: string;
+            opened_on: string;
+            term: number | null;
+            /** @enum {string|null} */
+            term_unit: "days" | "months" | null;
+            /** Format: int64 */
+            amount_minor: number | null;
+            /** @enum {string} */
+            conditions: "manual" | "auto";
+        };
+        ProgrammeQuote: {
+            /** @description The rate a year on today's balance, weighed by its parts */
+            percent: string;
+            /** @description The day the edition of the bank's terms holds from */
+            edition_from: string;
+            /** @description The day the edition was checked against the bank's documents */
+            checked_on: string;
+            sources: string[];
+            notes: string;
+            /** @description The period of the schedule in force — a welcome rate — null for none */
+            period: string | null;
+            /** @description The ids of the bonuses that counted */
+            bonuses: string[];
+            parts: components["schemas"]["QuotePart"][];
+            /** @description The minimum guaranteed rate the bank states */
+            mgs: string | null;
+        };
+        QuotePart: {
+            /** Format: int64 */
+            from_minor: number;
+            /** Format: int64 */
+            to_minor: number;
+            percent: string;
+        };
+        ProgrammeCondition: {
+            id: string;
+            name: string;
+            /**
+             * @description A bonus to the rate, or the condition of having a period — a welcome rate for a new client
+             * @enum {string}
+             */
+            kind: "bonus" | "requirement";
+            /**
+             * @description How the program could tell it from its own data; manual — only by a mark
+             * @enum {string}
+             */
+            check: "manual" | "card_spend" | "wages" | "bank_balance";
+            /** @description Of the bonuses of a group only the greatest counts */
+            group: string | null;
+            /** @description A bonus of one level: what it adds */
+            plus: string | null;
+            levels: components["schemas"]["BonusLevel"][];
+            /** @description What the marks say of it this month */
+            met: boolean;
+            /** @description The level met this month, 0 for a bonus of one */
+            level: number;
+        };
+        BonusLevel: {
+            /**
+             * Format: int64
+             * @description From what is measured — a sum in minor units, or a level's number for one told by a mark
+             */
+            from: number;
+            plus: string;
+        };
+        ConditionMarkInput: {
+            condition: string;
+            /** @description Date YYYY-MM-DD */
+            from_on: string;
+            level: number;
+            met: boolean;
+        };
+        ConditionMark: {
+            condition: string;
+            from_on: string;
+            level: number;
+            met: boolean;
+        };
+        DepositProgrammes: {
+            programmes: components["schemas"]["DepositProgramme"][];
+        };
+        DepositProgramme: {
+            id: string;
+            bank_id: string;
+            bank_name: string;
+            name: string;
+            /** @enum {string} */
+            kind: "deposit" | "savings";
+            edition_from: string;
+            checked_on: string;
+            sources: string[];
+            notes: string;
+            variants: components["schemas"]["DepositVariant"][];
+        };
+        DepositVariant: {
+            id: string;
+            name: string;
+            /** @enum {string|null} */
+            accrual: "daily" | "minimum" | null;
+            payouts: ("end" | "monthly" | "capitalize" | "daily" | "quarterly")[];
+            /** @enum {string} */
+            ops: "none" | "topup" | "topup_withdraw";
+            /** @enum {string|null} */
+            term_unit: "days" | "months" | null;
+            /** @description The terms the bank has a rate for; empty for a savings account */
+            terms: components["schemas"]["TermRange"][];
+            /**
+             * Format: int64
+             * @description The least sum the bank has a rate for
+             */
+            amount_from_minor: number;
+            conditions: components["schemas"]["ProgrammeCondition"][];
+            /** @description The name of the schedule's first period, a welcome rate; null for none */
+            welcome: string | null;
+        };
+        TermRange: {
+            from: number;
+            to: number;
         };
         ExportWageEntry: {
             /** Format: uuid */
@@ -2851,6 +3078,10 @@ export interface components {
             credit_card_installments: components["schemas"]["ExportCardInstallment"][];
             /** @description A savings account's or a deposit's rates, oldest first (PUT /accounts/{accountId}/rates); empty on every other account */
             rates: components["schemas"]["AccountRate"][];
+            /** @description A savings account's or a deposit's programme of its bank (PUT /accounts/{accountId}/programme); null without one */
+            programme: components["schemas"]["AccountProgrammeInput"] | null;
+            /** @description The marks of the programme's conditions (PUT /accounts/{accountId}/marks) */
+            condition_marks: components["schemas"]["ConditionMark"][];
             /** @description What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated */
             credit_card_bank_figures: components["schemas"]["CreditCardBankFigures"] | null;
             /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
@@ -9350,6 +9581,140 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    setAccountProgramme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountProgrammeInput"];
+            };
+        };
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteAccountProgramme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setConditionMark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConditionMarkInput"];
+            };
+        };
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteConditionMark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                condition: string;
+                /** @description Date YYYY-MM-DD */
+                fromOn: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listDepositProgrammes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProgrammes"];
+                };
+            };
+            401: components["responses"]["Error"];
         };
     };
     getSummary: {

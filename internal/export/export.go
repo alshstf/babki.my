@@ -54,6 +54,8 @@ type accounts interface {
 	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
 	BalanceHistory(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.BalancePoint, error)
 	AllRates(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.Rate, error)
+	AllBindings(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]account.Binding, error)
+	AllMarks(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.Mark, error)
 }
 
 type journals interface {
@@ -241,6 +243,14 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	if err != nil {
 		return apitypes.SpaceExport{}, err
 	}
+	bindings, err := h.accounts.AllBindings(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
+	marks, err := h.accounts.AllMarks(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
 	history, err := h.accounts.BalanceHistory(ctx, spaceID)
 	if err != nil {
 		return apitypes.SpaceExport{}, err
@@ -274,6 +284,10 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 		}
 		out := exportAccount(a, history[a.ID], ops, stated, usernames)
 		out.Rates = account.RatesAPI(rates[a.ID])
+		if b, ok := bindings[a.ID]; ok {
+			out.Programme = account.BindingAPI(&b)
+		}
+		out.ConditionMarks = account.MarksAPI(marks[a.ID])
 		if t, ok := loanOf[a.ID]; ok {
 			out.Loan = nullable.NewNullableWithValue(loan.TermsAPI(t))
 			for _, p := range t.Prepayments {
@@ -529,6 +543,8 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		Loan:                   nullable.NewNullNullable[apitypes.LoanTerms](),
 		LoanPrepayments:        []apitypes.LoanPrepayment{},
 		Rates:                  []apitypes.AccountRate{},
+		Programme:              nullable.NewNullNullable[apitypes.AccountProgrammeInput](),
+		ConditionMarks:         []apitypes.ConditionMark{},
 		CreditCardInstallments: []apitypes.ExportCardInstallment{},
 		CreditCard:             nullable.NewNullNullable[apitypes.CreditCardTerms](),
 		CreditCardBankFigures:  nullable.NewNullNullable[apitypes.CreditCardBankFigures](),

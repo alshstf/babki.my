@@ -67,15 +67,14 @@ func (p Programme) Quote(h Holding, day time.Time, balance int64, keyOn KeyOn, m
 	if p.Kind == KindDeposit {
 		on = h.OpenedOn
 	}
-	e, ok := p.editionOn(on)
+	e, ok := p.EditionOn(on)
 	if !ok {
 		return Quote{}, ErrNoEdition
 	}
-	i := slices.IndexFunc(e.Variants, func(v Variant) bool { return v.ID == h.Variant })
-	if i < 0 {
+	v, ok := e.Variant(h.Variant)
+	if !ok {
 		return Quote{}, ErrNoVariant
 	}
-	v := e.Variants[i]
 	key := func() (decimal.Decimal, error) {
 		k, ok, err := keyOn(keyDay(day, v.Key))
 		if err != nil {
@@ -150,8 +149,8 @@ func (p Programme) Quote(h Holding, day time.Time, balance int64, keyOn KeyOn, m
 	return out, nil
 }
 
-// editionOn is the edition in force on day: the last from it or before.
-func (p Programme) editionOn(day time.Time) (Edition, bool) {
+// EditionOn is the edition in force on day: the last from it or before.
+func (p Programme) EditionOn(day time.Time) (Edition, bool) {
 	at := day.Format(time.DateOnly)
 	for i := len(p.Editions) - 1; i >= 0; i-- {
 		if p.Editions[i].From <= at {
@@ -159,6 +158,15 @@ func (p Programme) editionOn(day time.Time) (Edition, bool) {
 		}
 	}
 	return Edition{}, false
+}
+
+// Variant is the edition's variant of the id.
+func (e Edition) Variant(id string) (Variant, bool) {
+	i := slices.IndexFunc(e.Variants, func(v Variant) bool { return v.ID == id })
+	if i < 0 {
+		return Variant{}, false
+	}
+	return e.Variants[i], true
 }
 
 // periodOn is the period of the schedule day falls in, the periods running

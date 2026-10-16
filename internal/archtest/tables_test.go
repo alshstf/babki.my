@@ -27,6 +27,8 @@ var owners = map[string]string{
 	"accounts":                    "internal/account",
 	"account_balances":            "internal/account",
 	"account_rates":               "internal/account",
+	"account_programmes":          "internal/account",
+	"account_condition_marks":     "internal/account",
 	"categories":                  "internal/category",
 	"category_defaults":           "internal/category",
 	"category_rules":              "internal/category",

@@ -59,3 +59,66 @@ export function useDeleteAccountRate(accountId: string) {
     onSuccess: after,
   });
 }
+
+export type DepositProgramme = components["schemas"]["DepositProgramme"];
+export type DepositVariant = components["schemas"]["DepositVariant"];
+export type ProgrammeCondition = components["schemas"]["ProgrammeCondition"];
+export type AccountProgrammeInput = components["schemas"]["AccountProgrammeInput"];
+export type ConditionMarkInput = components["schemas"]["ConditionMarkInput"];
+
+// The program's catalog of the banks' programmes (Р-52 Б, Р-53 Б).
+export function useDepositProgrammes() {
+  return useQuery({
+    queryKey: ["deposit-programmes"],
+    staleTime: Infinity,
+    queryFn: async (): Promise<DepositProgramme[]> => {
+      const { data, error, response } = await api.GET("/api/v1/deposit-programmes");
+      if (!data) throw apiError(response, error);
+      return data.programmes;
+    },
+  });
+}
+
+export function useSetProgramme(accountId: string) {
+  const after = useAfterChange(accountId);
+  return useMutation({
+    mutationFn: async (body: AccountProgrammeInput): Promise<AccountRates> => {
+      const { data, error, response } = await api.PUT("/api/v1/accounts/{accountId}/programme", {
+        params: { path: { accountId } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: after,
+  });
+}
+
+export function useDeleteProgramme(accountId: string) {
+  const after = useAfterChange(accountId);
+  return useMutation({
+    mutationFn: async (): Promise<AccountRates> => {
+      const { data, error, response } = await api.DELETE("/api/v1/accounts/{accountId}/programme", {
+        params: { path: { accountId } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: after,
+  });
+}
+
+export function useSetMark(accountId: string) {
+  const after = useAfterChange(accountId);
+  return useMutation({
+    mutationFn: async (body: ConditionMarkInput): Promise<AccountRates> => {
+      const { data, error, response } = await api.PUT("/api/v1/accounts/{accountId}/marks", {
+        params: { path: { accountId } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: after,
+  });
+}

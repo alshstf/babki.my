@@ -177,7 +177,7 @@ type Check string
 const (
 	CheckManual      Check = "manual"
 	CheckCardSpend   Check = "card_spend"
-	CheckIncome      Check = "income"
+	CheckWages       Check = "wages"
 	CheckBankBalance Check = "bank_balance"
 )
 
@@ -202,6 +202,12 @@ type Bonus struct {
 type Level struct {
 	From int64  `yaml:"from"`
 	Plus string `yaml:"plus"`
+}
+
+// Requirements are the conditions of having a period, by id, as named to
+// the family.
+var Requirements = map[string]string{
+	"new_client": "Новый клиент банка — по условиям приветственной ставки",
 }
 
 // KeyLag is when a new key rate starts to count: the same day (no lag), the
@@ -240,6 +246,39 @@ func ByID(id string) (Programme, bool) {
 		return Programme{}, false
 	}
 	return all[i], true
+}
+
+// HasVariant says some edition has a variant of the id.
+func (p Programme) HasVariant(id string) bool {
+	for _, e := range p.Editions {
+		if slices.ContainsFunc(e.Variants, func(v Variant) bool { return v.ID == id }) {
+			return true
+		}
+	}
+	return false
+}
+
+// Conditions are the conditions of the variant across the editions — its
+// bonuses and its periods' requirements — each with its number of levels:
+// a bonus's steps, 1 for a bonus of one or a requirement.
+func (p Programme) Conditions(variant string) map[string]int {
+	out := map[string]int{}
+	for _, e := range p.Editions {
+		for _, v := range e.Variants {
+			if v.ID != variant {
+				continue
+			}
+			for _, b := range v.Bonuses {
+				out[b.ID] = max(out[b.ID], len(b.Levels), 1)
+			}
+			for _, s := range v.Schedule {
+				if s.Requires != "" {
+					out[s.Requires] = max(out[s.Requires], 1)
+				}
+			}
+		}
+	}
+	return out
 }
 
 func readCatalog(files fs.FS) ([]Programme, error) {
@@ -349,6 +388,9 @@ func (v Variant) check(kind Kind) error {
 		if err := checkGrid(s.Grid, kind); len(s.Grid) > 0 && err != nil {
 			return fmt.Errorf("period %q: %w", s.Name, err)
 		}
+		if _, known := Requirements[s.Requires]; s.Requires != "" && !known {
+			return fmt.Errorf("period %q: requires %q", s.Name, s.Requires)
+		}
 		if s.Plus != "" && !number(s.Plus) {
 			return fmt.Errorf("period %q: plus %q", s.Name, s.Plus)
 		}
@@ -370,7 +412,7 @@ func (v Variant) check(kind Kind) error {
 				return fmt.Errorf("bonus %s: levels go up, each with plus", b.ID)
 			}
 		}
-		if !slices.Contains([]Check{CheckManual, CheckCardSpend, CheckIncome, CheckBankBalance}, b.Check) {
+		if !slices.Contains([]Check{CheckManual, CheckCardSpend, CheckWages, CheckBankBalance}, b.Check) {
 			return fmt.Errorf("bonus %s: check %q", b.ID, b.Check)
 		}
 	}

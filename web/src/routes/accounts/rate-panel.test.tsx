@@ -24,7 +24,11 @@ const deposit: AccountWithBalance = {
 };
 
 // Decision Р-51 А: 16 % from January, the key rate less 1.5 from September.
+const bare = { source: "none" as const, programme: null, quote: null, conditions: [], marks: [] };
+
 const stated: AccountRates = {
+  ...bare,
+  source: "by_hand",
   rates: [
     { from_on: "2026-01-01", kind: "fixed", percent: "16.000", by_hand: true },
     { from_on: "2026-09-01", kind: "key", percent: "-1.500", by_hand: true },
@@ -33,11 +37,57 @@ const stated: AccountRates = {
   key_rate: "17",
 };
 
+// The catalog's ВТБ-Счёт and Газпромбанк's deposit, for the dialog.
+const catalog = {
+  programmes: [
+    {
+      id: "gpb-km", bank_id: "gazprombank", bank_name: "Газпромбанк", name: "Вклад «Ключевой момент»", kind: "deposit", edition_from: "2026-10-03",
+      checked_on: "2026-10-16", sources: ["https://example.ru/gpb"], notes: "",
+      variants: [{
+        id: "end", name: "Проценты в конце срока", accrual: null, payouts: ["end"], ops: "none", term_unit: "days",
+        terms: [{ from: 181, to: 181 }, { from: 367, to: 367 }], amount_from_minor: 100_000_00, conditions: [], welcome: null,
+      }],
+    },
+    {
+      id: "vtb-schet", bank_id: "vtb", bank_name: "ВТБ", name: "Накопительный ВТБ-Счёт", kind: "savings", edition_from: "2026-10-16",
+      checked_on: "2026-10-16", sources: [], notes: "", variants: [],
+    },
+  ],
+};
+
 function answer(r: AccountRates) {
-  fetchMock.mockImplementation(() =>
-    Promise.resolve(new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } })),
-  );
+  fetchMock.mockImplementation((input: Request) => {
+    const body = new URL(input.url).pathname === "/api/v1/deposit-programmes" ? catalog : r;
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+  });
 }
+
+const sent = async (method: string, path: string) => {
+  await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === method && new URL((r as Request).url).pathname === path)).toBe(true));
+  return fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === method && new URL(r.url).pathname === path)!;
+};
+
+// The ВТБ-Счёт of the note (Р-53): 12 % by the bank's terms — 6 base, 2 for
+// the wages, 4 for purchases from 50 000 ₽, on up to 1 млн; 6 % above it.
+const tied: AccountRates = {
+  ...bare,
+  source: "programme",
+  key_rate: "14",
+  rates: [],
+  current: null,
+  programme: {
+    programme_id: "vtb-schet", programme_name: "Накопительный ВТБ-Счёт", bank_id: "vtb", bank_name: "ВТБ", kind: "savings",
+    variant_id: "minimum", variant_name: "На минимальный остаток", opened_on: "2026-04-01", term: null, term_unit: null, amount_minor: null, conditions: "manual",
+  },
+  quote: {
+    percent: "11.000", edition_from: "2026-10-16", checked_on: "2026-10-16", sources: [], notes: "", period: null, bonuses: ["salary", "spend"], mgs: "6",
+    parts: [{ from_minor: 0, to_minor: 1_000_000_00, percent: "12.000" }, { from_minor: 1_000_000_00, to_minor: 1_200_000_00, percent: "6.000" }],
+  },
+  conditions: [
+    { id: "salary", name: "Зарплата в ВТБ", kind: "bonus", check: "wages", group: "status", plus: "2", levels: [], met: true, level: 0 },
+    { id: "spend", name: "Покупки по картам ВТБ за месяц", kind: "bonus", check: "card_spend", group: null, plus: null, levels: [{ from: 2_000_000, plus: "1" }, { from: 5_000_000, plus: "4" }], met: true, level: 1 },
+  ],
+};
 
 function show(canEdit = true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -67,14 +117,15 @@ describe("RatePanel", () => {
   });
 
   it("says what a goal grows at without a rate, and offers one only to an editor", async () => {
-    answer({ rates: [], current: null, key_rate: "17" });
+    answer({ ...bare, rates: [], current: null, key_rate: "17" });
     show(false);
-    expect(await screen.findByText(/Ставка не указана/)).toBeTruthy();
+    expect(await screen.findByText(/Ставки пока нет/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Указать ставку" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Выбрать программу банка" })).toBeNull();
   });
 
   it("states a rate tied to the key rate, showing what it comes to", async () => {
-    answer({ rates: [], current: null, key_rate: "17" });
+    answer({ ...bare, rates: [], current: null, key_rate: "17" });
     show();
     fireEvent.click(await screen.findByRole("button", { name: "Указать ставку" }));
     const dialog = await screen.findByTestId("account-rate-dialog");
@@ -88,5 +139,44 @@ describe("RatePanel", () => {
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(new URL(put.url).pathname).toBe("/api/v1/accounts/dep-1/rates");
     expect(await put.json()).toEqual({ from_on: "2026-09-01", kind: "key", percent: "-1.5" });
+  });
+
+  it("shows the rate by the bank's terms: the bonuses that counted, the parts of the balance, the marks", async () => {
+    answer(tied);
+    show();
+    expect(norm((await screen.findByTestId("account-rate-now")).textContent)).toBe("11 % годовых");
+    const quote = norm(screen.getByTestId("account-rate-quote").textContent);
+    expect(quote).toContain("по тарифу: ВТБ · Накопительный ВТБ-Счёт · На минимальный остаток · редакция с 16.10.2026");
+    expect(quote).toContain("Надбавки: Зарплата в ВТБ, Покупки по картам ВТБ за месяц");
+    expect(quote).toContain("на 0,00 ₽ – 1 000 000,00 ₽: 12 % · на 1 000 000,00 ₽ – 1 200 000,00 ₽: 6 %");
+    const block = norm(screen.getByTestId("account-programme").textContent);
+    expect(block).toContain("На минимальный остаток · открыт 01.04.2026");
+    expect((screen.getByRole("checkbox", { name: /Зарплата в ВТБ/ }) as HTMLButtonElement).getAttribute("data-state")).toBe("checked");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Зарплата в ВТБ/ }));
+    const put = await sent("PUT", "/api/v1/accounts/dep-1/marks");
+    const body = await put.json();
+    expect(body).toMatchObject({ condition: "salary", level: 0, met: false });
+    expect(body.from_on).toMatch(/^\d{4}-\d{2}-01$/);
+  });
+
+  it("ties a deposit to its bank's programme: the term and sum the bank has a rate for", async () => {
+    answer({ ...bare, rates: [], current: null, key_rate: "14" });
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Выбрать программу банка" }));
+    const dialog = await screen.findByTestId("account-programme-dialog");
+    fireEvent.click(await within(dialog).findByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: "Газпромбанк · Вклад «Ключевой момент»" }));
+    expect(screen.queryByRole("option", { name: /ВТБ-Счёт/ })).toBeNull(); // a savings account's programme is not offered
+    fireEvent.change(within(dialog).getByLabelText("Когда открыт или продлён вклад"), { target: { value: "2026-10-05" } });
+    const save = within(dialog).getByRole("button", { name: "Сохранить" });
+    fireEvent.change(within(dialog).getByLabelText("Срок, дн."), { target: { value: "366" } });
+    fireEvent.change(within(dialog).getByLabelText("Сумма при открытии, ₽"), { target: { value: "500 000" } });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("Срок, дн."), { target: { value: "367" } });
+    fireEvent.click(save);
+    const put = await sent("PUT", "/api/v1/accounts/dep-1/programme");
+    expect(await put.json()).toEqual({
+      programme_id: "gpb-km", variant_id: "end", opened_on: "2026-10-05", term: 367, amount_minor: 50_000_000, conditions: "manual",
+    });
   });
 });
