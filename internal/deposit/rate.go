@@ -51,6 +51,7 @@ var (
 	ErrNoVariant = errors.New("deposit: no such variant in the edition")
 	ErrNoCell    = errors.New("deposit: the edition has no rate for the term and sum")
 	ErrNoKeyRate = errors.New("deposit: the key rate of the day is not known")
+	ErrOpened    = errors.New("deposit: the variant's rates are not of the accounts opened that day")
 )
 
 // Quote is the rate a year the holding earns on day with balance on the
@@ -74,6 +75,9 @@ func (p Programme) Quote(h Holding, day time.Time, balance int64, keyOn KeyOn, m
 	v, ok := e.Variant(h.Variant)
 	if !ok {
 		return Quote{}, ErrNoVariant
+	}
+	if !v.admits(h.OpenedOn) {
+		return Quote{}, ErrOpened
 	}
 	key := func() (decimal.Decimal, error) {
 		k, ok, err := keyOn(keyDay(day, v.Key))
@@ -119,7 +123,7 @@ func (p Programme) Quote(h Holding, day time.Time, balance int64, keyOn KeyOn, m
 			}
 		}
 		if bonuses {
-			plus, ids := v.bonusOn(day, from, met)
+			plus, ids := v.bonusOn(day, from, h.Term, met)
 			rate = rate.Add(plus)
 			for _, id := range ids {
 				counted[id] = true
@@ -270,8 +274,9 @@ func (r Rate) at(key func() (decimal.Decimal, error)) (decimal.Decimal, error) {
 }
 
 // bonusOn is what the bonuses add on day to the part of the balance from
-// from: the greatest of each group, those whose cap the part is under.
-func (v Variant) bonusOn(day time.Time, from int64, met Conditions) (decimal.Decimal, []string) {
+// from of a deposit of the term: the greatest of each group, those whose cap
+// the part is under.
+func (v Variant) bonusOn(day time.Time, from int64, term int, met Conditions) (decimal.Decimal, []string) {
 	best := map[string]decimal.Decimal{}
 	bestID := map[string]string{}
 	for _, b := range v.Bonuses {
@@ -286,9 +291,9 @@ func (v Variant) bonusOn(day time.Time, from int64, met Conditions) (decimal.Dec
 		if !ok {
 			continue
 		}
-		plus := b.Plus
-		if len(b.Levels) > 0 {
-			plus = b.Levels[min(max(level, 0), len(b.Levels)-1)].Plus
+		plus, ok := b.PlusFor(level, term)
+		if !ok {
+			continue
 		}
 		group := b.Group
 		if group == "" {

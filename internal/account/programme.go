@@ -111,7 +111,7 @@ func (s *Store) SetBinding(ctx context.Context, spaceID, accountID uuid.UUID, b 
 		if _, err := p.Quote(h, b.OpenedOn, *b.Amount, anyKey, nil); err != nil {
 			return errBinding
 		}
-	} else if !p.HasVariant(b.Variant) {
+	} else if !p.Admits(b.Variant, b.OpenedOn) {
 		return errBinding
 	}
 	if p.Kind == deposit.KindSavings {
@@ -355,7 +355,7 @@ func Resolve(src RateSource, day time.Time, balance int64, keyOn func(time.Time)
 		return t.Level, t.Met
 	})
 	if err != nil {
-		if errors.Is(err, deposit.ErrNoEdition) || errors.Is(err, deposit.ErrNoCell) || errors.Is(err, deposit.ErrNoVariant) || errors.Is(err, deposit.ErrNoKeyRate) {
+		if errors.Is(err, deposit.ErrNoEdition) || errors.Is(err, deposit.ErrNoCell) || errors.Is(err, deposit.ErrNoVariant) || errors.Is(err, deposit.ErrNoKeyRate) || errors.Is(err, deposit.ErrOpened) {
 			return Resolved{}, false, nil
 		}
 		return Resolved{}, false, err

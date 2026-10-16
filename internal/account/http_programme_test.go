@@ -55,7 +55,8 @@ func newAccount(t *testing.T, url string, c *http.Client, typ string, balance in
 // days earns the key rate less 0,2 by the catalog; a rate written in by hand
 // stands over it, and taken away gives the catalog back. A savings account
 // for a deposit's programme, a term the bank has no rate for, an unknown
-// programme and a card are refused.
+// programme, a card and a savings account opened before its variant's rates
+// are refused.
 func TestADepositTiedToItsProgramme(t *testing.T) {
 	url, c := programmeAPI(t)
 	dep := newAccount(t, url, c, "deposit", 500_000_00)
@@ -87,6 +88,7 @@ func TestADepositTiedToItsProgramme(t *testing.T) {
 		{dep, `{"programme_id":"gazprombank-klyuchevoy-moment","variant_id":"end","opened_on":"2026-10-02","term":367,"amount_minor":50000000,"conditions":"manual"}`},
 		{dep, `{"programme_id":"nope","variant_id":"end","opened_on":"2026-10-05","term":367,"amount_minor":50000000,"conditions":"manual"}`},
 		{card, bind},
+		{savings, `{"programme_id":"alfa-schet","variant_id":"minimum","opened_on":"2026-02-10","term":null,"amount_minor":null,"conditions":"manual"}`},
 	} {
 		if r := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+bad.account+"/programme", bad.body); r.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s = %d, want 400", bad.body, r.StatusCode)

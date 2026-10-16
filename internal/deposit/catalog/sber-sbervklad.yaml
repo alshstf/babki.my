@@ -1,0 +1,106 @@
+id: sber-sbervklad
+bank: sber
+name: СберВклад
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/vklad
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/vklad
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1321?terrBankCode=038&timeZone=0
+      - https://www.sberbank.ru/common/img/uploaded/vklad/usl_r_vkladov.pdf
+    notes: >-
+      Дата редакции у банка не указана — ставки со страницы вклада (её калькулятор) в день сверки. Без пополнения и
+      снятия, открытие в СберБанк Онлайн, от 100 000 ₽; в отделении ставки на 1 п. п. ниже — ручная ставка, как и у
+      вклада с пополнением. Ступень — по сумме вклада: от 100 000, 500 000 ₽ и 1 млн ₽. Надбавки (у вкладов до года,
+      по 0,5 п. п.) действуют, пока выполнено условие (п. 76 Общих условий): СберПрайм или премиальный пакет; одна из
+      трёх — пенсия, зарплата или покупки по картам Сбера от 30 000 ₽ за прошлый месяц; остаток на накопительных
+      счетах Сбера от 100 000 ₽ на конец дня. Выплата ежемесячно — на карту или с капитализацией по одной ставке.
+    variants:
+      - id: end
+        name: Онлайн, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 2, amount_from: 10000000, percent: "10.8" }
+          - { from: 3, to: 7, amount_from: 10000000, percent: "11.8" }
+          - { from: 8, to: 9, amount_from: 10000000, percent: "10.3" }
+          - { from: 10, to: 11, amount_from: 10000000, percent: "9.3" }
+          - { from: 12, to: 12, amount_from: 10000000, percent: "8.3" }
+          - { from: 18, to: 18, amount_from: 10000000, percent: "8.3" }
+          - { from: 24, to: 24, amount_from: 10000000, percent: "8.3" }
+          - { from: 36, to: 36, amount_from: 10000000, percent: "6.3" }
+          - { from: 1, to: 2, amount_from: 50000000, percent: "10.9" }
+          - { from: 3, to: 7, amount_from: 50000000, percent: "11.9" }
+          - { from: 8, to: 9, amount_from: 50000000, percent: "10.4" }
+          - { from: 10, to: 11, amount_from: 50000000, percent: "9.4" }
+          - { from: 12, to: 12, amount_from: 50000000, percent: "8.4" }
+          - { from: 18, to: 18, amount_from: 50000000, percent: "8.4" }
+          - { from: 24, to: 24, amount_from: 50000000, percent: "8.4" }
+          - { from: 36, to: 36, amount_from: 50000000, percent: "6.4" }
+          - { from: 1, to: 2, amount_from: 100000000, percent: "11" }
+          - { from: 3, to: 7, amount_from: 100000000, percent: "12" }
+          - { from: 8, to: 9, amount_from: 100000000, percent: "10.5" }
+          - { from: 10, to: 11, amount_from: 100000000, percent: "9.5" }
+          - { from: 12, to: 12, amount_from: 100000000, percent: "8.5" }
+          - { from: 18, to: 18, amount_from: 100000000, percent: "8.5" }
+          - { from: 24, to: 24, amount_from: 100000000, percent: "8.5" }
+          - { from: 36, to: 36, amount_from: 100000000, percent: "6.5" }
+        bonuses: &sber-bonuses
+          - { id: prime, name: Подписка СберПрайм или пакет «Премиальное обслуживание», plus: "0.5", check: manual, terms: [{ from: 1, to: 12 }] }
+          - { id: salary, name: Зарплата на карту Сбера, plus: "0.5", check: wages, group: income, terms: [{ from: 1, to: 12 }] }
+          - { id: pension, name: Пенсия на карту Сбера, plus: "0.5", check: manual, group: income, terms: [{ from: 1, to: 12 }] }
+          - id: spend
+            name: Покупки по картам Сбера за прошлый месяц от 30 000 ₽
+            check: card_spend
+            group: income
+            next_month: true
+            levels: [{ from: 3000000, plus: "0.5" }]
+            terms: [{ from: 1, to: 12 }]
+          - { id: savings, name: На накопительных счетах Сбера от 100 000 ₽, plus: "0.5", check: manual, terms: [{ from: 1, to: 12 }] }
+      - id: monthly
+        name: Онлайн, проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 2, amount_from: 10000000, percent: "10.7" }
+          - { from: 3, to: 4, amount_from: 10000000, percent: "11.55" }
+          - { from: 5, to: 5, amount_from: 10000000, percent: "11.5" }
+          - { from: 6, to: 6, amount_from: 10000000, percent: "11.4" }
+          - { from: 7, to: 7, amount_from: 10000000, percent: "11.3" }
+          - { from: 8, to: 8, amount_from: 10000000, percent: "9.85" }
+          - { from: 9, to: 9, amount_from: 10000000, percent: "9.8" }
+          - { from: 10, to: 11, amount_from: 10000000, percent: "8.8" }
+          - { from: 12, to: 12, amount_from: 10000000, percent: "7.8" }
+          - { from: 18, to: 18, amount_from: 10000000, percent: "7.65" }
+          - { from: 24, to: 24, amount_from: 10000000, percent: "7.65" }
+          - { from: 36, to: 36, amount_from: 10000000, percent: "5.75" }
+          - { from: 1, to: 2, amount_from: 50000000, percent: "10.8" }
+          - { from: 3, to: 4, amount_from: 50000000, percent: "11.65" }
+          - { from: 5, to: 5, amount_from: 50000000, percent: "11.6" }
+          - { from: 6, to: 6, amount_from: 50000000, percent: "11.5" }
+          - { from: 7, to: 7, amount_from: 50000000, percent: "11.4" }
+          - { from: 8, to: 8, amount_from: 50000000, percent: "9.95" }
+          - { from: 9, to: 9, amount_from: 50000000, percent: "9.9" }
+          - { from: 10, to: 11, amount_from: 50000000, percent: "8.9" }
+          - { from: 12, to: 12, amount_from: 50000000, percent: "7.9" }
+          - { from: 18, to: 18, amount_from: 50000000, percent: "7.75" }
+          - { from: 24, to: 24, amount_from: 50000000, percent: "7.75" }
+          - { from: 36, to: 36, amount_from: 50000000, percent: "5.85" }
+          - { from: 1, to: 2, amount_from: 100000000, percent: "10.9" }
+          - { from: 3, to: 4, amount_from: 100000000, percent: "11.75" }
+          - { from: 5, to: 5, amount_from: 100000000, percent: "11.7" }
+          - { from: 6, to: 6, amount_from: 100000000, percent: "11.6" }
+          - { from: 7, to: 7, amount_from: 100000000, percent: "11.5" }
+          - { from: 8, to: 8, amount_from: 100000000, percent: "10.05" }
+          - { from: 9, to: 9, amount_from: 100000000, percent: "10" }
+          - { from: 10, to: 11, amount_from: 100000000, percent: "9" }
+          - { from: 12, to: 12, amount_from: 100000000, percent: "8" }
+          - { from: 18, to: 18, amount_from: 100000000, percent: "7.85" }
+          - { from: 24, to: 24, amount_from: 100000000, percent: "7.85" }
+          - { from: 36, to: 36, amount_from: 100000000, percent: "5.95" }
+        bonuses: *sber-bonuses

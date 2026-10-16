@@ -124,6 +124,10 @@ type Variant struct {
 	Key *KeyLag `yaml:"key"`
 	// MGS is the minimum guaranteed rate the bank states (since 01.10.2022).
 	MGS string `yaml:"mgs"`
+	// OpenedFrom: the variant's rates are those of the accounts opened on
+	// that day or later — banks that keep the rates of savings accounts by
+	// when they were opened (Альфа-Банк, Газпромбанк).
+	OpenedFrom string `yaml:"opened_from"`
 }
 
 // Cell is a rate for a term — From to To in the variant's unit, both in —
@@ -186,22 +190,54 @@ const (
 // 50 000 ₽ +4); a bonus of one level has Plus. Of the bonuses of one Group
 // only the greatest counts (wages, a pension or a subscription — one of
 // them). Up to Cap only. NextMonth: the condition of a month earns the
-// bonus in the next.
+// bonus in the next. Terms, a deposit's: the terms the bonus is given for,
+// each with its own plus or the bonus's.
 type Bonus struct {
-	ID        string  `yaml:"id"`
-	Name      string  `yaml:"name"`
-	Plus      string  `yaml:"plus"`
-	Levels    []Level `yaml:"levels"`
-	Check     Check   `yaml:"check"`
-	Group     string  `yaml:"group"`
-	Cap       int64   `yaml:"cap"`
-	NextMonth bool    `yaml:"next_month"`
+	ID        string     `yaml:"id"`
+	Name      string     `yaml:"name"`
+	Plus      string     `yaml:"plus"`
+	Levels    []Level    `yaml:"levels"`
+	Terms     []TermPlus `yaml:"terms"`
+	Check     Check      `yaml:"check"`
+	Group     string     `yaml:"group"`
+	Cap       int64      `yaml:"cap"`
+	NextMonth bool       `yaml:"next_month"`
 }
 
 // Level is a step of a bonus: from From of what is measured, Plus.
 type Level struct {
 	From int64  `yaml:"from"`
 	Plus string `yaml:"plus"`
+}
+
+// TermPlus is a bonus for the deposits of terms From–To: the bonus's plus,
+// or Plus of its own — ВТБ gives +1 for wages to a deposit of 61 days and
+// +0,4 to one of three years.
+type TermPlus struct {
+	From int    `yaml:"from"`
+	To   int    `yaml:"to"`
+	Plus string `yaml:"plus"`
+}
+
+// PlusFor is what the bonus adds at a level to a deposit of the term; false
+// when the term has no such bonus.
+func (b Bonus) PlusFor(level, term int) (string, bool) {
+	plus := b.Plus
+	if len(b.Levels) > 0 {
+		plus = b.Levels[min(max(level, 0), len(b.Levels)-1)].Plus
+	}
+	if len(b.Terms) == 0 {
+		return plus, true
+	}
+	for _, t := range b.Terms {
+		if term >= t.From && term <= t.To {
+			if t.Plus != "" {
+				return t.Plus, true
+			}
+			return plus, true
+		}
+	}
+	return "", false
 }
 
 // Requirements are the conditions of having a period, by id, as named to
@@ -256,6 +292,21 @@ func (p Programme) HasVariant(id string) bool {
 		}
 	}
 	return false
+}
+
+// Admits says an account opened on the day can be of the variant: the
+// latest edition that has it does not keep it for the accounts opened later.
+func (p Programme) Admits(id string, opened time.Time) bool {
+	for i := len(p.Editions) - 1; i >= 0; i-- {
+		if v, ok := p.Editions[i].Variant(id); ok {
+			return v.admits(opened)
+		}
+	}
+	return false
+}
+
+func (v Variant) admits(opened time.Time) bool {
+	return v.OpenedFrom == "" || opened.Format(time.DateOnly) >= v.OpenedFrom
 }
 
 // Bonus is the variant's bonus of the id, as the latest edition that has it
@@ -418,11 +469,23 @@ func (v Variant) check(kind Kind) error {
 			return fmt.Errorf("bonus %q empty or twice", b.ID)
 		}
 		ids[b.ID] = true
-		if (b.Plus == "") == (len(b.Levels) == 0) {
+		if b.Plus != "" && len(b.Levels) > 0 {
 			return fmt.Errorf("bonus %s: plus or levels", b.ID)
 		}
 		if b.Plus != "" && !number(b.Plus) {
 			return fmt.Errorf("bonus %s: plus %q", b.ID, b.Plus)
+		}
+		if len(b.Terms) > 0 && kind != KindDeposit {
+			return fmt.Errorf("bonus %s: terms are a deposit's", b.ID)
+		}
+		for _, t := range b.Terms {
+			own := len(b.Levels) == 0 && (t.Plus != "" || b.Plus != "")
+			if t.From < 1 || t.To < t.From || (t.Plus != "" && (!number(t.Plus) || len(b.Levels) > 0)) || (len(b.Levels) == 0 && !own) {
+				return fmt.Errorf("bonus %s: terms from–to, each with the plus or the bonus's", b.ID)
+			}
+		}
+		if b.Plus == "" && len(b.Levels) == 0 && len(b.Terms) == 0 {
+			return fmt.Errorf("bonus %s: plus, levels or terms", b.ID)
 		}
 		for i, l := range b.Levels {
 			if !number(l.Plus) || (i > 0 && l.From <= b.Levels[i-1].From) {
@@ -432,6 +495,9 @@ func (v Variant) check(kind Kind) error {
 		if !slices.Contains([]Check{CheckManual, CheckCardSpend, CheckWages, CheckBankBalance}, b.Check) {
 			return fmt.Errorf("bonus %s: check %q", b.ID, b.Check)
 		}
+	}
+	if _, err := time.Parse(time.DateOnly, v.OpenedFrom); v.OpenedFrom != "" && err != nil {
+		return fmt.Errorf("opened_from %q", v.OpenedFrom)
 	}
 	if v.Key != nil && !v.Key.NextWorkday && (v.Key.Cutoff < 1 || v.Key.Cutoff > 28 || v.Key.Workday < 1 || v.Key.LateWorkday < v.Key.Workday) {
 		return fmt.Errorf("key: next_workday, or cutoff with workday and late_workday")
