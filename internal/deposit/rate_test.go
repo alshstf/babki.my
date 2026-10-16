@@ -365,6 +365,24 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		{"ГПБ, Премиум", "gazprombank-premium-ns", Holding{Variant: "minimum", OpenedOn: day("2026-01-10")}, "2026-10-20", 1_000_000_00, map[string]int{"premium": 0, "new_money": 1}, "13.5"},
 		// Альфа-Счёт, Alfa Only: покупки от 100 000 ₽ — 12,5 %.
 		{"Альфа, Alfa Only", "alfa-schet", Holding{Variant: "only-minimum", OpenedOn: day("2026-07-10")}, "2026-10-20", 1_000_000_00, map[string]int{"spend": 1}, "12.5"},
+		// Уралсиб «Доход»: 367 дней, от 1 млн ₽, в конце срока — 14 %; «Доход Максимум» с договором ПДС — 25 %.
+		{"Уралсиб, Доход", "uralsib-dohod", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 367, Amount: 1_000_000_00}, "2026-10-20", 1_000_000_00, nil, "14"},
+		{"Уралсиб, Доход Максимум", "uralsib-dohod-maksimum", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 31, Amount: 200_000_00}, "2026-10-20", 200_000_00, map[string]int{"pds": 0}, "25"},
+		{"Уралсиб, Комфорт Плюс", "uralsib-komfort-plus", Holding{Variant: "private", OpenedOn: day("2026-10-16"), Term: 1100, Amount: 60_000_000_00}, "2026-10-20", 60_000_000_00, nil, "13.7"},
+		// ДОМ.РФ: «Вклад для пенсионеров» — «до 14,5 %» (Мой Дом 91 день + 0,7); Ультра — КС − 2.
+		{"ДОМ.РФ, пенсионеру", "domrf-moy-dom", Holding{Variant: "none-end", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"pensioner": 0}, "14.5"},
+		{"ДОМ.РФ, Ультра", "domrf-ultra", Holding{Variant: "ultra", OpenedOn: day("2026-01-10")}, "2026-10-20", 3_000_000_00, nil, "12"},
+		{"ДОМ.РФ, в юанях", "domrf-moy-dom", Holding{Variant: "cny", OpenedOn: day("2026-10-16"), Term: 367, Amount: 10_000_00}, "2026-10-20", 10_000_00, nil, "3.5"},
+		{"РСХБ, Пенсионный Плюс", "rshb-pensionny-plus", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 395, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "6"},
+		{"БСПБ, Пенсионный", "bspb-pensionny", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 3, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "15.2"},
+		{"Россия, Стабильное будущее", "rossiya-stabilnoe-budushchee", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "19.5"},
+		{"ПСБ, Народный пенсионеру", "psb-narodny", Holding{Variant: "pensioner", OpenedOn: day("2026-10-16"), Term: 91, Amount: 50_000_00}, "2026-10-20", 50_000_00, nil, "27"},
+		{"ПСБ, Ставка на будущее", "psb-stavka-na-budushchee", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 32, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "28"},
+		// Кубань Кредит «Пенсионный специальный»: ½ КС на 100 000 ₽ и 0,4 КС сверх — 200 000 ₽ при ключевой 14 — 6,3.
+		{"Кубань, пенсионный", "kubankredit-pensionny", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 1100, Amount: 200_000_00}, "2026-10-20", 200_000_00, nil, "6.3"},
+		{"Кубань, детский", "kubankredit-detsky", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 365, Amount: 3_000_000_00}, "2026-10-20", 3_000_000_00, nil, "12.6"},
+		{"Новиком, Капитал", "novikom-kapital", Holding{Variant: "rub", OpenedOn: day("2026-10-16"), Term: 91, Amount: 1_000_000_00}, "2026-10-20", 1_000_000_00, nil, "11"},
+		{"Новиком, премиум онлайн", "novikom-kapital", Holding{Variant: "premium-online", OpenedOn: day("2026-10-16"), Term: 91, Amount: 60_000_000_00}, "2026-10-20", 60_000_000_00, nil, "13.8"},
 	}
 	for _, c := range cases {
 		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))

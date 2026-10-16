@@ -1,0 +1,192 @@
+id: uralsib-dohod
+bank: uralsib
+name: Вклад «Доход»
+kind: deposit
+watch:
+  - https://uralsib.ru/vklady-scheta/vklady
+editions:
+  - from: 2026-09-25
+    checked_on: 2026-10-16
+    sources:
+      - https://uralsib.ru/api/directory-engine/files/rates/dohod_rur_cny_250926_gupdzgxo.pdf
+    notes: >-
+      Тарифы с 25.09.2026, рубли и юани. От 100 000 ₽ (онлайн — от 50 000 ₽); на 91 день — от 1,4 млн ₽. Проценты
+      на фактический ежедневный остаток: у «Дохода» — ежемесячно на отдельный счёт или в конце срока; у «Доход.
+      Премиум» (пакеты «Премиум», «Премиум Старт») и «Доход. Частный» (Private Banking) — ещё и капитализация (здесь
+      — базовая ставка, без учёта капитализации). В юанях — от 20 000 ¥, проценты ежемесячно. Досрочно — 0,01 %.
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 5000000, percent: "12.1" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13.7" }
+          - { from: 271, to: 271, amount_from: 5000000, percent: "13.8" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "13.8" }
+          - { from: 732, to: 732, amount_from: 5000000, percent: "11.3" }
+          - { from: 1100, to: 1100, amount_from: 5000000, percent: "10.4" }
+          - { from: 31, to: 31, amount_from: 100000000, percent: "12.8" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "13.85" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "13.95" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "14" }
+          - { from: 732, to: 732, amount_from: 100000000, percent: "11.4" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "10.7" }
+          - { from: 91, to: 91, amount_from: 140000000, percent: "13.5" }
+      - id: monthly
+        name: Проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13.2" }
+          - { from: 271, to: 271, amount_from: 5000000, percent: "13.1" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "12.97" }
+          - { from: 732, to: 732, amount_from: 5000000, percent: "9.75" }
+          - { from: 1100, to: 1100, amount_from: 5000000, percent: "8.93" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "13.3" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "13.2" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "13.17" }
+          - { from: 732, to: 732, amount_from: 100000000, percent: "9.95" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "9.16" }
+      - id: premium-end
+        name: «Доход. Премиум», проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 5000000, percent: "12.2" }
+          - { from: 91, to: 91, amount_from: 5000000, percent: "13.4" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13.7" }
+          - { from: 271, to: 271, amount_from: 5000000, percent: "13.8" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "13.9" }
+          - { from: 732, to: 732, amount_from: 5000000, percent: "11.3" }
+          - { from: 1100, to: 1100, amount_from: 5000000, percent: "10.4" }
+          - { from: 31, to: 31, amount_from: 100000000, percent: "12.9" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "13.6" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "13.9" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "14" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "14.1" }
+          - { from: 732, to: 732, amount_from: 100000000, percent: "11.4" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "10.7" }
+          - { from: 31, to: 31, amount_from: 1000000000, percent: "12.95" }
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "13.65" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "13.95" }
+          - { from: 271, to: 271, amount_from: 1000000000, percent: "14.05" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "14.2" }
+          - { from: 732, to: 732, amount_from: 1000000000, percent: "11.5" }
+          - { from: 1100, to: 1100, amount_from: 1000000000, percent: "10.8" }
+      - id: premium-monthly
+        name: «Доход. Премиум», проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "13.06" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13.23" }
+          - { from: 271, to: 271, amount_from: 5000000, percent: "13.12" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "13.01" }
+          - { from: 732, to: 732, amount_from: 5000000, percent: "9.82" }
+          - { from: 1100, to: 1100, amount_from: 5000000, percent: "8.93" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "13.25" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "13.42" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "13.35" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "13.17" }
+          - { from: 732, to: 732, amount_from: 100000000, percent: "9.98" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "9.16" }
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "13.35" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "13.52" }
+          - { from: 271, to: 271, amount_from: 1000000000, percent: "13.39" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "13.3" }
+          - { from: 732, to: 732, amount_from: 1000000000, percent: "10.11" }
+          - { from: 1100, to: 1100, amount_from: 1000000000, percent: "9.24" }
+      - id: private-end
+        name: «Доход. Частный», проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "13.4" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13.7" }
+          - { from: 271, to: 271, amount_from: 5000000, percent: "13.8" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "13.9" }
+          - { from: 732, to: 732, amount_from: 5000000, percent: "11.3" }
+          - { from: 1100, to: 1100, amount_from: 5000000, percent: "10.4" }
+          - { from: 31, to: 31, amount_from: 100000000, percent: "13.1" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "13.65" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "13.95" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "14" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "14.1" }
+          - { from: 732, to: 732, amount_from: 100000000, percent: "11.4" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "10.7" }
+          - { from: 31, to: 31, amount_from: 1000000000, percent: "13.2" }
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "13.8" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "14.05" }
+          - { from: 271, to: 271, amount_from: 1000000000, percent: "14.15" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "14.3" }
+          - { from: 732, to: 732, amount_from: 1000000000, percent: "11.6" }
+          - { from: 1100, to: 1100, amount_from: 1000000000, percent: "10.85" }
+      - id: private-monthly
+        name: «Доход. Частный», проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "13.06" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13.23" }
+          - { from: 271, to: 271, amount_from: 5000000, percent: "13.12" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "13.01" }
+          - { from: 732, to: 732, amount_from: 5000000, percent: "9.82" }
+          - { from: 1100, to: 1100, amount_from: 5000000, percent: "8.93" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "13.25" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "13.47" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "13.35" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "13.17" }
+          - { from: 732, to: 732, amount_from: 100000000, percent: "9.98" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "9.16" }
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "13.45" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "13.61" }
+          - { from: 271, to: 271, amount_from: 1000000000, percent: "13.49" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "13.39" }
+          - { from: 732, to: 732, amount_from: 1000000000, percent: "10.19" }
+          - { from: 1100, to: 1100, amount_from: 1000000000, percent: "9.27" }
+      - id: cny
+        name: В юанях
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 2000000, percent: "1.35" }
+          - { from: 367, to: 367, amount_from: 2000000, percent: "3.25" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "2.6" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "4" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "2.75" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "4.2" }
+        currency: CNY
+      - id: cny-premium
+        name: В юанях, «Доход. Премиум»
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 2000000, percent: "1.35" }
+          - { from: 367, to: 367, amount_from: 2000000, percent: "3.25" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "2.65" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "4.07" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "2.8" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "4.31" }
+        currency: CNY
+      - id: cny-private
+        name: В юанях, «Доход. Частный»
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 2000000, percent: "1.35" }
+          - { from: 367, to: 367, amount_from: 2000000, percent: "3.25" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "2.7" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "4.17" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "2.9" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "4.41" }
+        currency: CNY

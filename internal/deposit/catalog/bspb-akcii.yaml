@@ -1,0 +1,91 @@
+id: bspb-akcii
+bank: bspb
+name: Вклады «Осень», «Пополняемый», «Выгодный старт»
+kind: deposit
+watch:
+  - https://www.bspb.ru/retail/deposits/promo
+editions:
+  - from: 2026-10-08
+    checked_on: 2026-10-16
+    sources:
+      - https://s3.ru-msk.k2.cloud/bucket-cms-prod/kratkie_92a9a2fc64.pdf
+    notes: >-
+      «Краткие условия по вкладам» с 08.10.2026, от 10 000 ₽, сроки в месяцах; online — на 0,5 п. п. выше, чем в
+      офисе. «Осень» — сезонный, без пополнения и снятия. «Пополняемый» — пополнение до двойной суммы открытия.
+      «Выгодный старт» — новым клиентам в 30 дней после первого договора обслуживания, 3 месяца, до 500 000 ₽.
+    variants:
+      - id: osen-online-end
+        name: «Осень» online, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "13" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "13.5" }
+      - id: osen-online-monthly
+        name: «Осень» online, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "12.8" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "13.1" }
+      - id: osen-office-end
+        name: «Осень» в офисе, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "12.5" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "13" }
+      - id: osen-office-monthly
+        name: «Осень» в офисе, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "12.3" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "12.6" }
+      - id: popolnyaemy-online-end
+        name: «Пополняемый» online, в конце срока
+        payouts: [end]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "11.8" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "11.5" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "10.5" }
+      - id: popolnyaemy-online-monthly
+        name: «Пополняемый» online, ежемесячно
+        payouts: [monthly]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "11.6" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "11.1" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "9.7" }
+      - id: popolnyaemy-office-end
+        name: «Пополняемый» в офисе, в конце срока
+        payouts: [end]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "11.3" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "11" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "10" }
+      - id: popolnyaemy-office-monthly
+        name: «Пополняемый» в офисе, ежемесячно
+        payouts: [monthly]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "11.1" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "10.6" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "9.2" }
+      - id: start
+        name: «Выгодный старт»
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "15" }

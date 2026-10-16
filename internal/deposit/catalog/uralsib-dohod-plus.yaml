@@ -1,0 +1,30 @@
+id: uralsib-dohod-plus
+bank: uralsib
+name: Вклад «Доход Плюс»
+kind: deposit
+watch:
+  - https://uralsib.ru/vklady-scheta/vklady
+editions:
+  - from: 2026-09-25
+    checked_on: 2026-10-16
+    sources:
+      - https://uralsib.ru/api/directory-engine/files/rates/dohod-plyus_250926_cobykvqz.pdf
+    notes: >-
+      Для новых клиентов (30 дней со счёта в банке или два года без вкладов и накопительных), один раз. 181 день, от
+      2,5 до 7 млн ₽, проценты в конце срока; «Доход Плюс. Премиум» — в пакетах «Премиум» и «Премиум Старт».
+      Досрочно — 0,01 %.
+    variants:
+      - id: end
+        name: «Доход Плюс»
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 250000000, percent: "14.5" }
+      - id: premium
+        name: «Доход Плюс. Премиум»
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 250000000, percent: "15" }

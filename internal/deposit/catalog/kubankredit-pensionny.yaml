@@ -1,0 +1,36 @@
+id: kubankredit-pensionny
+bank: kubankredit
+name: Вклад «Пенсионный специальный»
+kind: deposit
+watch:
+  - https://kk.ru/deposits/pensionnyy/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://kk.ru/deposits/pensionnyy/
+      - https://kk.ru/upload/iblock/c87/f73yllnpnilg3a1bz0ry8bak7gu3nrkw.pdf
+    notes: >-
+      Для пенсионеров, один вклад на человека; на счёт вклада можно получать пенсию. Ставка — от ключевой ставки
+      Банка России и меняется вместе с ней: на остаток до 100 000 ₽ — половина ключевой, на сумму сверх — 0,4
+      ключевой. Пополнение и снятие до неснижаемого остатка 10 ₽, капитализация раз в квартал, продление без
+      ограничения числа. Онлайн — 1100 дней, в офисе — 37 месяцев.
+    variants:
+      - id: online
+        name: Онлайн, 1100 дней
+        payouts: [quarterly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 1100, to: 1100, amount_from: 0, key_times: "0.5" }
+          - { from: 1100, to: 1100, amount_from: 10000001, key_times: "0.4" }
+        split: true
+      - id: office
+        name: В офисе, 37 месяцев
+        payouts: [quarterly]
+        ops: topup_withdraw
+        term_unit: months
+        grid:
+          - { from: 37, to: 37, amount_from: 0, key_times: "0.5" }
+          - { from: 37, to: 37, amount_from: 10000001, key_times: "0.4" }
+        split: true

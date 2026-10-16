@@ -1,0 +1,27 @@
+id: domrf-nakopitelnaya-ipoteka
+bank: domrf
+name: Вклад «Накопительная ипотека»
+kind: deposit
+watch:
+  - https://domrfbank.ru/deposits/docs/
+editions:
+  - from: 2026-10-09
+    checked_on: 2026-10-16
+    sources:
+      - https://domrfbank.ru/upload/iblock/800/n33j3oorrtxgwcuvzx0npw3zuw7yv7bf/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2009.10.2026.pdf
+    notes: >-
+      Вклад для накопления на первоначальный взнос по ипотеке, от 3 000 до 15 млн ₽; ставки по таблице банка с
+      09.10.2026.
+    variants:
+      - id: main
+        name: «Накопительная ипотека»
+        payouts: [end]
+        ops: topup
+        term_unit: days
+        grid:
+          - { from: 367, to: 367, amount_from: 300000, percent: "7.5" }
+          - { from: 550, to: 550, amount_from: 300000, percent: "6.5" }
+          - { from: 730, to: 730, amount_from: 300000, percent: "5.5" }
+          - { from: 1100, to: 1100, amount_from: 300000, percent: "5" }
+          - { from: 1450, to: 1450, amount_from: 300000, percent: "4" }
+          - { from: 1795, to: 1795, amount_from: 300000, percent: "3" }

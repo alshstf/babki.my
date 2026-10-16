@@ -1,0 +1,24 @@
+id: psb-moy-vybor
+bank: psb
+name: Вклад «Мой выбор»
+kind: deposit
+watch:
+  - https://www.psbank.ru/personal/saving
+  - https://www.psbank.ru/personal/saving
+editions:
+  - from: 2026-09-29
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/conditionsterms.pdf
+    notes: >-
+      Условия вкладов с 29.09.2026. Для зарплатных клиентов ПСБ, только в PSB-Retail и PSB-Mobile, один вклад; от 50 000 ₽, без пополнения и снятия, проценты в конце срока.
+    variants:
+      - id: main
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "14" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "14.4" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "14" }

@@ -1,0 +1,29 @@
+id: kubankredit-dolgosrochny
+bank: kubankredit
+name: «Долгосрочный вклад»
+kind: deposit
+watch:
+  - https://kk.ru/deposits/dolgosrochniy-vklad/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://kk.ru/deposits/dolgosrochniy-vklad/
+    notes: >-
+      Дата редакции у банка не указана — ставки страницы в день сверки. От 5 000 ₽ (ступень — от 1 млн ₽), без
+      пополнения и снятия, проценты в конце срока. Продление — 2 раза у сроков 91–270 дней, 1 раз — у 271–366.
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 180, amount_from: 500000, percent: "12.5" }
+          - { from: 181, to: 270, amount_from: 500000, percent: "12" }
+          - { from: 271, to: 366, amount_from: 500000, percent: "11" }
+          - { from: 367, to: 545, amount_from: 500000, percent: "10.5" }
+          - { from: 91, to: 180, amount_from: 100000000, percent: "13" }
+          - { from: 181, to: 270, amount_from: 100000000, percent: "12.5" }
+          - { from: 271, to: 366, amount_from: 100000000, percent: "12" }
+          - { from: 367, to: 545, amount_from: 100000000, percent: "11" }

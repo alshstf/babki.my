@@ -1,0 +1,39 @@
+id: bspb-pensionny
+bank: bspb
+name: Вклад «Пенсионный»
+kind: deposit
+watch:
+  - https://www.bspb.ru/retail/deposits/pensionnyj
+editions:
+  - from: 2026-10-08
+    checked_on: 2026-10-16
+    sources:
+      - https://s3.ru-msk.k2.cloud/bucket-cms-prod/kratkie_92a9a2fc64.pdf
+    notes: >-
+      «Краткие условия по вкладам» с 08.10.2026. Открыть можно в 30 дней после заявления о переводе пенсии в банк;
+      от 10 000 ₽, совокупно до 1 млн ₽, без пополнения и снятия. Продление — на условиях «Депозит 2.0».
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 1000000, percent: "15.5" }
+          - { from: 3, to: 3, amount_from: 1000000, percent: "15.2" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "14.2" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "13" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "12" }
+          - { from: 36, to: 36, amount_from: 1000000, percent: "12" }
+      - id: monthly
+        name: Проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 1000000, percent: "15.5" }
+          - { from: 3, to: 3, amount_from: 1000000, percent: "15" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "13.8" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "12.2" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "10.4" }
+          - { from: 36, to: 36, amount_from: 1000000, percent: "9.5" }

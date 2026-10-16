@@ -1,0 +1,32 @@
+id: rshb-pensionny-plus
+bank: rshb
+name: Вклад «Пенсионный Плюс»
+kind: deposit
+watch:
+  - https://www.rshb.ru/natural/deposits/pensionary-plus
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.rshb.ru/natural/deposits/pensionary-plus
+      - https://www.rshb.ru/wcms-resources/tariffs-inner-table-data-pensionnij-plus.json
+    notes: >-
+      Для пенсионеров (по пенсионному удостоверению или справке о пенсии). Дата редакции у банка не указана —
+      ставки страницы в день сверки. Ступень — по неснижаемому остатку: от 500 ₽ и свыше 2 млн ₽. Пополнение, снятие
+      до неснижаемого остатка, капитализация ежемесячно. Продление — по ставке дня продления, за прошлые сроки
+      проценты сохраняются.
+    variants:
+      - id: main
+        name: «Пенсионный Плюс»
+        payouts: [capitalize]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 365, to: 365, amount_from: 50000, percent: "5" }
+          - { from: 395, to: 395, amount_from: 50000, percent: "6" }
+          - { from: 730, to: 730, amount_from: 50000, percent: "4.8" }
+          - { from: 1095, to: 1095, amount_from: 50000, percent: "3.8" }
+          - { from: 365, to: 365, amount_from: 200000100, percent: "5.2" }
+          - { from: 395, to: 395, amount_from: 200000100, percent: "6.2" }
+          - { from: 730, to: 730, amount_from: 200000100, percent: "5" }
+          - { from: 1095, to: 1095, amount_from: 200000100, percent: "4" }

@@ -1,0 +1,33 @@
+id: rshb-moya-kopilka
+bank: rshb
+name: Накопительный счёт «Моя копилка»
+kind: savings
+watch:
+  - https://www.rshb.ru/natural/deposits/my-moneybox
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.rshb.ru/natural/deposits/my-moneybox
+      - https://www.rshb.ru/wcms-resources/tariffs-inner-table-data-moya-kopilka.json
+    notes: >-
+      Дата редакции у банка не указана — ставки страницы в день сверки. Проценты — на минимальный остаток месяца,
+      капитализация ежемесячно. В рублях 7,5 % (остаток до 100 ₽ — 0,01 %); в юанях — 1 % до 20 000 ¥ и 1,2 % свыше.
+    variants:
+      - id: rub
+        name: В рублях
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { amount_from: 0, percent: "0.01" }
+          - { amount_from: 10001, percent: "7.5" }
+      - id: cny
+        name: В юанях
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { amount_from: 0, percent: "1" }
+          - { amount_from: 2000001, percent: "1.2" }

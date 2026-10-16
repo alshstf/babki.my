@@ -13,7 +13,8 @@ editions:
     notes: >-
       «Краткие условия по вкладам» с 08.10.2026: от 10 000 ₽, без пополнения и снятия; online — на 0,5 п. п. выше, чем
       в офисе. Сроки — 31, 91, 181, 367, 733 и 1097 дней. Продление — на условиях вклада «Депозит 2.0» в день продления
-      (у online — по выбору). Досрочно — ставка «До востребования».
+      (у online — по выбору). Досрочно — ставка «До востребования». В долларах, евро и юанях — от 1 000, сроки в
+      месяцах, ставки online и в офисе одинаковые.
     variants:
       - id: online-end
         name: Online, проценты в конце срока
@@ -63,3 +64,71 @@ editions:
           - { from: 367, to: 367, amount_from: 1000000, percent: "10.7" }
           - { from: 733, to: 733, amount_from: 1000000, percent: "7.9" }
           - { from: 1097, to: 1097, amount_from: 1000000, percent: "7" }
+      - id: usd-end
+        name: В долларах, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 100000, percent: "0.5" }
+          - { from: 6, to: 6, amount_from: 100000, percent: "0.7" }
+          - { from: 12, to: 12, amount_from: 100000, percent: "2" }
+          - { from: 24, to: 24, amount_from: 100000, percent: "3" }
+        currency: USD
+      - id: usd-monthly
+        name: В долларах, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 100000, percent: "0.4" }
+          - { from: 6, to: 6, amount_from: 100000, percent: "0.6" }
+          - { from: 12, to: 12, amount_from: 100000, percent: "1.8" }
+          - { from: 24, to: 24, amount_from: 100000, percent: "2.7" }
+        currency: USD
+      - id: eur-end
+        name: В евро, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 100000, percent: "0.5" }
+          - { from: 6, to: 6, amount_from: 100000, percent: "0.7" }
+          - { from: 12, to: 12, amount_from: 100000, percent: "1.5" }
+          - { from: 24, to: 24, amount_from: 100000, percent: "2" }
+        currency: EUR
+      - id: eur-monthly
+        name: В евро, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 100000, percent: "0.4" }
+          - { from: 6, to: 6, amount_from: 100000, percent: "0.6" }
+          - { from: 12, to: 12, amount_from: 100000, percent: "1.4" }
+          - { from: 24, to: 24, amount_from: 100000, percent: "1.7" }
+        currency: EUR
+      - id: cny-end
+        name: В юанях, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 100000, percent: "1" }
+          - { from: 6, to: 6, amount_from: 100000, percent: "2" }
+          - { from: 12, to: 12, amount_from: 100000, percent: "3" }
+          - { from: 24, to: 24, amount_from: 100000, percent: "3.5" }
+          - { from: 36, to: 36, amount_from: 100000, percent: "3.5" }
+        currency: CNY
+      - id: cny-monthly
+        name: В юанях, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 100000, percent: "1" }
+          - { from: 6, to: 6, amount_from: 100000, percent: "1.9" }
+          - { from: 12, to: 12, amount_from: 100000, percent: "2.8" }
+          - { from: 24, to: 24, amount_from: 100000, percent: "3.1" }
+          - { from: 36, to: 36, amount_from: 100000, percent: "2.9" }
+        currency: CNY

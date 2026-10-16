@@ -1,0 +1,26 @@
+id: rossiya-stabilnoe-budushchee
+bank: rossiya
+name: Вклад «Стабильное будущее»
+kind: deposit
+watch:
+  - https://abr.ru/face/deposits/stablefuture/
+editions:
+  - from: 2026-02-20
+    checked_on: 2026-10-16
+    sources:
+      - https://abr.ru/upload/iblock/96f/Minimalnye_garantirovannye_stavki_13.10.26.pdf
+      - https://abr.ru/face/deposits/stablefuture/
+    notes: >-
+      Ставки с 20.02.2026. Только для участников программы долгосрочных сбережений в НПФ ГАЗФОНД пенсионные
+      накопления, открывается одновременно со вступлением, в офисе; от 30 000 ₽ и не больше первого взноса. Без
+      пополнения и снятия. Расторгли договор раньше 60 дней — ставка по вкладу снижается: впишите её вручную.
+    variants:
+      - id: main
+        name: В офисе
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 3000000, percent: "19.5" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "17" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "15" }
