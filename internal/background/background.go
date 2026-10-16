@@ -204,7 +204,7 @@ func NewWorkers(
 	reminders := notify.WithStorages(notify.NewRemindersWorker(notify.NewStore(pool),
 		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
 		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log), worth)
-	river.AddWorker(workers, notify.WithGoals(reminders, goals.NewService(pool, structures, accounts)))
+	river.AddWorker(workers, notify.WithGoals(reminders, goals.NewService(pool, structures, accounts).WithKeyRates(mdStore)))
 	return workers
 }
 

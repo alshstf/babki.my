@@ -44,8 +44,10 @@ type Handler struct {
 	// journals values brokerage accounts from their operations; nil values every
 	// account by its balance.
 	journals journalValuer
-	auth     *family.Auth
-	sm       *scs.SessionManager
+	// keys strike a rate tied to the key rate (WithKeyRates).
+	keys keyRates
+	auth *family.Auth
+	sm   *scs.SessionManager
 }
 
 func NewHandler(store *Store, spaces spaceStore, converter converter, journals journalValuer, auth *family.Auth, sm *scs.SessionManager) *Handler {
@@ -64,6 +66,9 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PATCH /api/v1/accounts/{accountId}", edit(h.handleUpdate))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}", edit(h.handleArchive))
 	srv.Mount("PUT /api/v1/accounts/{accountId}/balance", edit(h.handleSetBalance))
+	srv.Mount("GET /api/v1/accounts/{accountId}/rates", view(h.handleRates))
+	srv.Mount("PUT /api/v1/accounts/{accountId}/rates", edit(h.handleSetRate))
+	srv.Mount("DELETE /api/v1/accounts/{accountId}/rates/{fromOn}", edit(h.handleDeleteRate))
 	srv.Mount("GET /api/v1/summary", view(h.handleSummary))
 	srv.Mount("GET /api/v1/capital", view(h.handleCapital))
 	srv.Mount("GET /api/v1/return", view(h.handleFamilyReturn))

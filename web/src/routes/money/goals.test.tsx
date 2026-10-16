@@ -30,7 +30,7 @@ const accounts = [
 ];
 
 const base: Omit<Goal, "id" | "name"> = {
-  target_minor: null, target_on: null, monthly_minor: null, yield_percent: "0.00", funds: [], saved_minor: 0, percent: 0,
+  target_minor: null, target_on: null, monthly_minor: null, yield_percent: "0.00", growth_percent: "0.000", funds: [], saved_minor: 0, percent: 0,
   status: "none", projected_minor: null, short_minor: null, needed_minor: null, reach_on: null, months: 0, overdrawn: [],
 };
 
@@ -43,18 +43,18 @@ const family: Goals = {
   broker_monthly_minor: 30_000_00,
   goals: [
     {
-      ...base, id: "g-cushion", name: "Подушка", target_minor: 570_000_00, monthly_minor: 15_000_00, yield_percent: "14.00",
-      funds: [{ account_id: "a-save", amount_minor: null, value_minor: 450_000_00 }], saved_minor: 450_000_00, percent: 78,
+      ...base, id: "g-cushion", name: "Подушка", target_minor: 570_000_00, monthly_minor: 15_000_00, yield_percent: "14.00", growth_percent: "16.000",
+      funds: [{ account_id: "a-save", amount_minor: null, value_minor: 450_000_00, rate_percent: "16.000", rate_by_hand: true }], saved_minor: 450_000_00, percent: 78,
       reach_on: "2027-05-01", months: 6,
     },
     {
       ...base, id: "g-holiday", name: "Отпуск", target_minor: 250_000_00, target_on: "2027-07-01", monthly_minor: 20_000_00,
-      funds: [{ account_id: "a-card", amount_minor: 70_000_00, value_minor: 70_000_00 }], saved_minor: 70_000_00, percent: 28,
+      funds: [{ account_id: "a-card", amount_minor: 70_000_00, value_minor: 70_000_00, rate_percent: null, rate_by_hand: false }], saved_minor: 70_000_00, percent: 28,
       status: "at_risk", projected_minor: 230_000_00, short_minor: 20_000_00, needed_minor: 22_500_00, reach_on: "2027-08-01", months: 8,
     },
     {
-      ...base, id: "g-flat", name: "Первый взнос", target_minor: 2_000_000_00, target_on: "2029-09-01", monthly_minor: 30_000_00, yield_percent: "10.00",
-      funds: [{ account_id: "a-broker", amount_minor: 800_000_00, value_minor: 800_000_00 }], saved_minor: 800_000_00, percent: 40,
+      ...base, id: "g-flat", name: "Первый взнос", target_minor: 2_000_000_00, target_on: "2029-09-01", monthly_minor: 30_000_00, yield_percent: "10.00", growth_percent: "10.000",
+      funds: [{ account_id: "a-broker", amount_minor: 800_000_00, value_minor: 800_000_00, rate_percent: null, rate_by_hand: false }], saved_minor: 800_000_00, percent: 40,
       status: "ahead", projected_minor: 2_234_000_00, needed_minor: 25_000_00, months: 34,
     },
   ],
@@ -101,8 +101,11 @@ describe("GoalsCard", () => {
     const [cushion, holiday, flat] = goals.map((g) => norm(g.textContent));
     expect(cushion).toContain("450 000 ₽ из 570 000 ₽ · 78 %");
     expect(cushion).toContain("При взносе 15 000 ₽ в месяц цель будет собрана к 01.05.2027.");
-    await waitFor(() => expect(norm(goals[0].textContent)).toContain("Накопительный — весь счёт, 450 000 ₽"));
-    expect(cushion).toContain("Доходность в расчёте — 14 % в год");
+    await waitFor(() => expect(norm(goals[0].textContent)).toContain("Накопительный — весь счёт, 450 000 ₽ · 16 % годовых, вручную"));
+    // The savings account's own rate, not the goal's 14 (decision Р-51 А).
+    expect(cushion).toContain("Рост в расчёте — 16 % в год, по ставкам счетов");
+    expect(cushion).not.toContain("14 %");
+    expect(norm(goals[2].textContent)).toContain("Доходность в расчёте — 10 % в год");
     expect(holiday).toContain("к 01.07.2027");
     expect(within(goals[1]).getByTestId("goal-status").textContent).toBe("не успеваете");
     expect(holiday).toContain("Взносов до срока: 8 по 20 000 ₽ — будет 230 000 ₽.");

@@ -136,12 +136,30 @@ function GoalRow({
               : f.value_minor < f.amount_minor
                 ? t("goals.fundPartShort", { account: accountName(f.account_id), amount: money(f.amount_minor), value: money(f.value_minor) })
                 : t("goals.fundPart", { account: accountName(f.account_id), amount: money(f.amount_minor) })}
+            {f.rate_percent !== null && t(f.rate_by_hand ? "goals.fundRateByHand" : "goals.fundRate", { percent: percent(f.rate_percent) })}
           </li>
         ))}
         {g.funds.length === 0 && <li>{t("goals.noFunds")}</li>}
-        {Number(g.yield_percent) !== 0 && <li>{t("goals.yield", { percent: percent(g.yield_percent) })}</li>}
+        <Growth goal={g} />
       </ul>
     </div>
+  );
+}
+
+// Growth is the rate the goal grows at (decision Р-51 А): the deposits' and
+// savings accounts' own rates, the rest at the goal's yield.
+function Growth({ goal: g }: { goal: Goal }) {
+  const { t } = useTranslation();
+  const rated = g.funds.filter((f) => f.rate_percent !== null).length;
+  if (rated === 0) {
+    return Number(g.yield_percent) !== 0 ? <li>{t("goals.yield", { percent: percent(g.yield_percent) })}</li> : null;
+  }
+  return (
+    <li data-testid="goal-growth">
+      {rated === g.funds.length
+        ? t("goals.growthRates", { growth: percent(g.growth_percent) })
+        : t("goals.growth", { growth: percent(g.growth_percent), yield: percent(g.yield_percent) })}
+    </li>
   );
 }
 

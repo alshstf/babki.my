@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
@@ -40,7 +42,7 @@ func TestGoalsOverHTTP(t *testing.T) {
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
 	account.NewHandler(accStore, famStore, marketdata.NewConverter(md), nil, auth, sm).Mount(srv)
 	structures := structure.NewService(accStore, noPositions{}, famStore, marketdata.NewConverter(md))
-	goals.NewHandler(goals.NewService(pool, structures, accStore), auth, sm).Mount(srv)
+	goals.NewHandler(goals.NewService(pool, structures, accStore).WithKeyRates(md), auth, sm).Mount(srv)
 	url, c := apitest.Serve(t, srv.Handler())
 
 	mk := func(name, typ string, balance int64) string {
@@ -57,6 +59,11 @@ func TestGoalsOverHTTP(t *testing.T) {
 	}
 	savings, card, credit := mk("Накопительный", "savings", 450_000_00), mk("Карта", "checking", 180_000_00), mk("Кредитка", "credit_card", -10_000_00)
 	broker := mk("Брокерский", "brokerage", 1_200_000_00)
+	// The savings account pays 16 % (decision Р-51 А); the cushion grows at
+	// it, not at the 14 written into the goal.
+	if r := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+savings+"/rates", `{"from_on":"2026-01-01","kind":"fixed","percent":"16"}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("rate = %d", r.StatusCode)
+	}
 
 	var got apitypes.Goals
 	cushion := fmt.Sprintf(`{"name":"Подушка","target_minor":57000000,"target_on":null,"monthly_minor":1500000,"yield_percent":"14","funds":[{"account_id":%q,"amount_minor":null}]}`, savings)
@@ -67,10 +74,12 @@ func TestGoalsOverHTTP(t *testing.T) {
 		t.Fatalf("goals = %+v", got)
 	}
 	c0, h := got.Goals[0], got.Goals[1]
-	if c0.Name != "Подушка" || c0.SavedMinor != 450_000_00 || c0.Status != "none" || c0.ReachOn.IsNull() || c0.Funds[0].ValueMinor != 450_000_00 {
+	if c0.Name != "Подушка" || c0.SavedMinor != 450_000_00 || c0.Status != "none" || c0.ReachOn.IsNull() || c0.Funds[0].ValueMinor != 450_000_00 ||
+		c0.GrowthPercent != "16.000" || c0.Funds[0].RatePercent.MustGet() != "16.000" || !c0.Funds[0].RateByHand {
 		t.Errorf("cushion = %+v", c0)
 	}
-	if h.SavedMinor != 70_000_00 || h.Status != "ahead" || h.TargetOn.MustGet() != "2099-07-01" || h.Funds[0].AmountMinor.MustGet() != 70_000_00 {
+	if h.SavedMinor != 70_000_00 || h.Status != "ahead" || h.TargetOn.MustGet() != "2099-07-01" || h.Funds[0].AmountMinor.MustGet() != 70_000_00 ||
+		h.GrowthPercent != "0.000" || !h.Funds[0].RatePercent.IsNull() {
 		t.Errorf("holiday = %+v", h)
 	}
 
@@ -110,5 +119,32 @@ func TestGoalsOverHTTP(t *testing.T) {
 	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/goals", first), &got)
 	if got.MonthlyMinor != 45_000_00 || got.BrokerMonthlyMinor != 30_000_00 {
 		t.Errorf("a month = %d, of it to the broker %d; want 45 000 and 30 000", got.MonthlyMinor, got.BrokerMonthlyMinor)
+	}
+
+	// A car on 400 000 of the broker at the goal's 10 % and a deposit at the
+	// key rate less 1 — 16 % on 200 000: the goal grows at 12.
+	if err := md.UpsertKeyRates(t.Context(), []marketdata.KeyRate{{On: time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC), Rate: decimal.NewFromInt(17), Source: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	deposit := mk("Вклад", "deposit", 200_000_00)
+	if r := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+deposit+"/rates", `{"from_on":"2026-01-01","kind":"key","percent":"-1"}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("key rate = %d", r.StatusCode)
+	}
+	car := fmt.Sprintf(`{"name":"Машина","target_minor":300000000,"target_on":null,"monthly_minor":null,"yield_percent":"10","funds":[{"account_id":%q,"amount_minor":40000000},{"account_id":%q,"amount_minor":null}]}`, broker, deposit)
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/goals", car), &got)
+	for _, g := range got.Goals {
+		if g.Name != "Машина" {
+			continue
+		}
+		rate := map[string]string{}
+		for _, f := range g.Funds {
+			rate[f.AccountId.String()] = "none"
+			if !f.RatePercent.IsNull() {
+				rate[f.AccountId.String()] = f.RatePercent.MustGet()
+			}
+		}
+		if g.GrowthPercent != "12.000" || rate[broker] != "none" || rate[deposit] != "16.000" {
+			t.Errorf("car grows at %s, its funds' rates %v", g.GrowthPercent, rate)
+		}
 	}
 }

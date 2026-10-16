@@ -20,6 +20,7 @@ var exported = map[string]string{
 	"sessions":                    "logins, nothing entered",
 	"accounts":                    "",
 	"account_balances":            "",
+	"account_rates":               "",
 	"categories":                  "",
 	"category_defaults":           "a mark that the default categories were laid, not data",
 	"category_rules":              "",

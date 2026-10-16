@@ -126,7 +126,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, spaceID uuid.UUI
 	out.MonthlyMinor, out.BrokerMonthlyMinor = Contributions(list)
 	for _, v := range list {
 		g := apitypes.Goal{
-			Id: v.ID, Name: v.Name, TargetMinor: of(v.Target), MonthlyMinor: of(v.Monthly), YieldPercent: v.Yield.StringFixed(2),
+			Id: v.ID, Name: v.Name, TargetMinor: of(v.Target), MonthlyMinor: of(v.Monthly), YieldPercent: v.Yield.StringFixed(2), GrowthPercent: v.Growth.StringFixed(3),
 			TargetOn: nullable.NewNullNullable[string](), SavedMinor: v.Progress.Saved, Status: apitypes.GoalStatus(v.Progress.Status),
 			Percent: v.Progress.Percent, ProjectedMinor: of(v.Progress.Projected), ShortMinor: of(v.Progress.Short), NeededMinor: of(v.Progress.Needed), ReachOn: nullable.NewNullNullable[string](),
 			Months: v.Progress.Months, Funds: make([]apitypes.GoalFund, 0, len(v.Funds)), Overdrawn: v.Overdrawn,
@@ -141,7 +141,12 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, spaceID uuid.UUI
 			g.ReachOn = nullable.NewNullableWithValue(v.Progress.ReachOn.Format(time.DateOnly))
 		}
 		for _, f := range v.Funds {
-			g.Funds = append(g.Funds, apitypes.GoalFund{AccountId: f.Account, AmountMinor: of(f.Minor), ValueMinor: v.FundValues[f.Account]})
+			fund := apitypes.GoalFund{AccountId: f.Account, AmountMinor: of(f.Minor), ValueMinor: v.FundValues[f.Account], RatePercent: nullable.NewNullNullable[string]()}
+			if r, ok := v.RateNow[f.Account]; ok {
+				fund.RatePercent = nullable.NewNullableWithValue(r.StringFixed(3))
+				fund.RateByHand = v.FundRates[f.Account].ByHand
+			}
+			g.Funds = append(g.Funds, fund)
 		}
 		out.Goals = append(out.Goals, g)
 	}
