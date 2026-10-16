@@ -1,6 +1,7 @@
 package family
 
 import (
+	_ "embed"
 	"regexp"
 	"slices"
 	"strings"
@@ -133,6 +134,15 @@ var taxResidencyRe = regexp.MustCompile(`^[A-Z]{2}$`)
 // taxRules maps a country of tax residency to its cost basis rules, one row
 // each with its norm. Rows that differ from fifo/account exist so the
 // application can say what it does not do.
+// treatiesRU are Russia's agreements on avoiding double taxation (decision
+// Р-50), from the Ministry of Finance's list of their status.
+//
+//go:embed treaties_ru.yaml
+var treatiesRU []byte
+
+// treatyBooks are the treaties of each residency the application keeps them for.
+var treatyBooks = map[string][]byte{"RU": treatiesRU}
+
 var taxRules = map[string]TaxRules{
 	// Russia. НК РФ ст. 214.1 п. 13: «по стоимости первых по времени
 	// приобретений» — FIFO, mandatory. 425-ФЗ keeps the queue per brokerage

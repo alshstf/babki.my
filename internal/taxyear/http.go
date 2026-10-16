@@ -187,7 +187,7 @@ func foreignAPI(f Foreign) apitypes.TaxYearForeign {
 		}
 		return nullable.NewNullableWithValue(t.Format(time.DateOnly))
 	}
-	out := apitypes.TaxYearForeign{Year: f.Year, Supported: true, Currency: f.Currency, Accounts: make([]apitypes.TaxYearForeignAccount, 0, len(f.Accounts))}
+	out := apitypes.TaxYearForeign{Year: f.Year, Supported: true, Currency: f.Currency, TreatiesAsOf: f.TreatiesAsOf, Accounts: make([]apitypes.TaxYearForeignAccount, 0, len(f.Accounts))}
 	for _, a := range f.Accounts {
 		acc := apitypes.TaxYearForeignAccount{
 			AccountId: a.ID, Name: a.Name, UserId: a.Person, Country: a.Country, CountryCode: countryCode(a.Country),
@@ -201,6 +201,7 @@ func foreignAPI(f Foreign) apitypes.TaxYearForeign {
 				Paper: p.Paper, Isin: p.ISIN, Country: p.Country, CountryCode: countryCode(p.Country), Currency: p.Currency,
 				CurrencyCode: currencyCode(p.Currency), AmountMinor: p.Minor, WithheldMinor: p.Withheld,
 				Rate: rate(p.Known, p.Rate), AmountBaseMinor: p.InBase, WithheldBaseMinor: p.WithheldInBase, TaxRuMinor: p.TaxRU, CreditMinor: p.Credit,
+				Treaty: apitypes.TaxYearForeignPayoutTreaty(p.Treaty), TreatyFrom: day(p.TreatyFrom),
 			})
 		}
 		for _, s := range a.Sales {

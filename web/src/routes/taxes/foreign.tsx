@@ -7,6 +7,7 @@ import { useTaxYearForeign, type TaxYearForeignAccount } from "@/api/tax-year";
 import { countryName } from "@/lib/country";
 import { formatDate } from "@/lib/dates";
 import { formatMinor } from "@/lib/money";
+import { cn } from "@/lib/utils";
 
 // ForeignReturn lays out each account at a broker abroad as the tax return
 // lists it (decision Р-45): Приложение 2's lines for every payment, the sales
@@ -30,7 +31,7 @@ export function ForeignReturn({ year }: { year: number }) {
           <AccountLines key={a.account_id} account={a} currency={c} year={data.year} person={person(a.user_id)} />
         ))}
         <div className="grid gap-1 text-xs text-muted-foreground">
-          <p>{t("taxReturn.credit")}</p>
+          <p>{data.treaties_as_of ? t("taxReturn.creditByTreaty", { date: formatDate(data.treaties_as_of) }) : t("taxReturn.credit")}</p>
           <p>{t("taxReturn.coupons")}</p>
           <p>{t("taxReturn.country")}</p>
         </div>
@@ -83,7 +84,17 @@ function AccountLines({ account: a, currency: c, year, person }: { account: TaxY
                     <TableCell className="text-right tabular-nums">{p.rate ? p.rate.replace(".", ",") : "—"}</TableCell>
                     <TableCell className="text-right tabular-nums">{p.rate ? formatMinor(p.amount_base_minor, c) : "—"}</TableCell>
                     <TableCell className="text-right tabular-nums">{p.withheld_minor > 0 ? formatMinor(p.withheld_base_minor, c) : "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{p.credit_minor > 0 ? formatMinor(p.credit_minor, c) : "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {p.credit_minor > 0 ? formatMinor(p.credit_minor, c) : "—"}
+                      {p.withheld_minor > 0 && treatyNote(t, p.treaty, p.treaty_from, p.country) && (
+                        <div
+                          className={cn("min-w-40 whitespace-normal text-xs", p.treaty === "partly" ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400")}
+                          data-testid="tax-foreign-treaty"
+                        >
+                          {treatyNote(t, p.treaty, p.treaty_from, p.country)}
+                        </div>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -154,6 +165,27 @@ function AccountLines({ account: a, currency: c, year, person }: { account: TaxY
       )}
     </div>
   );
+}
+
+// treatyNote says why a payment's tax abroad is credited or not (decision
+// Р-50): nothing where the treaty applies whole; literal keys for
+// scripts/check-i18n.mjs.
+function treatyNote(t: (key: string, v?: Record<string, unknown>) => string, state: string, from: string | null, country: string): string | null {
+  const v = { country: country ? countryName(country) : "", date: from ? formatDate(from) : "" };
+  switch (state) {
+    case "partly":
+      return t("taxReturn.treaty.partly", v);
+    case "suspended":
+      return t("taxReturn.treaty.suspended", v);
+    case "ended":
+      return t("taxReturn.treaty.ended", v);
+    case "none":
+      return t("taxReturn.treaty.none", v);
+    case "no_country":
+      return t("taxReturn.treaty.noCountry");
+    default:
+      return null;
+  }
 }
 
 // payoutName names a payment without a paper: the broker's interest.

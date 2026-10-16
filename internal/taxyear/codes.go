@@ -1,6 +1,7 @@
 package taxyear
 
 import (
+	"errors"
 	"fmt"
 
 	"golang.org/x/text/language"
@@ -9,6 +10,14 @@ import (
 // countryCode is a country's digital code of ОКСМ, the return's lines 010 and
 // 011 — ISO 3166-1 numeric, which ОКСМ follows; empty for no country, as an
 // ISIN's XS (a paper cleared internationally, its issuer's country not in it).
+// countryCodeOf is countryCode, refusing what is no country.
+func countryCodeOf(alpha2 string) (string, error) {
+	if c := countryCode(alpha2); c != "" {
+		return c, nil
+	}
+	return "", errors.New("taxyear: no country")
+}
+
 func countryCode(alpha2 string) string {
 	r, err := language.ParseRegion(alpha2)
 	if err != nil || len(alpha2) != 2 {

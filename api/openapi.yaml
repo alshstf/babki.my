@@ -4392,11 +4392,12 @@ components:
         entered: { type: boolean, description: "True when the gross and the tax withheld were written from the payslip; false when the program reckoned them from net_minor by the scale over the employer's year" }
     TaxYearForeign:
       type: object
-      required: [year, supported, currency, accounts]
+      required: [year, supported, currency, treaties_as_of, accounts]
       properties:
         year: { type: integer }
         supported: { type: boolean }
         currency: { type: string, description: "The year's tax currency, every *_base_minor's" }
+        treaties_as_of: { type: string, description: "Date YYYY-MM-DD of the Ministry of Finance's list of treaties the credit is judged by; empty when the residency's treaties are not kept" }
         accounts: { type: array, items: { $ref: "#/components/schemas/TaxYearForeignAccount" } }
     TaxYearForeignAccount:
       type: object
@@ -4415,7 +4416,7 @@ components:
         unvalued: { type: integer, description: "Lines left out of the sums for a missing rate or a lot's missing day" }
     TaxYearForeignPayout:
       type: object
-      required: [on, type, kind, instrument_id, paper, isin, country, country_code, currency, currency_code, amount_minor, withheld_minor, rate, amount_base_minor, withheld_base_minor, tax_ru_minor, credit_minor]
+      required: [on, type, kind, instrument_id, paper, isin, country, country_code, currency, currency_code, amount_minor, withheld_minor, rate, amount_base_minor, withheld_base_minor, tax_ru_minor, credit_minor, treaty, treaty_from]
       properties:
         on: { type: string, description: "Date YYYY-MM-DD, line 040" }
         type: { type: string, enum: [dividend, coupon, interest] }
@@ -4433,7 +4434,12 @@ components:
         amount_base_minor: { type: integer, format: int64, description: "Line 070" }
         withheld_base_minor: { type: integer, format: int64, description: "Line 140, at the payment's rate" }
         tax_ru_minor: { type: integer, format: int64, description: "Line 160: the Russian tax on it at the first band's rate" }
-        credit_minor: { type: integer, format: int64, description: "Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged" }
+        credit_minor: { type: integer, format: int64, description: "Line 170: the withheld tax, no more than line 160, where the treaty with the issuer's country applies on the payment's day (decision Р-50); 0 otherwise" }
+        treaty:
+          type: string
+          enum: [applies, partly, suspended, ended, none, no_country, ""]
+          description: "The residency's treaty with the issuer's country on the payment's day: applies; partly — some articles suspended (Указ № 585), crediting stands; suspended — the partner suspended it whole; ended; none — no treaty; no_country — the paper names no country; empty — the residency's treaties are not kept"
+        treaty_from: { type: string, nullable: true, description: "Date YYYY-MM-DD the treaty's state began: partly, suspended or ended" }
     TaxYearForeignSale:
       type: object
       required: [on, settled_on, instrument_id, paper, isin, quantity, currency, currency_code, proceeds_minor, fee_minor, rate, proceeds_base_minor, fee_base_minor, lots, result_base_minor, long_base_minor]

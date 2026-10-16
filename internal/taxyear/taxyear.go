@@ -244,9 +244,11 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			p.ByAgents += acc.AgentTax
 			p.Withheld += f.Withheld
 		} else {
-			// What a broker abroad withheld is the source's tax on dividends;
-			// it offsets the Russian tax on them, no more.
-			p.Credit += min(max(f.Withheld, 0), family.Banded([]family.TaxBand{{BP: rules.InvestmentBands[0].BP}}, acc.Dividends, rules.TaxUnitMinor))
+			c, err := s.foreignCredit(ctx, spaceID, a.ID, year, rules, sp.TaxResidency, f, acc.Dividends)
+			if err != nil {
+				return Year{}, fmt.Errorf("taxyear: account %s: %w", a.ID, err)
+			}
+			p.Credit += c
 		}
 		p.Accounts = append(p.Accounts, acc)
 		p.Unvalued += f.Unvalued
@@ -380,4 +382,45 @@ func parseYear(raw string, now time.Time) (int, error) {
 		return 0, fmt.Errorf("%w: the year is a past or this one", family.ErrValidation)
 	}
 	return y, nil
+}
+
+// foreignCredit is what the tax a broker abroad withheld offsets of the
+// Russian one. With the year's lines at hand, payment by payment as the return
+// reckons it: no more than the Russian tax on each, and only where the treaty
+// with the issuer's country applies on its day (decision Р-50); a tax set
+// against no payment offsets nothing. Without them, as before: the withheld,
+// no more than the tax on the dividends.
+func (s *Service) foreignCredit(ctx context.Context, spaceID, accountID uuid.UUID, year int, rules family.TaxRules, residency string,
+	f portfolio.YearFacts, dividends int64,
+) (int64, error) {
+	if s.rows == nil || s.papers == nil {
+		return min(max(f.Withheld, 0), family.Banded([]family.TaxBand{{BP: rules.InvestmentBands[0].BP}}, dividends, rules.TaxUnitMinor)), nil
+	}
+	book, haveBook, err := family.TreatiesOf(residency)
+	if err != nil {
+		return 0, err
+	}
+	r, err := s.rows.YearRows(ctx, spaceID, accountID, year, rules.TaxCurrency, rules.LongHoldingYears)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, p := range r.Payouts {
+		if p.Withheld <= 0 {
+			continue
+		}
+		var country string
+		if p.Instrument != nil {
+			paper, err := s.papers.ByID(ctx, *p.Instrument)
+			if err != nil {
+				return 0, err
+			}
+			if len(paper.ISIN) == 12 {
+				country = paper.ISIN[:2]
+			}
+		}
+		_, c, _, _ := credit(p, country, rules, book, haveBook)
+		total += c
+	}
+	return total, nil
 }

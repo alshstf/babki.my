@@ -15,19 +15,19 @@ const fetchMock = vi.hoisted(() => {
 // in the United States, a Eurobond coupon, the broker's interest with no rate,
 // and a sale of two lots.
 const foreign: TaxYearForeign = {
-  year: 2026, supported: true, currency: "RUB",
+  year: 2026, supported: true, currency: "RUB", treaties_as_of: "2026-07-14",
   accounts: [{
     account_id: "a-kz", name: "Freedom KZ", user_id: "u-alex", country: "KZ", country_code: "398",
     payouts: [
       { on: "2026-05-15", type: "dividend", kind: "001", instrument_id: "i-aapl", paper: "Apple", isin: "US0378331005", country: "US", country_code: "840",
         currency: "USD", currency_code: "840", amount_minor: 1000, withheld_minor: 300, rate: "85", amount_base_minor: 85_000, withheld_base_minor: 25_500,
-        tax_ru_minor: 11_100, credit_minor: 11_100 },
+        tax_ru_minor: 11_100, credit_minor: 11_100, treaty: "partly", treaty_from: "2023-08-08" },
       { on: "2026-06-01", type: "coupon", kind: "003", instrument_id: "i-xs", paper: "Евробонд", isin: "XS1234567890", country: "XS", country_code: "",
         currency: "USD", currency_code: "840", amount_minor: 500, withheld_minor: 0, rate: "84.5", amount_base_minor: 42_250, withheld_base_minor: 0,
-        tax_ru_minor: 5_500, credit_minor: 0 },
+        tax_ru_minor: 5_500, credit_minor: 0, treaty: "no_country", treaty_from: null },
       { on: "2026-06-30", type: "interest", kind: "013", instrument_id: null, paper: "", isin: "", country: "", country_code: "",
         currency: "USD", currency_code: "840", amount_minor: 200, withheld_minor: 0, rate: null, amount_base_minor: 0, withheld_base_minor: 0,
-        tax_ru_minor: 0, credit_minor: 0 },
+        tax_ru_minor: 0, credit_minor: 0, treaty: "none", treaty_from: null },
     ],
     sales: [{
       on: "2026-02-10", settled_on: "2026-02-11", instrument_id: "i-aapl", paper: "Apple", isin: "US0378331005", quantity: "12", currency: "USD", currency_code: "840",
@@ -69,7 +69,7 @@ describe("ForeignReturn", () => {
     const account = await screen.findByTestId("tax-foreign-account");
     expect(norm(account.textContent)).toMatch(/Алекс · брокер: Казахстан \(398\)/);
     const payouts = within(account).getAllByTestId("tax-foreign-payout").map((r) => norm(r.textContent));
-    expect(payouts[0]).toMatch(/15\.05\.2026Apple001Соединенные Штаты \(840\)10,00 \$85850,00 ₽255,00 ₽111,00 ₽/);
+    expect(payouts[0]).toMatch(/15\.05\.2026Apple001Соединенные Штаты \(840\)10,00 \$85850,00 ₽255,00 ₽111,00 ₽соглашение действует частично \(Указ № 585, с 08\.08\.2023\) — зачёт сохраняется/);
     expect(payouts[1]).toMatch(/Евробонд003.*84,5422,50 ₽——/);
     expect(payouts[2]).toMatch(/Проценты брокера013—2,00 \$———/);
     const sale = norm(within(account).getByTestId("tax-foreign-sale").textContent);
@@ -101,6 +101,17 @@ describe("ForeignReturn", () => {
     expect(lines).toContain("10.02.2026;Apple;US0378331005;12;840;;;11.02.2026;80;;;01.04.2025;2;240,00;100;24000,00");
     expect(lines.at(-1)).toBe("Приложение 8, строка 030 — расходы;114160,00");
     click.mockRestore();
+  });
+
+  it("says a suspended treaty credits nothing", async () => {
+    const ca = {
+      ...foreign.accounts[0].payouts[0], paper: "Royal Bank of Canada", isin: "CA7800871021", country: "CA", country_code: "124",
+      credit_minor: 0, treaty: "suspended" as const, treaty_from: "2024-11-18",
+    };
+    show({ ...foreign, accounts: [{ ...foreign.accounts[0], payouts: [ca] }] });
+    const row = await screen.findByTestId("tax-foreign-payout");
+    expect(norm(within(row).getByTestId("tax-foreign-treaty").textContent)).toBe("соглашение приостановлено с 18.11.2024 — зачёта нет");
+    expect(norm(row.textContent)).toMatch(/255,00 ₽—соглашение/);
   });
 
   it("is not there without accounts abroad", async () => {

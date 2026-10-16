@@ -1411,6 +1411,39 @@ func (e StructureValuation) Valid() bool {
 	}
 }
 
+// Defines values for TaxYearForeignPayoutTreaty.
+const (
+	TaxYearForeignPayoutTreatyApplies   TaxYearForeignPayoutTreaty = "applies"
+	TaxYearForeignPayoutTreatyEmpty     TaxYearForeignPayoutTreaty = ""
+	TaxYearForeignPayoutTreatyEnded     TaxYearForeignPayoutTreaty = "ended"
+	TaxYearForeignPayoutTreatyNoCountry TaxYearForeignPayoutTreaty = "no_country"
+	TaxYearForeignPayoutTreatyNone      TaxYearForeignPayoutTreaty = "none"
+	TaxYearForeignPayoutTreatyPartly    TaxYearForeignPayoutTreaty = "partly"
+	TaxYearForeignPayoutTreatySuspended TaxYearForeignPayoutTreaty = "suspended"
+)
+
+// Valid indicates whether the value is a known member of the TaxYearForeignPayoutTreaty enum.
+func (e TaxYearForeignPayoutTreaty) Valid() bool {
+	switch e {
+	case TaxYearForeignPayoutTreatyApplies:
+		return true
+	case TaxYearForeignPayoutTreatyEmpty:
+		return true
+	case TaxYearForeignPayoutTreatyEnded:
+		return true
+	case TaxYearForeignPayoutTreatyNoCountry:
+		return true
+	case TaxYearForeignPayoutTreatyNone:
+		return true
+	case TaxYearForeignPayoutTreatyPartly:
+		return true
+	case TaxYearForeignPayoutTreatySuspended:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaxYearForeignPayoutType.
 const (
 	TaxYearForeignPayoutTypeCoupon   TaxYearForeignPayoutType = "coupon"
@@ -5551,7 +5584,10 @@ type TaxYearForeign struct {
 	// Currency The year's tax currency, every *_base_minor's
 	Currency  string `json:"currency"`
 	Supported bool   `json:"supported"`
-	Year      int    `json:"year"`
+
+	// TreatiesAsOf Date YYYY-MM-DD of the Ministry of Finance's list of treaties the credit is judged by; empty when the residency's treaties are not kept
+	TreatiesAsOf string `json:"treaties_as_of"`
+	Year         int    `json:"year"`
 }
 
 // TaxYearForeignAccount defines model for TaxYearForeignAccount.
@@ -5610,7 +5646,7 @@ type TaxYearForeignPayout struct {
 	// CountryCode Line 010 as ОКСМ writes it, three digits; empty without one — no ISIN, or an international one (XS)
 	CountryCode string `json:"country_code"`
 
-	// CreditMinor Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged
+	// CreditMinor Line 170: the withheld tax, no more than line 160, where the treaty with the issuer's country applies on the payment's day (decision Р-50); 0 otherwise
 	CreditMinor int64  `json:"credit_minor"`
 	Currency    string `json:"currency"`
 
@@ -5630,8 +5666,14 @@ type TaxYearForeignPayout struct {
 	Rate nullable.Nullable[string] `json:"rate"`
 
 	// TaxRuMinor Line 160: the Russian tax on it at the first band's rate
-	TaxRuMinor int64                    `json:"tax_ru_minor"`
-	Type       TaxYearForeignPayoutType `json:"type"`
+	TaxRuMinor int64 `json:"tax_ru_minor"`
+
+	// Treaty The residency's treaty with the issuer's country on the payment's day: applies; partly — some articles suspended (Указ № 585), crediting stands; suspended — the partner suspended it whole; ended; none — no treaty; no_country — the paper names no country; empty — the residency's treaties are not kept
+	Treaty TaxYearForeignPayoutTreaty `json:"treaty"`
+
+	// TreatyFrom Date YYYY-MM-DD the treaty's state began: partly, suspended or ended
+	TreatyFrom nullable.Nullable[string] `json:"treaty_from"`
+	Type       TaxYearForeignPayoutType  `json:"type"`
 
 	// WithheldBaseMinor Line 140, at the payment's rate
 	WithheldBaseMinor int64 `json:"withheld_base_minor"`
@@ -5639,6 +5681,9 @@ type TaxYearForeignPayout struct {
 	// WithheldMinor Line 130: the tax rows of the same paper, day and currency
 	WithheldMinor int64 `json:"withheld_minor"`
 }
+
+// TaxYearForeignPayoutTreaty The residency's treaty with the issuer's country on the payment's day: applies; partly — some articles suspended (Указ № 585), crediting stands; suspended — the partner suspended it whole; ended; none — no treaty; no_country — the paper names no country; empty — the residency's treaties are not kept
+type TaxYearForeignPayoutTreaty string
 
 // TaxYearForeignPayoutType defines model for TaxYearForeignPayout.Type.
 type TaxYearForeignPayoutType string
