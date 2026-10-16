@@ -1,0 +1,26 @@
+id: sber-vklad-dirham
+bank: sber
+name: Вклад в дирхамах
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_v_dirhamah
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_v_dirhamah
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/948?terrBankCode=038&timeZone=0
+    notes: >-
+      Ставки калькулятора страницы в день сверки: 0,01 % на любой срок. От 5 000 дирхамов ОАЭ.
+    variants:
+      - id: main
+        name: В дирхамах
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 500000, percent: "0.01" }
+          - { from: 3, to: 3, amount_from: 500000, percent: "0.01" }
+          - { from: 6, to: 6, amount_from: 500000, percent: "0.01" }
+          - { from: 12, to: 12, amount_from: 500000, percent: "0.01" }
+        currency: AED

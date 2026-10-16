@@ -344,6 +344,27 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		{"Кубань, Ключевой", "kubankredit-klyuchevoy", Holding{Variant: "monthly", OpenedOn: day("2026-10-16"), Term: 400, Amount: 1_500_000_00}, "2026-10-20", 1_500_000_00, nil, "12.8"},
 		// Новиком «Капитал Сезонный», 121 день — 14,2 %.
 		{"Новиком", "novikom-kapital-sezonny", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 121, Amount: 200_000_00}, "2026-10-20", 200_000_00, nil, "14.2"},
+		// Шаг 4.5 (решение владельца к Р-55): программы для категорий, премиальные, связки с ПДС, в валюте.
+		// СберВклад Премиум, уровень 6: «до 13,70 %» на 3–7 месяцев.
+		{"СберВклад, уровень 6", "sber-sbervklad", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 6, Amount: 1_200_000_00}, "2026-10-20", 1_200_000_00, map[string]int{"prime": 3}, "13.7"},
+		// Накопительный Премиум, уровни 4–6: «до 13 %» — инвестиции от 5 млн и покупки от 100 000 ₽.
+		{"Сбер, накопительный Премиум", "sber-nakopitelny-premium", Holding{Variant: "levels4-6", OpenedOn: day("2026-01-10")}, "2026-10-20", 20_000_000_00, map[string]int{"invest": 2, "spend": 2}, "13"},
+		// Молодёжный: максимум 13,3 % (14–17) и 13,5 % (18–24).
+		{"Сбер, молодёжный 14–17", "sber-molodezhny", Holding{Variant: "y14-end", OpenedOn: day("2026-10-16"), Term: 6, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"prime": 0, "salary": 0, "partners": 0}, "13.3"},
+		{"Сбер, молодёжный 18–24", "sber-molodezhny", Holding{Variant: "y18-end", OpenedOn: day("2026-10-16"), Term: 6, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"prime": 0, "salary": 0, "partners": 0}, "13.5"},
+		{"Сбер, Забота о будущем", "sber-zabota", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 3, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"pds": 0}, "22"},
+		{"Сбер, социальный", "sber-socialny", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 12, Amount: 50_000_00}, "2026-10-20", 50_000_00, nil, "22"},
+		{"Сбер, в юанях", "sber-vklad-yuan", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 12, Amount: 200_000_00}, "2026-10-20", 200_000_00, nil, "1.25"},
+		// ВТБ-Счёт «Привилегия»: зарплата и покупки от 100 000 ₽ — 13,75 %.
+		{"ВТБ, Привилегия", "vtb-schet", Holding{Variant: "privilege-minimum", OpenedOn: day("2026-01-10")}, "2026-10-20", 500_000_00, map[string]int{"salary": 0, "spend": 1}, "13.75"},
+		{"ВТБ, социальный", "vtb-socialny", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 365, Amount: 50_000_00}, "2026-10-20", 50_000_00, nil, "19"},
+		{"ВТБ, Двойная выгода", "vtb-dvoynaya-vygoda", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "18"},
+		{"Т-Банк, в юанях", "tbank-smartvklad", Holding{Variant: "fixed-cny", OpenedOn: day("2026-10-16"), Term: 12, Amount: 10_000_00}, "2026-10-20", 10_000_00, nil, "5"},
+		{"ГПБ, Пенсионный доход", "gazprombank-pensionny-dohod", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 367, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "2.6"},
+		{"ГПБ, в юанях", "gazprombank-rasshiryay", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 367, Amount: 10_000_00}, "2026-10-20", 10_000_00, nil, "2.47"},
+		{"ГПБ, Премиум", "gazprombank-premium-ns", Holding{Variant: "minimum", OpenedOn: day("2026-01-10")}, "2026-10-20", 1_000_000_00, map[string]int{"premium": 0, "new_money": 1}, "13.5"},
+		// Альфа-Счёт, Alfa Only: покупки от 100 000 ₽ — 12,5 %.
+		{"Альфа, Alfa Only", "alfa-schet", Holding{Variant: "only-minimum", OpenedOn: day("2026-07-10")}, "2026-10-20", 1_000_000_00, map[string]int{"spend": 1}, "12.5"},
 	}
 	for _, c := range cases {
 		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))

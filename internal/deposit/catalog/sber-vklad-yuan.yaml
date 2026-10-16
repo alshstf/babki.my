@@ -1,0 +1,44 @@
+id: sber-vklad-yuan
+bank: sber
+name: Вклад в юанях
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_v_yuanyah
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_v_yuanyah
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/768?terrBankCode=038&timeZone=0
+    notes: >-
+      Ставки калькулятора страницы в день сверки. От 10 000 ¥, ступени — от 100 000 ¥ и от 1 млн ¥; без пополнения
+      и снятия.
+    variants:
+      - id: main
+        name: В юанях
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 1000000, percent: "0.05" }
+          - { from: 2, to: 2, amount_from: 1000000, percent: "0.1" }
+          - { from: 3, to: 3, amount_from: 1000000, percent: "0.2" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "0.5" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "1" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "1" }
+          - { from: 36, to: 36, amount_from: 1000000, percent: "0.25" }
+          - { from: 1, to: 1, amount_from: 10000000, percent: "0.1" }
+          - { from: 2, to: 2, amount_from: 10000000, percent: "0.15" }
+          - { from: 3, to: 3, amount_from: 10000000, percent: "0.25" }
+          - { from: 6, to: 6, amount_from: 10000000, percent: "0.75" }
+          - { from: 12, to: 12, amount_from: 10000000, percent: "1.25" }
+          - { from: 24, to: 24, amount_from: 10000000, percent: "1.25" }
+          - { from: 36, to: 36, amount_from: 10000000, percent: "0.5" }
+          - { from: 1, to: 1, amount_from: 100000000, percent: "0.15" }
+          - { from: 2, to: 2, amount_from: 100000000, percent: "0.2" }
+          - { from: 3, to: 3, amount_from: 100000000, percent: "0.3" }
+          - { from: 6, to: 6, amount_from: 100000000, percent: "1" }
+          - { from: 12, to: 12, amount_from: 100000000, percent: "1.5" }
+          - { from: 24, to: 24, amount_from: 100000000, percent: "1.5" }
+          - { from: 36, to: 36, amount_from: 100000000, percent: "0.75" }
+        currency: CNY

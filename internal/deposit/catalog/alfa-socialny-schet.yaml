@@ -1,0 +1,23 @@
+id: alfa-socialny-schet
+bank: alfa
+name: Социальный счёт
+kind: savings
+watch:
+  - https://alfabank.ru/make-money/savings-account/schet-socialnyi/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://alfabank.ru/make-money/savings-account/schet-socialnyi/
+    notes: >-
+      Для получателей социальной помощи, через Госуслуги, бессрочно. 7 % на остаток до 50 000 ₽ (в день сверки);
+      ставки на сумму сверх 50 000 ₽ банк на странице не пишет — программа считает по ней 0.
+    variants:
+      - id: main
+        name: Социальный счёт
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "7" }
+        cap: { amount: 5000000, percent: "0" }

@@ -1,0 +1,24 @@
+id: sber-sberkids
+bank: sber
+name: Вклад «СберKids+»
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_sberkids
+editions:
+  - from: 2024-02-21
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_sberkids
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1276?terrBankCode=038&timeZone=0
+    notes: >-
+      Открывает родитель на имя ребёнка до 14 лет. 11,6 % на 6 месяцев (условия с 21.02.2024), от 30 000 ₽,
+      пополнение без ограничений. На сумму сверх вдвое большей первого взноса банк платит половину ставки — это
+      программа пока не считает. Досрочно — 0,01 %; продление на тот же срок по условиям дня продления.
+    variants:
+      - id: main
+        name: «СберKids+»
+        payouts: [capitalize]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 6, to: 6, amount_from: 3000000, percent: "11.6" }

@@ -160,7 +160,8 @@ func TestASavingsAccountsConditionsByMarks(t *testing.T) {
 	}
 }
 
-// The catalog's listing: each programme with its bank and variants, a
+// The catalog's listing: each programme with its bank and variants (the
+// ВТБ-Счёт — two ways of accrual for «Мультикарта» and two for «Привилегия»), a
 // deposit's terms and least sum, the conditions.
 func TestTheCatalogOfProgrammes(t *testing.T) {
 	url, c := programmeAPI(t)
@@ -174,7 +175,7 @@ func TestTheCatalogOfProgrammes(t *testing.T) {
 	if len(gpb.Variants) != 1 || len(gpb.Variants[0].Terms) != 7 || gpb.Variants[0].AmountFromMinor != 100_000_00 || gpb.BankName != "Газпромбанк" {
 		t.Errorf("Газпромбанк = %+v", gpb)
 	}
-	if len(vtb.Variants) != 2 || vtb.Variants[0].Welcome.MustGet() != "Приветственная" || len(vtb.Variants[0].Conditions) != 6 || vtb.Kind != "savings" {
+	if len(vtb.Variants) != 4 || vtb.Variants[0].Welcome.MustGet() != "Приветственная" || len(vtb.Variants[0].Conditions) != 6 || vtb.Kind != "savings" {
 		t.Errorf("ВТБ = %+v", vtb)
 	}
 }

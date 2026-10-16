@@ -10,7 +10,8 @@ editions:
     sources:
       - https://alfabank.servicecdn.ru/site-upload/15/2e/2363/alfa_1102026_all.pdf
     notes: >-
-      Ставки «всем клиентам»; у Alfa Only и А-Клуба — свои, у них ручная ставка. У банка ставки зависят от даты
+      Ставки «всем клиентам» и отдельные варианты для Alfa Only (надбавки и приветственная — до 10 млн ₽) и А-Клуба
+      (до 30 млн ₽). У банка ставки зависят от даты
       открытия счёта: здесь — для счетов, открытых с 01.03.2026 (у них с 01.10.2026 одинаковые базовая ставка и
       надбавки), у открытых раньше база ниже — ручная ставка. Способ начисления выбирается при открытии; проценты — в
       последний день месяца. Приветственная ставка — с 1-го по 2-й календарный месяц, если 90 дней (с 01.11.2026 —
@@ -61,3 +62,72 @@ editions:
               - { from: 6, plus: "0.5" }
               - { from: 9, plus: "0.75" }
               - { from: 12, plus: "1" }
+      - id: only-minimum
+        name: Alfa Only, на минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-03-01
+        grid:
+          - { percent: "9" }
+        schedule:
+          - { name: Приветственная, months: 3, grid: [{ percent: "14" }], cap: 1000000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Альфа-Банка за месяц
+            check: card_spend
+            cap: 1000000000
+            levels:
+              - { from: 2000000, plus: "3" }
+              - { from: 10000000, plus: "3.5" }
+      - id: club-minimum
+        name: А-Клуб, на минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-03-01
+        grid:
+          - { percent: "9" }
+        schedule:
+          - { name: Приветственная, months: 3, grid: [{ percent: "14" }], cap: 3000000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Альфа-Банка за месяц
+            check: card_spend
+            cap: 3000000000
+            levels:
+              - { from: 10000000, plus: "3.5" }
+      - id: only-daily
+        name: Alfa Only, на ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-03-01
+        grid:
+          - { percent: "9" }
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "13" }], cap: 1000000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Альфа-Банка за месяц
+            check: card_spend
+            cap: 1000000000
+            levels:
+              - { from: 2000000, plus: "2.5" }
+      - id: club-daily
+        name: А-Клуб, на ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-03-01
+        grid:
+          - { percent: "9" }
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "13" }], cap: 3000000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Альфа-Банка за месяц
+            check: card_spend
+            cap: 3000000000
+            levels:
+              - { from: 2000000, plus: "2.5" }

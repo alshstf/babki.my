@@ -1,0 +1,25 @@
+id: gazprombank-rasshiryay
+bank: gazprombank
+name: Вклад «Расширяй возможности» в юанях
+kind: deposit
+watch:
+  - https://www.gazprombank.ru/personal/increase/deposits/detail/6992387/
+editions:
+  - from: 2025-09-20
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/4a0/tn2wo5uv2q6141m99pthzr3n1wc9eplw/Pasport-Rasshiryay-vozmozhnosti-s-20.09.2025.pdf
+    notes: >-
+      Паспорт с 20.09.2025: ставки равны минимальным гарантированным. Онлайн — от 5 000 ¥, в офисе — от 10 000 ¥;
+      проценты в последний рабочий день месяца на счёт или к вкладу. Досрочно — 0,01 %.
+    variants:
+      - id: main
+        name: В юанях
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        currency: CNY
+        grid:
+          - { from: 91, to: 91, amount_from: 500000, percent: "1.1" }
+          - { from: 181, to: 181, amount_from: 500000, percent: "1.59" }
+          - { from: 367, to: 367, amount_from: 500000, percent: "2.47" }

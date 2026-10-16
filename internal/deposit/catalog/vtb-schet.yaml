@@ -11,8 +11,9 @@ editions:
       - https://www.vtb.ru/media-files/vtb.ru/sitepages/personal/vklady-i-scheta/vtb-schet/usloviya-po-nakopitelnomu-schetu.pdf
       - https://www.vtb.ru/personal/vklady-i-scheta/vtb-schet/
     notes: >-
-      Ставки для пакета «Мультикарта»; у «Привилегии» и Private Banking — свои надбавки и потолки, у них ручная
-      ставка. Способ начисления выбирается при
+      Ставки для пакета «Мультикарта»; у «Привилегии» — свои варианты (уровень «Расти с ВТБ» Изумруд и выше даёт
+      им +1,5 всегда — он уже в ставке варианта; надбавки и приветственная — на сумму до 10 млн ₽); у Private
+      Banking — ручная ставка. Способ начисления выбирается при
       открытии и потом не меняется. Меньше 1 000 ₽ в любой день: на ежедневный остаток — за этот день процентов нет, на
       минимальный — за весь месяц. Приветственная ставка — 2 календарных месяца, считая месяц открытия, если 180 дней
       баланс вкладов и накопительных в ВТБ был меньше 1 000 ₽; надбавки в это время не действуют. Надбавка за траты:
@@ -60,3 +61,32 @@ editions:
         schedule:
           - { name: Приветственная, months: 2, grid: [{ percent: "13.2" }], cap: 100000000, requires: new_client }
         bonuses: *vtb-bonuses
+      - id: privilege-minimum
+        name: «Привилегия», на минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "7.5" }
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "14.2" }], cap: 1000000000, requires: new_client }
+        bonuses: &vtb-privilege-bonuses
+          - { id: salary, name: Зарплата в ВТБ, plus: "2", check: wages, group: status, cap: 1000000000 }
+          - { id: pension, name: Пенсия в ВТБ, plus: "2", check: manual, group: status, cap: 1000000000 }
+          - id: spend
+            name: Покупки по картам ВТБ за месяц
+            check: card_spend
+            cap: 1000000000
+            levels:
+              - { from: 5000000, plus: "1" }
+              - { from: 10000000, plus: "4.25" }
+      - id: privilege-daily
+        name: «Привилегия», на ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "6.5" }
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "13.2" }], cap: 1000000000, requires: new_client }
+        bonuses: *vtb-privilege-bonuses

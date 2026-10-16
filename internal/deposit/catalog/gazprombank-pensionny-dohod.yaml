@@ -1,0 +1,23 @@
+id: gazprombank-pensionny-dohod
+bank: gazprombank
+name: Вклад «Пенсионный доход»
+kind: deposit
+watch:
+  - https://www.gazprombank.ru/personal/increase/deposits/detail/1935/
+editions:
+  - from: 2025-05-15
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/f5a/2orrqcylab4xql2f4l49ao0qjr6mmaum/Pasport-Pensionnyy-dokhod_s-15.05.2025.pdf
+    notes: >-
+      Для пенсионеров, открывается в офисе. 367 дней, 2,6 % годовых на ежедневный остаток; неснижаемый остаток 500
+      ₽, пополнение и снятие; проценты причисляются к вкладу в последний рабочий день каждого квартала. Ниже
+      неснижаемого — за период с последней выплаты ставка «До востребования».
+    variants:
+      - id: main
+        name: «Пенсионный доход»
+        payouts: [quarterly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 367, to: 367, amount_from: 50000, percent: "2.6" }

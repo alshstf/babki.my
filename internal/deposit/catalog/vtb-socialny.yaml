@@ -1,0 +1,26 @@
+id: vtb-socialny
+bank: vtb
+name: «Социальный вклад»
+kind: deposit
+watch:
+  - https://www.vtb.ru/personal/vklady-i-scheta/socvklad/
+editions:
+  - from: 2026-05-25
+    checked_on: 2026-10-16
+    sources:
+      - https://www.vtb.ru/media-files/vtb.ru/sitepages/personal/vklady-i-scheta/socvklad/vklad_social.pdf
+    notes: >-
+      Для получателей мер социальной поддержки, через Госуслуги, один такой вклад во всех банках. Ставка (19 % с
+      25.05.2026) по закону равна наибольшей ставке ВТБ по вкладам от месяца до года и меняется вместе с ней, в том
+      числе у открытых вкладов, — программа берёт ставку из редакции каждого дня. 365 дней, до 50 000 ₽, пополнение,
+      снятие и закрытие без потери ставки, проценты ежемесячно на другой счёт; продление на год при подтверждённом
+      статусе.
+    variants:
+      - id: main
+        name: «Социальный вклад»
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        floating: true
+        grid:
+          - { from: 365, to: 365, amount_from: 1, percent: "19" }

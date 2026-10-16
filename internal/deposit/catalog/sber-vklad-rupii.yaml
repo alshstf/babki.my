@@ -1,0 +1,28 @@
+id: sber-vklad-rupii
+bank: sber
+name: Вклад в рупиях
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_v_rupiyah
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_v_rupiyah
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1292?terrBankCode=038&timeZone=0
+    notes: >-
+      Ставки калькулятора страницы в день сверки. От 100 000 индийских рупий, без пополнения и снятия.
+    variants:
+      - id: main
+        name: В рупиях
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 10000000, percent: "3.5" }
+          - { from: 2, to: 2, amount_from: 10000000, percent: "4" }
+          - { from: 3, to: 3, amount_from: 10000000, percent: "4.15" }
+          - { from: 6, to: 6, amount_from: 10000000, percent: "5.1" }
+          - { from: 9, to: 9, amount_from: 10000000, percent: "4.75" }
+          - { from: 12, to: 12, amount_from: 10000000, percent: "4.5" }
+        currency: INR
