@@ -25,6 +25,7 @@ import (
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/depositcheck"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/forecast"
@@ -155,7 +156,12 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	intermediary.NewHandler(famAuth, famSM).Mount(srv)
 	benchmark.NewHandler(benchmark.NewService(accHandler, famStore, mdStore, converter), famAuth, famSM).Mount(srv)
 	structureSvc := structure.NewService(accStore, positions, famStore, converter).WithValuables(valuablesSvc).WithClasses(instStore).WithMembers(famStore)
-	goalsSvc := goals.NewService(r.pool, structureSvc, accStore).WithKeyRates(mdStore)
+	// The accounts' programmes tell their conditions from the journals and
+	// categories (Р-53); the accounts' handler is mounted above, before the
+	// journal exists, and reads it per request.
+	depositChecks := depositcheck.New(accStore, opStore, category.NewStore(r.pool))
+	accHandler.WithMeasures(depositChecks)
+	goalsSvc := goals.NewService(r.pool, structureSvc, accStore).WithKeyRates(mdStore).WithMeasures(depositChecks)
 	goals.NewHandler(goalsSvc, famAuth, famSM).Mount(srv)
 	structure.NewHandler(structureSvc, famAuth, famSM).Mount(srv)
 	// The papers' lots estimate what a rebalance's sales would bring in tax (Р-37 В).

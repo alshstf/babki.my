@@ -258,6 +258,23 @@ func (p Programme) HasVariant(id string) bool {
 	return false
 }
 
+// Bonus is the variant's bonus of the id, as the latest edition that has it
+// states it.
+func (p Programme) Bonus(variant, id string) (Bonus, bool) {
+	for i := len(p.Editions) - 1; i >= 0; i-- {
+		v, ok := p.Editions[i].Variant(variant)
+		if !ok {
+			continue
+		}
+		for _, b := range v.Bonuses {
+			if b.ID == id {
+				return b, true
+			}
+		}
+	}
+	return Bonus{}, false
+}
+
 // Conditions are the conditions of the variant across the editions — its
 // bonuses and its periods' requirements — each with its number of levels:
 // a bonus's steps, 1 for a bonus of one or a requirement.

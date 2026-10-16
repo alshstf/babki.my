@@ -122,3 +122,17 @@ export function useSetMark(accountId: string) {
     onSuccess: after,
   });
 }
+
+export function useDeleteMark(accountId: string) {
+  const after = useAfterChange(accountId);
+  return useMutation({
+    mutationFn: async ({ condition, fromOn }: { condition: string; fromOn: string }): Promise<AccountRates> => {
+      const { data, error, response } = await api.DELETE("/api/v1/accounts/{accountId}/marks/{condition}/{fromOn}", {
+        params: { path: { accountId, condition, fromOn } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: after,
+  });
+}

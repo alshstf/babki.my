@@ -1546,6 +1546,27 @@ func (e ProgrammeConditionKind) Valid() bool {
 	}
 }
 
+// Defines values for ProgrammeConditionTold.
+const (
+	ProgrammeConditionToldData ProgrammeConditionTold = "data"
+	ProgrammeConditionToldMark ProgrammeConditionTold = "mark"
+	ProgrammeConditionToldNone ProgrammeConditionTold = "none"
+)
+
+// Valid indicates whether the value is a known member of the ProgrammeConditionTold enum.
+func (e ProgrammeConditionTold) Valid() bool {
+	switch e {
+	case ProgrammeConditionToldData:
+		return true
+	case ProgrammeConditionToldMark:
+		return true
+	case ProgrammeConditionToldNone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RealizedGap.
 const (
 	NoRate RealizedGap = "no_rate"
@@ -5481,12 +5502,21 @@ type ProgrammeCondition struct {
 	Level  int          `json:"level"`
 	Levels []BonusLevel `json:"levels"`
 
-	// Met What the marks say of it this month
+	// MeasuredMinor What the data measured — purchases on the bank's cards, wages paid into it, the balance kept in it — when told by them
+	MeasuredMinor nullable.Nullable[int64] `json:"measured_minor"`
+
+	// MeasuredMonth The month YYYY-MM the data were measured for: an unfinished month is told by the one before
+	MeasuredMonth nullable.Nullable[string] `json:"measured_month"`
+
+	// Met Whether it holds this month: by a mark, or by the program's data in the automatic mode
 	Met  bool   `json:"met"`
 	Name string `json:"name"`
 
 	// Plus A bonus of one level: what it adds
 	Plus nullable.Nullable[string] `json:"plus"`
+
+	// Told What told it: the family's mark (over everything), the program's data (automatic mode), or nothing
+	Told ProgrammeConditionTold `json:"told"`
 }
 
 // ProgrammeConditionCheck How the program could tell it from its own data; manual — only by a mark
@@ -5494,6 +5524,9 @@ type ProgrammeConditionCheck string
 
 // ProgrammeConditionKind A bonus to the rate, or the condition of having a period — a welcome rate for a new client
 type ProgrammeConditionKind string
+
+// ProgrammeConditionTold What told it: the family's mark (over everything), the program's data (automatic mode), or nothing
+type ProgrammeConditionTold string
 
 // ProgrammeQuote defines model for ProgrammeQuote.
 type ProgrammeQuote struct {

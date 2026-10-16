@@ -235,12 +235,79 @@ func MarksSay(marks []Mark) deposit.Conditions {
 	}
 }
 
+// Measure is what the program's own data say of a bank in a month, for the
+// conditions told automatically (Р-53): purchases on its cards, wages paid
+// into it, the balance kept in it, in minor units; known is false when there
+// is nothing to tell by — no operations of its cards that month.
+type Measure func(bank string, check deposit.Check, month time.Time) (value int64, known bool)
+
+// Told is how a condition stands in a month and what told it: the family's
+// mark, the program's data — Value measured in Month, the month before an
+// unfinished one — or nothing.
+type Told struct {
+	Met   bool
+	Level int
+	By    string // "mark", "data" or "none"
+	Value int64
+	Month time.Time
+}
+
+// Tell is how the account's conditions stand in month: a mark made in it or
+// before stands over everything; in the automatic mode a bonus the program
+// can measure is told by its data — an unfinished month by the one before,
+// as the bank pays for a whole month.
+func Tell(b Binding, p deposit.Programme, marks []Mark, measure Measure, today time.Time) func(id string, month time.Time) Told {
+	say := MarksSay(marks)
+	thisMonth := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return func(id string, month time.Time) Told {
+		if hasMark(marks, id, month) {
+			level, ok := say(id, month)
+			return Told{Met: ok, Level: level, By: "mark"}
+		}
+		bonus, ok := p.Bonus(b.Variant, id)
+		if b.Conditions != ConditionsAuto || measure == nil || !ok || bonus.Check == deposit.CheckManual {
+			return Told{By: "none"}
+		}
+		if !month.Before(thisMonth) {
+			month = thisMonth.AddDate(0, -1, 0)
+		}
+		value, known := measure(p.Bank, bonus.Check, month)
+		if !known {
+			return Told{By: "none", Month: month}
+		}
+		out := Told{By: "data", Value: value, Month: month}
+		if len(bonus.Levels) == 0 {
+			out.Met = value > 0
+			return out
+		}
+		for i, l := range bonus.Levels {
+			if value >= l.From {
+				out.Met, out.Level = true, i
+			}
+		}
+		return out
+	}
+}
+
+// hasMark says a mark of the condition was made in month or before.
+func hasMark(marks []Mark, id string, month time.Time) bool {
+	next := time.Date(month.Year(), month.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	for _, m := range marks {
+		if m.Condition == id && m.From.Before(next) {
+			return true
+		}
+	}
+	return false
+}
+
 // RateSource is what an account's rate is reckoned from: the rates written
-// in by hand, the programme and the marks of its conditions.
+// in by hand, the programme, the marks of its conditions and — in the
+// automatic mode — the program's own data.
 type RateSource struct {
 	Rates   []Rate
 	Binding *Binding
 	Marks   []Mark
+	Measure Measure
 }
 
 // Resolved is an account's rate on a day: a percent a year, and where it
@@ -282,7 +349,11 @@ func Resolve(src RateSource, day time.Time, balance int64, keyOn func(time.Time)
 	if src.Binding.Amount != nil {
 		h.Amount = *src.Binding.Amount
 	}
-	q, err := p.Quote(h, day, balance, keyOn, MarksSay(src.Marks))
+	tell := Tell(*src.Binding, p, src.Marks, src.Measure, day)
+	q, err := p.Quote(h, day, balance, keyOn, func(id string, month time.Time) (int, bool) {
+		t := tell(id, month)
+		return t.Level, t.Met
+	})
 	if err != nil {
 		if errors.Is(err, deposit.ErrNoEdition) || errors.Is(err, deposit.ErrNoCell) || errors.Is(err, deposit.ErrNoVariant) || errors.Is(err, deposit.ErrNoKeyRate) {
 			return Resolved{}, false, nil
