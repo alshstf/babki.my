@@ -76,6 +76,15 @@ func (p Programme) Quote(h Holding, day time.Time, balance int64, keyOn KeyOn, m
 	if !ok {
 		return Quote{}, ErrNoVariant
 	}
+	if p.Kind == KindDeposit && v.Floating {
+		// The rate of the day's edition, the variant as it then stands.
+		if e, ok = p.EditionOn(day); !ok {
+			return Quote{}, ErrNoEdition
+		}
+		if v, ok = e.Variant(h.Variant); !ok {
+			return Quote{}, ErrNoVariant
+		}
+	}
 	if !v.admits(h.OpenedOn) {
 		return Quote{}, ErrOpened
 	}

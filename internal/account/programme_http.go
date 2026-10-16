@@ -40,7 +40,7 @@ func (h *Handler) handleProgrammes(w http.ResponseWriter, _ *http.Request) {
 // least sum the bank has a rate for, the conditions.
 func variantAPI(v deposit.Variant) apitypes.DepositVariant {
 	out := apitypes.DepositVariant{
-		Id: v.ID, Name: v.Name, Ops: apitypes.DepositVariantOps(v.Ops), Terms: []apitypes.TermRange{},
+		Id: v.ID, Name: v.Name, Currency: v.Money(), Ops: apitypes.DepositVariantOps(v.Ops), Terms: []apitypes.TermRange{},
 		Accrual: nullable.NewNullNullable[apitypes.DepositVariantAccrual](), TermUnit: nullable.NewNullNullable[apitypes.DepositVariantTermUnit](),
 		Welcome: nullable.NewNullNullable[string](), Conditions: conditionsAPI(v, nil, nil, time.Time{}),
 	}

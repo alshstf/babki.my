@@ -55,8 +55,8 @@ func newAccount(t *testing.T, url string, c *http.Client, typ string, balance in
 // days earns the key rate less 0,2 by the catalog; a rate written in by hand
 // stands over it, and taken away gives the catalog back. A savings account
 // for a deposit's programme, a term the bank has no rate for, an unknown
-// programme, a card and a savings account opened before its variant's rates
-// are refused.
+// programme, a card, a savings account opened before its variant's rates and
+// one in yuan for a rouble variant are refused.
 func TestADepositTiedToItsProgramme(t *testing.T) {
 	url, c := programmeAPI(t)
 	dep := newAccount(t, url, c, "deposit", 500_000_00)
@@ -82,6 +82,11 @@ func TestADepositTiedToItsProgramme(t *testing.T) {
 
 	savings := newAccount(t, url, c, "savings", 0)
 	card := newAccount(t, url, c, "checking", 0)
+	var cny struct {
+		ID string `json:"id"`
+	}
+	apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Юани","type":"savings","currency":"CNY"}`), &cny)
+	yuan := cny.ID
 	for _, bad := range []struct{ account, body string }{
 		{savings, bind},
 		{dep, `{"programme_id":"gazprombank-klyuchevoy-moment","variant_id":"end","opened_on":"2026-10-05","term":366,"amount_minor":50000000,"conditions":"manual"}`},
@@ -89,6 +94,7 @@ func TestADepositTiedToItsProgramme(t *testing.T) {
 		{dep, `{"programme_id":"nope","variant_id":"end","opened_on":"2026-10-05","term":367,"amount_minor":50000000,"conditions":"manual"}`},
 		{card, bind},
 		{savings, `{"programme_id":"alfa-schet","variant_id":"minimum","opened_on":"2026-02-10","term":null,"amount_minor":null,"conditions":"manual"}`},
+		{yuan, `{"programme_id":"vtb-schet","variant_id":"minimum","opened_on":"2026-10-05","term":null,"amount_minor":null,"conditions":"manual"}`},
 	} {
 		if r := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+bad.account+"/programme", bad.body); r.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s = %d, want 400", bad.body, r.StatusCode)

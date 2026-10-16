@@ -84,7 +84,8 @@ func (s *Store) bindings(ctx context.Context, where string, args ...any) (map[uu
 
 // SetBinding ties the account to a programme of the catalog, over the one it
 // had. Refused for an account that holds no rate, a programme of the other
-// kind, or terms the catalog has no rate for on the day of opening.
+// kind, a variant in another currency, or terms the catalog has no rate for
+// on the day of opening.
 func (s *Store) SetBinding(ctx context.Context, spaceID, accountID uuid.UUID, b Binding) error {
 	a, err := s.ByID(ctx, spaceID, accountID)
 	if err != nil {
@@ -98,6 +99,9 @@ func (s *Store) SetBinding(ctx context.Context, spaceID, accountID uuid.UUID, b 
 		return errBinding
 	}
 	if b.Conditions != ConditionsManual && b.Conditions != ConditionsAuto {
+		return errBinding
+	}
+	if money, ok := p.VariantMoney(b.Variant); !ok || money != a.Currency {
 		return errBinding
 	}
 	if p.Kind == deposit.KindDeposit {
