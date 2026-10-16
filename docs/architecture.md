@@ -31,6 +31,8 @@
 | `internal/importer/tinvest` | подключение Т-Инвестиций: синхронизация операций, сверка, цены |
 | `internal/importer/table` | импорт таблицы (CSV) и выгрузка журнала в CSV |
 | `internal/export` | выгрузка всего пространства в JSON |
+| `internal/intermediary` | справочник банков и брокеров: страхование вкладов, защита ИИС, страна |
+| `internal/deposit` | каталог программ вкладов и накопительных счетов банков и ставка счёта на день (Р-52, Р-53) |
 | `internal/platform/*` | общее: конфигурация, база и миграции, HTTP-сервер, фоновые задачи (River), деньги, даты, шифрование секретов |
 
 Правило: модуль пишет и читает только свои таблицы, чужие данные — через
@@ -51,7 +53,7 @@
 | Слой | Пакеты |
 |---|---|
 | 0 | `internal/platform/*` |
-| 1 | `family` |
+| 1 | `family`; справочники `intermediary` и `deposit` |
 | 2 | `instrument`, `marketdata`, `account` |
 | 3 | ядро учёта: `portfolio`, `operation`, `corporateaction` (с каталогом `instrument` со слоя 2) |
 | 4 | `importer/*`, `export` |

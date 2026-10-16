@@ -1,0 +1,40 @@
+id: kubankredit-nakopitelniy
+bank: kubankredit
+name: Накопительный счёт
+kind: savings
+watch:
+  - https://kk.ru/deposits/nakopitelniy
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://kk.ru/deposits/nakopitelniy
+    notes: >-
+      Дата редакции на странице банка не указана — действует не позже дня сверки. Ставка привязана к ключевой и
+      меняется вместе с ней. Первые 2 календарных месяца — ключевая на остаток до 1 000 000 ₽ и 0,6 ключевой сверх;
+      потом — 0,6 ключевой. Надбавки — к базовой ставке: за зарплату или пенсию в банке за календарный месяц, за
+      покупки по картам банка с последнего дня прошлого месяца по предпоследний день текущего. Проценты — в последний
+      день месяца, причисляются к счёту.
+    variants:
+      - id: daily
+        name: На ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        split: true
+        grid:
+          - { key_times: "0.6" }
+        schedule:
+          - name: Приветственная
+            months: 2
+            grid:
+              - { key_times: "1" }
+              - { amount_from: 100000001, key_times: "0.6" }
+        bonuses:
+          - { id: income, name: Зарплата или пенсия в банке, plus: "3", check: income }
+          - id: spend
+            name: Покупки по картам банка за месяц
+            check: card_spend
+            levels:
+              - { from: 2000000, plus: "0.5" }
+              - { from: 5000000, plus: "1" }

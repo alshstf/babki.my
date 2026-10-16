@@ -1,0 +1,60 @@
+id: vtb-schet
+bank: vtb
+name: Накопительный ВТБ-Счёт
+kind: savings
+watch:
+  - https://www.vtb.ru/personal/vklady-i-scheta/vtb-schet/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.vtb.ru/personal/vklady-i-scheta/vtb-schet/
+    notes: >-
+      Дата редакции на странице банка не указана — действует не позже дня сверки. Способ начисления выбирается при
+      открытии и потом не меняется. Меньше 1 000 ₽ в любой день: на ежедневный остаток — за этот день процентов нет, на
+      минимальный — за весь месяц. Приветственная ставка — 2 календарных месяца, считая месяц открытия, если 180 дней
+      баланс вкладов и накопительных в ВТБ был меньше 1 000 ₽; надбавки в это время не действуют. Надбавка за траты:
+      от 20 000 ₽ — клиентам «Мультикарты», от 50 000 ₽ — «Привилегии», от 100 000 ₽ — Private; траты считаются с
+      последнего дня прошлого месяца по предпоследний день текущего. Надбавка за уровень «Расти с ВТБ» — за действия
+      прошлого месяца. Повышенная ставка — на сумму до 1 млн ₽, сверх — базовая.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "6" }
+        mgs: "6"
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "14.2" }], cap: 100000000, requires: new_client }
+        bonuses: &vtb-bonuses
+          - { id: salary, name: Зарплата в ВТБ, plus: "2", check: income, group: status, cap: 100000000 }
+          - { id: pension, name: Пенсия в ВТБ, plus: "2", check: income, group: status, cap: 100000000 }
+          - { id: subscription, name: Подписка ВТБ Плюс, plus: "2", check: manual, group: status, cap: 100000000 }
+          - id: spend
+            name: Покупки по картам ВТБ за месяц
+            check: card_spend
+            cap: 100000000
+            levels:
+              - { from: 2000000, plus: "1" }
+              - { from: 5000000, plus: "4" }
+          - id: level
+            name: Уровень «Расти с ВТБ» (Серебряный, Золотой)
+            check: manual
+            next_month: true
+            cap: 100000000
+            levels:
+              - { from: 1, plus: "1" }
+              - { from: 2, plus: "1.5" }
+      - id: daily
+        name: На ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "5" }
+        mgs: "5"
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "13.2" }], cap: 100000000, requires: new_client }
+        bonuses: *vtb-bonuses

@@ -1,0 +1,30 @@
+id: gazprombank-klyuchevoy-moment
+bank: gazprombank
+name: Вклад «Ключевой момент»
+kind: deposit
+watch:
+  - https://www.gazprombank.ru/personal/increase/deposits/detail/7937943/
+editions:
+  - from: 2026-10-03
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/personal/increase/deposits/detail/7937943/
+    notes: >-
+      Ставка — ключевая на каждый день срока плюс фиксированное значение; значение задаётся при открытии и при
+      продлении. Новая ключевая начинает действовать на следующий рабочий день после вступления в силу. Сумма — от
+      100 000 до 15 000 000 ₽; без пополнения и снятия; проценты — в день окончания срока; досрочно — 0,01 %.
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        key: { next_workday: true }
+        grid:
+          - { from: 120, to: 120, amount_from: 10000000, key_plus: "-0.4" }
+          - { from: 181, to: 181, amount_from: 10000000, key_plus: "-0.3" }
+          - { from: 213, to: 213, amount_from: 10000000, key_plus: "-0.2" }
+          - { from: 367, to: 367, amount_from: 10000000, key_plus: "-0.2" }
+          - { from: 548, to: 548, amount_from: 10000000, key_plus: "0.3" }
+          - { from: 731, to: 731, amount_from: 10000000, key_plus: "1" }
+          - { from: 1095, to: 1095, amount_from: 10000000, key_plus: "2" }

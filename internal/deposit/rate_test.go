@@ -1,0 +1,247 @@
+package deposit
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
+
+func day(s string) time.Time {
+	d, err := time.Parse(time.DateOnly, s)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// keys is a key rate history: a rate from each day on.
+func keys(points ...any) KeyOn {
+	return func(on time.Time) (decimal.Decimal, bool, error) {
+		var out decimal.Decimal
+		found := false
+		for i := 0; i+1 < len(points); i += 2 {
+			if !day(points[i].(string)).After(on) {
+				out, found = decimal.RequireFromString(points[i+1].(string)), true
+			}
+		}
+		return out, found, nil
+	}
+}
+
+// marks are the conditions met: an id to its level, in every month.
+func marks(m map[string]int) Conditions {
+	return func(id string, _ time.Time) (int, bool) {
+		level, ok := m[id]
+		return level, ok
+	}
+}
+
+func programme(t *testing.T, id string) Programme {
+	t.Helper()
+	p, ok := ByID(id)
+	if !ok {
+		t.Fatalf("no %s in the catalog", id)
+	}
+	return p
+}
+
+func pct(t *testing.T, q Quote, err error, want string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("quote: %v", err)
+	}
+	if !q.Percent.Equal(decimal.RequireFromString(want)) {
+		t.Errorf("rate = %s, want %s (parts %+v)", q.Percent, want, q.Parts)
+	}
+}
+
+// Every programme of the catalog reads and holds together.
+func TestTheCatalogHolds(t *testing.T) {
+	all, err := Catalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) < 4 {
+		t.Fatalf("catalog = %d programmes", len(all))
+	}
+	for _, p := range all {
+		if len(p.Watch) == 0 {
+			t.Errorf("%s: no pages to watch", p.ID)
+		}
+	}
+}
+
+// A file that would mislead the rate is refused: no bank, a grid that is
+// neither fixed nor tied, a deposit's cell without its term, editions out of
+// order, a bonus of an unknown check.
+func TestABrokenProgrammeIsRefused(t *testing.T) {
+	good := `
+id: x
+bank: vtb
+name: X
+kind: deposit
+editions:
+  - from: 2026-01-01
+    checked_on: 2026-01-02
+    sources: [https://example.ru]
+    variants:
+      - { id: a, payouts: [end], ops: none, term_unit: days, grid: [{ from: 1, to: 30, percent: "10" }] }
+`
+	if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(good)}}); err != nil {
+		t.Fatalf("a good file: %v", err)
+	}
+	order := good + `  - from: 2025-01-01
+    checked_on: 2026-01-02
+    sources: [https://example.ru]
+    variants:
+      - { id: a, payouts: [end], ops: none, term_unit: days, grid: [{ from: 1, to: 30, percent: "10" }] }
+`
+	for name, text := range map[string]string{
+		"no bank":       replace(good, "bank: vtb", "bank: nobank"),
+		"neither":       replace(good, `percent: "10"`, `amount_from: 0`),
+		"no term":       replace(good, "from: 1, to: 30, ", ""),
+		"order":         order,
+		"unknown check": replace(good, "grid:", `bonuses: [{ id: b, plus: "1", check: guess }], grid:`),
+	} {
+		if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(text)}}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func replace(s, old, new string) string {
+	if !strings.Contains(s, old) {
+		panic("no " + old)
+	}
+	return strings.Replace(s, old, new, 1)
+}
+
+// The note's family (Р-53): the ВТБ-Счёт on the minimal balance. A new
+// client has 14,2 % for the month of opening and the next — up to 1 млн,
+// the base 6 % above it, no bonuses; then 6 + 2 for the wages (a pension at
+// the same time adds nothing more) + 4 for purchases from 50 000 ₽ = 12 %,
+// on up to 1 млн. Not a new client — the base and the bonuses at once.
+func TestTheVTBSavingsAccount(t *testing.T) {
+	p := programme(t, "vtb-schet")
+	h := Holding{Variant: "minimum", OpenedOn: day("2026-10-16")}
+	all := marks(map[string]int{"new_client": 0, "salary": 0, "pension": 0, "spend": 1})
+	q, err := p.Quote(h, day("2026-11-30"), 900_000_00, nil, all)
+	pct(t, q, err, "14.2")
+	if q.Period != "Приветственная" || len(q.Bonuses) != 0 {
+		t.Errorf("welcome = %+v", q)
+	}
+	q, err = p.Quote(h, day("2026-11-30"), 1_200_000_00, nil, all)
+	pct(t, q, err, "12.833333") // (14,2 × 1 млн + 6 × 200 000) / 1,2 млн
+	q, err = p.Quote(h, day("2026-12-01"), 1_200_000_00, nil, all)
+	pct(t, q, err, "11") // (12 × 1 млн + 6 × 200 000) / 1,2 млн
+	if len(q.Bonuses) != 2 {
+		t.Errorf("bonuses = %v, want one of wages and pension and purchases", q.Bonuses)
+	}
+	q, err = p.Quote(h, day("2026-10-20"), 500_000_00, nil, marks(map[string]int{"subscription": 0, "level": 1}))
+	pct(t, q, err, "9.5") // 6 + 2 + 1,5: no welcome
+	daily := Holding{Variant: "daily", OpenedOn: day("2026-10-16")}
+	q, err = p.Quote(daily, day("2026-10-20"), 500_000_00, nil, all)
+	pct(t, q, err, "13.2")
+}
+
+// Газпромбанк's «Ключевой момент» for 367 days: the key rate less 0,2. The
+// key rate cut on a Friday counts from Monday; a term the bank has no rate
+// for, or a deposit opened before the edition, gets none.
+func TestTheKeyMomentFollowsTheKeyRateFromTheNextWorkingDay(t *testing.T) {
+	p := programme(t, "gazprombank-klyuchevoy-moment")
+	h := Holding{Variant: "end", OpenedOn: day("2026-10-05"), Term: 367, Amount: 500_000_00}
+	key := keys("2026-07-27", "14", "2026-10-23", "13")
+	q, err := p.Quote(h, day("2026-10-23"), 500_000_00, key, nil)
+	pct(t, q, err, "13.8")
+	q, err = p.Quote(h, day("2026-10-25"), 500_000_00, key, nil)
+	pct(t, q, err, "13.8")
+	q, err = p.Quote(h, day("2026-10-26"), 500_000_00, key, nil)
+	pct(t, q, err, "12.8")
+	h.Term = 366
+	if _, err := p.Quote(h, day("2026-10-26"), 500_000_00, key, nil); !errors.Is(err, ErrNoCell) {
+		t.Errorf("366 days: %v", err)
+	}
+	h.Term, h.OpenedOn = 367, day("2026-10-02")
+	if _, err := p.Quote(h, day("2026-10-26"), 500_000_00, key, nil); !errors.Is(err, ErrNoEdition) {
+		t.Errorf("opened before the edition: %v", err)
+	}
+	if _, err := p.Quote(Holding{Variant: "end", OpenedOn: day("2026-10-05"), Term: 367, Amount: 500_000_00}, day("2026-10-26"), 1, keys(), nil); !errors.Is(err, ErrNoKeyRate) {
+		t.Errorf("no key rate: %v", err)
+	}
+}
+
+// Т-Банк's СмартВклад: a fixed rate by the term's months, the sum from
+// 50 000 ₽; no rate for less, nor for a 1 month deposit topped up.
+func TestTheSmartDepositByMonths(t *testing.T) {
+	p := programme(t, "tbank-smartvklad")
+	q, err := p.Quote(Holding{Variant: "fixed", OpenedOn: day("2026-10-01"), Term: 6, Amount: 100_000_00}, day("2027-01-15"), 100_000_00, nil, nil)
+	pct(t, q, err, "11.5")
+	for _, h := range []Holding{
+		{Variant: "topup", OpenedOn: day("2026-10-01"), Term: 1, Amount: 100_000_00},
+		{Variant: "fixed", OpenedOn: day("2026-10-01"), Term: 6, Amount: 40_000_00},
+	} {
+		if _, err := p.Quote(h, day("2026-10-15"), h.Amount, nil, nil); !errors.Is(err, ErrNoCell) {
+			t.Errorf("%+v: %v", h, err)
+		}
+	}
+	if _, err := p.Quote(Holding{Variant: "nope", OpenedOn: day("2026-10-01"), Term: 6, Amount: 100_000_00}, day("2026-10-15"), 1, nil, nil); !errors.Is(err, ErrNoVariant) {
+		t.Errorf("no variant: %v", err)
+	}
+}
+
+// Кубань Кредит's savings account: for two calendar months the key rate on
+// up to 1 000 000 ₽ and 0,6 of it above, the bonuses not added; then 0,6 of
+// the key rate on all with 3 for the wages and 1 for purchases from 50 000 ₽.
+func TestTheKubanSavingsAccountSplitsTheBalance(t *testing.T) {
+	p := programme(t, "kubankredit-nakopitelniy")
+	h := Holding{Variant: "daily", OpenedOn: day("2026-10-20")}
+	key := keys("2026-07-27", "14")
+	met := marks(map[string]int{"income": 0, "spend": 1})
+	q, err := p.Quote(h, day("2026-11-10"), 1_500_000_00, key, met)
+	// (14 × 100 000 001 + 8,4 × 49 999 999) / 150 000 000, in kopecks.
+	pct(t, q, err, "12.133333")
+	q, err = p.Quote(h, day("2026-12-01"), 1_500_000_00, key, met)
+	pct(t, q, err, "12.4")
+	q, err = p.Quote(h, day("2026-12-01"), 0, key, nil)
+	pct(t, q, err, "8.4")
+}
+
+// A new key rate by the month (Новикомбанк, «Рантье»): a change up to the
+// 25th counts from the first working day of the next month, a later one from
+// its fifth.
+func TestTheKeyRateByTheMonth(t *testing.T) {
+	lag := &KeyLag{Cutoff: 25, Workday: 1, LateWorkday: 5}
+	for on, want := range map[string]string{
+		"2026-11-01": "2026-09-30", // a Sunday before the month's first working day
+		"2026-11-02": "2026-10-25", // the first working day: changes up to 25 October
+		"2026-11-06": "2026-10-25",
+		"2026-11-09": "2026-10-31", // the fifth working day (4 November is a holiday)
+	} {
+		if got := keyDay(day(on), lag).Format(time.DateOnly); got != want {
+			t.Errorf("%s: key of %s, want %s", on, got, want)
+		}
+	}
+}
+
+// A deposit of a part above a cap at a share of the rate (ПСБ: 0,65 of it
+// above 20 млн), a bonus of one of a group, a welcome period by days.
+func TestCapsAndGroups(t *testing.T) {
+	p := Programme{ID: "t", Kind: KindDeposit, Editions: []Edition{{From: "2026-01-01", Variants: []Variant{{
+		ID: "a", TermUnit: TermDays, Grid: []Cell{{From: 1, To: 400, Rate: Rate{Percent: "10"}}},
+		Cap: &Cap{Amount: 20_000_000_00, Share: "0.65"},
+		Bonuses: []Bonus{
+			{ID: "x", Plus: "1", Group: "g"},
+			{ID: "y", Plus: "2", Group: "g"},
+		},
+		Schedule: []Period{{Name: "w", Days: 62, Plus: "1.5", Bonuses: true}},
+	}}}}}
+	h := Holding{Variant: "a", OpenedOn: day("2026-03-01"), Term: 370, Amount: 30_000_000_00}
+	q, err := p.Quote(h, day("2026-06-01"), 30_000_000_00, nil, marks(map[string]int{"x": 0, "y": 0}))
+	pct(t, q, err, "10.6") // (12 × 20 млн + 12 × 0,65 × 10 млн) / 30 млн: the group's greater bonus
+	q, err = p.Quote(h, day("2026-04-30"), 10_000_000_00, nil, nil)
+	pct(t, q, err, "11.5") // day 61 of the 62
+}
