@@ -1,0 +1,23 @@
+id: otp-nakopitelny
+bank: otp
+name: Накопительный счёт
+kind: savings
+watch:
+  - https://www.otpbank.ru/retail/deposit/nakopitelnyy-schet/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.otpbank.ru/retail/deposit/nakopitelnyy-schet/
+    notes: >-
+      Дата редакции у банка не указана — действует не позже дня сверки. 11,5 % на ежедневный остаток до 2 млн ₽,
+      проценты каждый день, без условий; на сумму сверх 2 млн ₽ банк процентов не начисляет.
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        accrual: daily
+        payouts: [daily]
+        ops: topup_withdraw
+        grid:
+          - { percent: "11.5" }
+        cap: { amount: 200000000, percent: "0" }

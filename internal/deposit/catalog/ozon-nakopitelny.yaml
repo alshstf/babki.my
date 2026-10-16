@@ -1,0 +1,33 @@
+id: ozon-nakopitelny
+bank: ozon
+name: Накопительный счёт
+kind: savings
+watch:
+  - https://finance.ozon.ru/promo/savings/landing
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://cdn1.ozone.ru/s3/bozon-savings-b2c-tariffs/min_income_tariff_doc-e2f2a179-ecb1-4a46-8319-0eada7cf1eca.pdf
+    notes: >-
+      Дата редакции в тарифе не указана — действует не позже дня сверки. Проценты — на минимальный остаток
+      расчётного периода (между расчётными датами — днями выплаты кешбэка), выплата на счёт. Первые два расчётных
+      периода — 15,1 %; потом 12,7 %, если в периоде были Premium или Ultra либо в банке хранилось суммарно 1,4 млн ₽,
+      иначе 7 %.
+    variants:
+      - id: minimum
+        name: Накопительный счёт
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "7" }
+        schedule:
+          - { name: Первые два периода, days: 61, grid: [{ percent: "15.1" }] }
+        bonuses:
+          - { id: premium, name: Premium или Ultra, plus: "5.7", check: manual, group: status }
+          - id: balance
+            name: В Ozon Банке суммарно от 1,4 млн ₽
+            check: bank_balance
+            group: status
+            levels: [{ from: 140000000, plus: "5.7" }]

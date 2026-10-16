@@ -1,0 +1,22 @@
+id: ozon-ezhednevny
+bank: ozon
+name: Счёт с ежедневным доходом
+kind: savings
+watch:
+  - https://finance.ozon.ru/apps/landing/saving-daily
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://finance.ozon.ru/apps/landing/saving-daily
+    notes: >-
+      Дата редакции у банка не указана — действует не позже дня сверки. 12 % на ежедневный остаток на конец дня,
+      проценты — каждый день на этот же счёт, без условий.
+    variants:
+      - id: daily
+        name: Счёт с ежедневным доходом
+        accrual: daily
+        payouts: [daily]
+        ops: topup_withdraw
+        grid:
+          - { percent: "12" }

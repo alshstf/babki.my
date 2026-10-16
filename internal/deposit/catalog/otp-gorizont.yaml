@@ -1,0 +1,46 @@
+id: otp-gorizont
+bank: otp
+name: Вклад «Горизонт»
+kind: deposit
+watch:
+  - https://www.otpbank.ru/retail/deposit/gorizont/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.otpbank.ru/retail/deposit/gorizont/
+    notes: >-
+      Дата редакции у банка не указана — ставки со страницы вклада в день сверки. От 1 000 ₽, ставка фиксирована на
+      срок и зависит от суммы (от 1,5 и 15 млн ₽ — выше), проценты в конце срока на счёт. Досрочно — проценты за
+      фактические дни по сниженной ставке. Продление — по ставкам дня продления.
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 100000, percent: "12" }
+          - { from: 181, to: 181, amount_from: 100000, percent: "13.4" }
+          - { from: 275, to: 275, amount_from: 100000, percent: "13.2" }
+          - { from: 366, to: 366, amount_from: 100000, percent: "12.5" }
+          - { from: 460, to: 460, amount_from: 100000, percent: "10.6" }
+          - { from: 549, to: 549, amount_from: 100000, percent: "10.2" }
+          - { from: 732, to: 732, amount_from: 100000, percent: "11.2" }
+          - { from: 1098, to: 1098, amount_from: 100000, percent: "11.2" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "12.1" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "13.5" }
+          - { from: 275, to: 275, amount_from: 150000000, percent: "13.4" }
+          - { from: 366, to: 366, amount_from: 150000000, percent: "12.7" }
+          - { from: 460, to: 460, amount_from: 150000000, percent: "10.9" }
+          - { from: 549, to: 549, amount_from: 150000000, percent: "10.5" }
+          - { from: 732, to: 732, amount_from: 150000000, percent: "11.3" }
+          - { from: 1098, to: 1098, amount_from: 150000000, percent: "11.3" }
+          - { from: 91, to: 91, amount_from: 1500000000, percent: "12.2" }
+          - { from: 181, to: 181, amount_from: 1500000000, percent: "13.6" }
+          - { from: 275, to: 275, amount_from: 1500000000, percent: "13.5" }
+          - { from: 366, to: 366, amount_from: 1500000000, percent: "12.9" }
+          - { from: 460, to: 460, amount_from: 1500000000, percent: "11.1" }
+          - { from: 549, to: 549, amount_from: 1500000000, percent: "10.7" }
+          - { from: 732, to: 732, amount_from: 1500000000, percent: "11.5" }
+          - { from: 1098, to: 1098, amount_from: 1500000000, percent: "11.5" }

@@ -1,0 +1,23 @@
+id: kubankredit-upravlyaemy
+bank: kubankredit
+name: Вклад «Управляемый»
+kind: deposit
+watch:
+  - https://kk.ru/deposits/deposit-managed/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://kk.ru/deposits/deposit-managed/
+    notes: >-
+      Дата редакции у банка не указана — действует не позже дня сверки. Ставка — половина ключевой ставки Банка
+      России, срок 1100 дней, капитализация. Пополнение и снятие до неснижаемого остатка 10 ₽, продлений без
+      ограничения. Досрочно — проценты за фактический срок.
+    variants:
+      - id: capitalize
+        name: С капитализацией
+        payouts: [capitalize]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 1100, to: 1100, key_times: "0.5" }
