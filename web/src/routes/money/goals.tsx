@@ -136,7 +136,10 @@ function GoalRow({
               : f.value_minor < f.amount_minor
                 ? t("goals.fundPartShort", { account: accountName(f.account_id), amount: money(f.amount_minor), value: money(f.value_minor) })
                 : t("goals.fundPart", { account: accountName(f.account_id), amount: money(f.amount_minor) })}
-            {f.rate_percent !== null && t(f.rate_by_hand ? "goals.fundRateByHand" : "goals.fundRate", { percent: percent(f.rate_percent) })}
+            {f.rate_percent !== null &&
+              (f.rate_by_hand
+                ? t("goals.fundRateByHand", { percent: percent(f.rate_percent) })
+                : t("goals.fundRate", { percent: percent(f.rate_percent) }))}
           </li>
         ))}
         {g.funds.length === 0 && <li>{t("goals.noFunds")}</li>}
