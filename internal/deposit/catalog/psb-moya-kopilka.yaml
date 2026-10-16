@@ -1,0 +1,27 @@
+id: psb-moya-kopilka
+bank: psb
+name: Вклад «Моя копилка»
+kind: deposit
+watch:
+  - https://www.psbank.ru/personal/saving/mymoneybox
+  - https://www.psbank.ru/personal/saving
+editions:
+  - from: 2026-09-29
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/conditionsterms.pdf
+    notes: >-
+      Условия вкладов с 29.09.2026. От 50 000 ₽, пополнение — до 30 дней до конца срока, снятия нет, проценты
+      ежемесячно на вклад или на другой счёт. На сумму сверх 20 млн ₽ — 0,65 ставки (банк считает без
+      капитализированных процентов). Досрочно — «до востребования». Продление не больше трёх раз.
+    variants:
+      - id: monthly
+        name: Проценты ежемесячно
+        payouts: [capitalize, monthly]
+        ops: topup
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "11.5" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "11.7" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "11" }
+        cap: { amount: 2000000000, share: "0.65" }

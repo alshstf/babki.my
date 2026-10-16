@@ -1,0 +1,65 @@
+id: bspb-maksimalny
+bank: bspb
+name: Вклад «Максимальный»
+kind: deposit
+watch:
+  - https://www.bspb.ru/retail/deposits/maximum
+editions:
+  - from: 2026-10-08
+    checked_on: 2026-10-16
+    sources:
+      - https://s3.ru-msk.k2.cloud/bucket-cms-prod/kratkie_92a9a2fc64.pdf
+      - https://s3.ru-msk.k2.cloud/bucket-cms-prod/vklad_maksimalnyj_b4669357d4.pdf
+    notes: >-
+      «Краткие условия по вкладам» с 08.10.2026: от 10 000 ₽, без пополнения и снятия; online — на 0,5 п. п. выше, чем
+      в офисе. Сроки — 31, 91, 181, 367, 733 и 1097 дней. Продление — на условиях вклада «Депозит 2.0» в день продления
+      (у online — по выбору). Досрочно — ставка «До востребования».
+    variants:
+      - id: online-end
+        name: Online, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 1000000, percent: "12" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "12.7" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "12.9" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "12" }
+          - { from: 733, to: 733, amount_from: 1000000, percent: "10" }
+          - { from: 1097, to: 1097, amount_from: 1000000, percent: "10" }
+      - id: online-monthly
+        name: Online, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 1000000, percent: "12" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "12.5" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "12.5" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "11.2" }
+          - { from: 733, to: 733, amount_from: 1000000, percent: "8.4" }
+          - { from: 1097, to: 1097, amount_from: 1000000, percent: "7.5" }
+      - id: office-end
+        name: В офисе, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 1000000, percent: "11.5" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "12.2" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "12.4" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "11.5" }
+          - { from: 733, to: 733, amount_from: 1000000, percent: "9.5" }
+          - { from: 1097, to: 1097, amount_from: 1000000, percent: "9.5" }
+      - id: office-monthly
+        name: В офисе, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 1000000, percent: "11.5" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "12" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "12" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "10.7" }
+          - { from: 733, to: 733, amount_from: 1000000, percent: "7.9" }
+          - { from: 1097, to: 1097, amount_from: 1000000, percent: "7" }

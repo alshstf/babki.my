@@ -1,0 +1,201 @@
+id: domrf-moy-dom
+bank: domrf
+name: Вклад «Мой Дом»
+kind: deposit
+watch:
+  - https://domrfbank.ru/deposits/
+  - https://domrfbank.ru/deposits/docs/
+editions:
+  - from: 2026-10-09
+    checked_on: 2026-10-16
+    sources:
+      - https://domrfbank.ru/upload/iblock/800/n33j3oorrtxgwcuvzx0npw3zuw7yv7bf/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2009.10.2026.pdf
+    notes: >-
+      Ставки «Процентные ставки по вкладам с 09.10.2026» (банк публикует новую таблицу раз в одну-две недели). Ступень —
+      по сумме вклада: от 30 000 ₽ и от 1,5 млн ₽. Надбавка «Новый клиент» или за «новые деньги» — только у вклада без
+      пополнения и снятия на 91 день, только в основной срок и если новые все деньги вклада. Досрочно — 0,01 %.
+    variants:
+      - id: none-end
+        name: Без пополнения и снятия, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 3000000, percent: "13.5" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "13.8" }
+          - { from: 122, to: 122, amount_from: 3000000, percent: "13.7" }
+          - { from: 151, to: 151, amount_from: 3000000, percent: "13.7" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "13.7" }
+          - { from: 212, to: 212, amount_from: 3000000, percent: "13.5" }
+          - { from: 243, to: 243, amount_from: 3000000, percent: "12.9" }
+          - { from: 274, to: 274, amount_from: 3000000, percent: "12.7" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "12.7" }
+          - { from: 550, to: 550, amount_from: 3000000, percent: "11.7" }
+          - { from: 730, to: 730, amount_from: 3000000, percent: "11.5" }
+          - { from: 1100, to: 1100, amount_from: 3000000, percent: "11" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "13.7" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "13.8" }
+          - { from: 122, to: 122, amount_from: 150000000, percent: "13.9" }
+          - { from: 151, to: 151, amount_from: 150000000, percent: "13.9" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "13.9" }
+          - { from: 212, to: 212, amount_from: 150000000, percent: "13.7" }
+          - { from: 243, to: 243, amount_from: 150000000, percent: "13.1" }
+          - { from: 274, to: 274, amount_from: 150000000, percent: "12.9" }
+          - { from: 367, to: 367, amount_from: 150000000, percent: "12.9" }
+          - { from: 550, to: 550, amount_from: 150000000, percent: "11.9" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "11.7" }
+          - { from: 1100, to: 1100, amount_from: 150000000, percent: "11.2" }
+        bonuses:
+          - { id: new_money, name: Новый клиент или «новые деньги» — на весь вклад, check: manual, terms: [{ from: 91, to: 91, plus: "0.7" }] }
+      - id: none-monthly
+        name: Без пополнения и снятия, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 3000000, percent: "13.3" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "13.5" }
+          - { from: 122, to: 122, amount_from: 3000000, percent: "13.3" }
+          - { from: 151, to: 151, amount_from: 3000000, percent: "13.2" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "13.1" }
+          - { from: 212, to: 212, amount_from: 3000000, percent: "12.8" }
+          - { from: 243, to: 243, amount_from: 3000000, percent: "12.1" }
+          - { from: 274, to: 274, amount_from: 3000000, percent: "11.7" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "11.4" }
+          - { from: 550, to: 550, amount_from: 3000000, percent: "10.4" }
+          - { from: 730, to: 730, amount_from: 3000000, percent: "9.8" }
+          - { from: 1100, to: 1100, amount_from: 3000000, percent: "8.8" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "13.5" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "13.5" }
+          - { from: 122, to: 122, amount_from: 150000000, percent: "13.5" }
+          - { from: 151, to: 151, amount_from: 150000000, percent: "13.4" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "13.3" }
+          - { from: 212, to: 212, amount_from: 150000000, percent: "13" }
+          - { from: 243, to: 243, amount_from: 150000000, percent: "12.3" }
+          - { from: 274, to: 274, amount_from: 150000000, percent: "11.9" }
+          - { from: 367, to: 367, amount_from: 150000000, percent: "11.6" }
+          - { from: 550, to: 550, amount_from: 150000000, percent: "10.6" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "10" }
+          - { from: 1100, to: 1100, amount_from: 150000000, percent: "9" }
+        bonuses:
+          - { id: new_money, name: Новый клиент или «новые деньги» — на весь вклад, check: manual, terms: [{ from: 91, to: 91, plus: "0.7" }] }
+      - id: topup-end
+        name: С пополнением, проценты в конце срока
+        payouts: [end]
+        ops: topup
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 3000000, percent: "10.9" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "11.5" }
+          - { from: 122, to: 122, amount_from: 3000000, percent: "11.2" }
+          - { from: 151, to: 151, amount_from: 3000000, percent: "10.9" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "10.9" }
+          - { from: 212, to: 212, amount_from: 3000000, percent: "10.5" }
+          - { from: 243, to: 243, amount_from: 3000000, percent: "10.3" }
+          - { from: 274, to: 274, amount_from: 3000000, percent: "10.1" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "6.5" }
+          - { from: 550, to: 550, amount_from: 3000000, percent: "7.1" }
+          - { from: 730, to: 730, amount_from: 3000000, percent: "7" }
+          - { from: 1100, to: 1100, amount_from: 3000000, percent: "6.6" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "11.1" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "11.5" }
+          - { from: 122, to: 122, amount_from: 150000000, percent: "11.4" }
+          - { from: 151, to: 151, amount_from: 150000000, percent: "11.1" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "11.1" }
+          - { from: 212, to: 212, amount_from: 150000000, percent: "10.7" }
+          - { from: 243, to: 243, amount_from: 150000000, percent: "10.5" }
+          - { from: 274, to: 274, amount_from: 150000000, percent: "10.3" }
+          - { from: 367, to: 367, amount_from: 150000000, percent: "6.7" }
+          - { from: 550, to: 550, amount_from: 150000000, percent: "7.3" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "7.2" }
+          - { from: 1100, to: 1100, amount_from: 150000000, percent: "6.8" }
+      - id: topup-monthly
+        name: С пополнением, проценты ежемесячно
+        payouts: [monthly]
+        ops: topup
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 3000000, percent: "10.7" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "11.2" }
+          - { from: 122, to: 122, amount_from: 3000000, percent: "10.8" }
+          - { from: 151, to: 151, amount_from: 3000000, percent: "10.4" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "10.3" }
+          - { from: 212, to: 212, amount_from: 3000000, percent: "9.8" }
+          - { from: 243, to: 243, amount_from: 3000000, percent: "9.5" }
+          - { from: 274, to: 274, amount_from: 3000000, percent: "9.1" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "5.2" }
+          - { from: 550, to: 550, amount_from: 3000000, percent: "5.8" }
+          - { from: 730, to: 730, amount_from: 3000000, percent: "5.3" }
+          - { from: 1100, to: 1100, amount_from: 3000000, percent: "4.4" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "10.9" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "11.2" }
+          - { from: 122, to: 122, amount_from: 150000000, percent: "11" }
+          - { from: 151, to: 151, amount_from: 150000000, percent: "10.6" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "10.5" }
+          - { from: 212, to: 212, amount_from: 150000000, percent: "10" }
+          - { from: 243, to: 243, amount_from: 150000000, percent: "9.7" }
+          - { from: 274, to: 274, amount_from: 150000000, percent: "9.3" }
+          - { from: 367, to: 367, amount_from: 150000000, percent: "5.4" }
+          - { from: 550, to: 550, amount_from: 150000000, percent: "6" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "5.5" }
+          - { from: 1100, to: 1100, amount_from: 150000000, percent: "4.6" }
+      - id: topup-withdraw-end
+        name: С пополнением и снятием, проценты в конце срока
+        payouts: [end]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 3000000, percent: "10.8" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "11" }
+          - { from: 122, to: 122, amount_from: 3000000, percent: "10.7" }
+          - { from: 151, to: 151, amount_from: 3000000, percent: "10.3" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "10.2" }
+          - { from: 212, to: 212, amount_from: 3000000, percent: "9.6" }
+          - { from: 243, to: 243, amount_from: 3000000, percent: "9.1" }
+          - { from: 274, to: 274, amount_from: 3000000, percent: "8.7" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "5.8" }
+          - { from: 550, to: 550, amount_from: 3000000, percent: "6.1" }
+          - { from: 730, to: 730, amount_from: 3000000, percent: "5.6" }
+          - { from: 1100, to: 1100, amount_from: 3000000, percent: "3.9" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "11" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "11" }
+          - { from: 122, to: 122, amount_from: 150000000, percent: "10.9" }
+          - { from: 151, to: 151, amount_from: 150000000, percent: "10.5" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "10.4" }
+          - { from: 212, to: 212, amount_from: 150000000, percent: "9.8" }
+          - { from: 243, to: 243, amount_from: 150000000, percent: "9.3" }
+          - { from: 274, to: 274, amount_from: 150000000, percent: "8.9" }
+          - { from: 367, to: 367, amount_from: 150000000, percent: "6" }
+          - { from: 550, to: 550, amount_from: 150000000, percent: "6.3" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "5.8" }
+          - { from: 1100, to: 1100, amount_from: 150000000, percent: "4.1" }
+      - id: topup-withdraw-monthly
+        name: С пополнением и снятием, проценты ежемесячно
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 3000000, percent: "10.6" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "10.7" }
+          - { from: 122, to: 122, amount_from: 3000000, percent: "10.3" }
+          - { from: 151, to: 151, amount_from: 3000000, percent: "9.8" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "9.6" }
+          - { from: 212, to: 212, amount_from: 3000000, percent: "8.9" }
+          - { from: 243, to: 243, amount_from: 3000000, percent: "8.3" }
+          - { from: 274, to: 274, amount_from: 3000000, percent: "7.7" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "4.5" }
+          - { from: 550, to: 550, amount_from: 3000000, percent: "4.8" }
+          - { from: 730, to: 730, amount_from: 3000000, percent: "3.9" }
+          - { from: 1100, to: 1100, amount_from: 3000000, percent: "1.7" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "10.8" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "10.7" }
+          - { from: 122, to: 122, amount_from: 150000000, percent: "10.5" }
+          - { from: 151, to: 151, amount_from: 150000000, percent: "10" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "9.8" }
+          - { from: 212, to: 212, amount_from: 150000000, percent: "9.1" }
+          - { from: 243, to: 243, amount_from: 150000000, percent: "8.5" }
+          - { from: 274, to: 274, amount_from: 150000000, percent: "7.9" }
+          - { from: 367, to: 367, amount_from: 150000000, percent: "4.7" }
+          - { from: 550, to: 550, amount_from: 150000000, percent: "5" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "4.1" }
+          - { from: 1100, to: 1100, amount_from: 150000000, percent: "1.9" }

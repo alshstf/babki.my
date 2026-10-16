@@ -1,0 +1,24 @@
+id: bspb-upravlyaemy
+bank: bspb
+name: Вклад «Управляемый»
+kind: deposit
+watch:
+  - https://www.bspb.ru/retail/deposits/upravljaemyj
+editions:
+  - from: 2026-10-08
+    checked_on: 2026-10-16
+    sources:
+      - https://s3.ru-msk.k2.cloud/bucket-cms-prod/kratkie_92a9a2fc64.pdf
+      - https://s3.ru-msk.k2.cloud/bucket-cms-prod/vklad_upravlajemyj_60fc8de772.pdf
+    notes: >-
+      От 50 000 ₽; пополнение и снятие до неснижаемого остатка 50 000 ₽; проценты ежемесячно на вклад. Online и в
+      офисе — одни ставки. Продление — на условиях «Управляемого» в день продления.
+    variants:
+      - id: monthly
+        name: Проценты ежемесячно
+        payouts: [capitalize]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "11" }
+          - { from: 181, to: 181, amount_from: 5000000, percent: "10.5" }

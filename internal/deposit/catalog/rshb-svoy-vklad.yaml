@@ -1,0 +1,122 @@
+id: rshb-svoy-vklad
+bank: rshb
+name: «Свой вклад»
+kind: deposit
+watch:
+  - https://www.rshb.ru/natural/deposits/svoy-deposit
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.rshb.ru/natural/deposits/svoy-deposit
+      - https://www.rshb.ru/wcms-resources/vkladcalculator-novij-obshij.json
+    notes: >-
+      Дата редакции у банка не указана — ставки калькулятора страницы в день сверки. Сумма — от 5 000 до 10 млн ₽
+      (со снятием — от 10 000 ₽), срок в месяцах. Дистанционно ставки выше, чем в офисе. «Новый сберегатель» (30 дней
+      без вкладов и накопительных в банке) получает надбавку только к вкладу без пополнения и снятия с процентами в
+      конце срока. Акция «Выгодные зачисления» (пенсия или зарплата в банке) — по своим ставкам, ручная ставка.
+    variants:
+      - id: remote-end
+        name: Дистанционно, без пополнения и снятия, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 500000, percent: "12.4" }
+          - { from: 3, to: 3, amount_from: 500000, percent: "12.4" }
+          - { from: 4, to: 4, amount_from: 500000, percent: "13.3" }
+          - { from: 6, to: 6, amount_from: 500000, percent: "12.8" }
+          - { from: 9, to: 9, amount_from: 500000, percent: "11.9" }
+          - { from: 13, to: 13, amount_from: 500000, percent: "10.9" }
+          - { from: 18, to: 18, amount_from: 500000, percent: "8" }
+          - { from: 24, to: 24, amount_from: 500000, percent: "8" }
+          - { from: 36, to: 36, amount_from: 500000, percent: "8" }
+        bonuses:
+          - { id: new_saver, name: Новый сберегатель (30 дней без вкладов и накопительных в банке), check: manual, terms: [{ from: 2, to: 2, plus: "0.2" }, { from: 3, to: 3, plus: "0.4" }, { from: 4, to: 4, plus: "0.2" }, { from: 6, to: 6, plus: "0.2" }, { from: 9, to: 9, plus: "0.2" }, { from: 13, to: 13, plus: "0.2" }, { from: 18, to: 18, plus: "0.2" }, { from: 24, to: 24, plus: "0.2" }, { from: 36, to: 36, plus: "0.2" }] }
+      - id: remote-monthly
+        name: Дистанционно, без пополнения и снятия, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 500000, percent: "12.3" }
+          - { from: 3, to: 3, amount_from: 500000, percent: "12.3" }
+          - { from: 4, to: 4, amount_from: 500000, percent: "13" }
+          - { from: 6, to: 6, amount_from: 500000, percent: "12.45" }
+          - { from: 9, to: 9, amount_from: 500000, percent: "11.4" }
+          - { from: 13, to: 13, amount_from: 500000, percent: "10.3" }
+          - { from: 18, to: 18, amount_from: 500000, percent: "7.55" }
+          - { from: 24, to: 24, amount_from: 500000, percent: "7.4" }
+          - { from: 36, to: 36, amount_from: 500000, percent: "7.2" }
+      - id: office-end
+        name: В офисе, без пополнения и снятия, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 500000, percent: "12" }
+          - { from: 3, to: 3, amount_from: 500000, percent: "12" }
+          - { from: 4, to: 4, amount_from: 500000, percent: "12.9" }
+          - { from: 6, to: 6, amount_from: 500000, percent: "12.4" }
+          - { from: 9, to: 9, amount_from: 500000, percent: "11.5" }
+          - { from: 13, to: 13, amount_from: 500000, percent: "10.5" }
+          - { from: 18, to: 18, amount_from: 500000, percent: "7.6" }
+          - { from: 24, to: 24, amount_from: 500000, percent: "7.6" }
+          - { from: 36, to: 36, amount_from: 500000, percent: "7.6" }
+        bonuses:
+          - { id: new_saver, name: Новый сберегатель (30 дней без вкладов и накопительных в банке), check: manual, terms: [{ from: 2, to: 2, plus: "0.2" }, { from: 3, to: 3, plus: "0.4" }, { from: 4, to: 4, plus: "0.2" }, { from: 6, to: 6, plus: "0.2" }, { from: 9, to: 9, plus: "0.2" }, { from: 13, to: 13, plus: "0.2" }, { from: 18, to: 18, plus: "0.2" }, { from: 24, to: 24, plus: "0.2" }, { from: 36, to: 36, plus: "0.2" }] }
+      - id: office-monthly
+        name: В офисе, без пополнения и снятия, проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 500000, percent: "11.9" }
+          - { from: 3, to: 3, amount_from: 500000, percent: "11.9" }
+          - { from: 4, to: 4, amount_from: 500000, percent: "12.7" }
+          - { from: 6, to: 6, amount_from: 500000, percent: "12.05" }
+          - { from: 9, to: 9, amount_from: 500000, percent: "11.05" }
+          - { from: 13, to: 13, amount_from: 500000, percent: "9.95" }
+          - { from: 18, to: 18, amount_from: 500000, percent: "7.2" }
+          - { from: 24, to: 24, amount_from: 500000, percent: "7.1" }
+          - { from: 36, to: 36, amount_from: 500000, percent: "6.85" }
+      - id: remote-topup
+        name: Дистанционно, с пополнением
+        payouts: [end, monthly]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 500000, percent: "6.6" }
+          - { from: 6, to: 6, amount_from: 500000, percent: "6" }
+          - { from: 9, to: 9, amount_from: 500000, percent: "6" }
+          - { from: 13, to: 13, amount_from: 500000, percent: "5.9" }
+          - { from: 18, to: 18, amount_from: 500000, percent: "5.9" }
+          - { from: 24, to: 24, amount_from: 500000, percent: "5.9" }
+          - { from: 36, to: 36, amount_from: 500000, percent: "5.9" }
+          - { from: 3, to: 3, amount_from: 70000100, percent: "6.7" }
+          - { from: 6, to: 6, amount_from: 70000100, percent: "6.1" }
+          - { from: 9, to: 9, amount_from: 70000100, percent: "6.1" }
+          - { from: 13, to: 13, amount_from: 70000100, percent: "6" }
+          - { from: 18, to: 18, amount_from: 70000100, percent: "6" }
+          - { from: 24, to: 24, amount_from: 70000100, percent: "6" }
+          - { from: 36, to: 36, amount_from: 70000100, percent: "6" }
+      - id: remote-topup-withdraw
+        name: Дистанционно, с пополнением и снятием
+        payouts: [end, monthly]
+        ops: topup_withdraw
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 1000000, percent: "6.4" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "5.9" }
+          - { from: 9, to: 9, amount_from: 1000000, percent: "5.4" }
+          - { from: 13, to: 13, amount_from: 1000000, percent: "4.4" }
+          - { from: 18, to: 18, amount_from: 1000000, percent: "4.4" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "4.4" }
+          - { from: 36, to: 36, amount_from: 1000000, percent: "4.4" }
+          - { from: 3, to: 3, amount_from: 100000000, percent: "6.5" }
+          - { from: 6, to: 6, amount_from: 100000000, percent: "6" }
+          - { from: 9, to: 9, amount_from: 100000000, percent: "5.5" }
+          - { from: 13, to: 13, amount_from: 100000000, percent: "4.5" }
+          - { from: 18, to: 18, amount_from: 100000000, percent: "4.5" }
+          - { from: 24, to: 24, amount_from: 100000000, percent: "4.5" }
+          - { from: 36, to: 36, amount_from: 100000000, percent: "4.5" }

@@ -306,6 +306,28 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		{"ГПБ Копить", "gazprombank-kopit", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 181, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"salary": 0, "pension": 0}, "12.8"},
 		// Альфа: покупки от 100 000 ₽ — 12 % на сумму до 1 млн, сверх — базовые 7 %.
 		{"Альфа, покупки", "alfa-schet", Holding{Variant: "minimum", OpenedOn: day("2026-07-10")}, "2026-10-20", 2_000_000_00, map[string]int{"spend": 1}, "9.5"},
+		// Россельхозбанк: «до 13,5 %» — 4 месяца дистанционно, новый сберегатель.
+		{"РСХБ, новый сберегатель", "rshb-svoy-vklad", Holding{Variant: "remote-end", OpenedOn: day("2026-10-16"), Term: 4, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"new_saver": 0}, "13.5"},
+		// «Мой счёт»: покупки от 90 000 ₽ — 6 + 7.
+		{"РСХБ, Мой счёт", "rshb-moy-schet", Holding{Variant: "daily", OpenedOn: day("2026-01-10")}, "2026-10-20", 500_000_00, map[string]int{"spend": 2}, "13"},
+		// ДОМ.РФ «Мой Дом», 91 день, от 1,5 млн, «новые деньги» — 13,80 % / 14,50 %.
+		{"ДОМ.РФ, новые деньги", "domrf-moy-dom", Holding{Variant: "none-end", OpenedOn: day("2026-10-16"), Term: 91, Amount: 2_000_000_00}, "2026-10-20", 2_000_000_00, map[string]int{"new_money": 0}, "14.5"},
+		// «Активный процент», 91 день: в месяц открытия — наибольшая, потом по покупкам прошлого месяца.
+		{"ДОМ.РФ, месяц открытия", "domrf-aktivny-procent", Holding{Variant: "d91", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "14.5"},
+		{"ДОМ.РФ, покупки 55 000", "domrf-aktivny-procent", Holding{Variant: "d91", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-11-20", 100_000_00, map[string]int{"spend": 1}, "13.9"},
+		// БСПБ: «Максимальный online», 181 день, в конце срока — 12,9 %; накопительный с покупками — 12,5 %.
+		{"БСПБ, Максимальный", "bspb-maksimalny", Holding{Variant: "online-end", OpenedOn: day("2026-10-16"), Term: 181, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "12.9"},
+		{"БСПБ, накопительный", "bspb-nakopitelny", Holding{Variant: "minimum", OpenedOn: day("2026-01-10")}, "2026-10-20", 500_000_00, map[string]int{"spend": 0}, "12.5"},
+		// Уралсиб «Ключевой Плюс», 91 день — 13,20 % при ключевой 14.
+		{"Уралсиб, Ключевой Плюс", "uralsib-klyuchevoy-plus", Holding{Variant: "monthly", OpenedOn: day("2026-10-16"), Term: 91, Amount: 600_000_00}, "2026-10-20", 600_000_00, nil, "13.2"},
+		// Банк «Россия»: интернет-банк, 181 день, от 1 млн — 12,50 %.
+		{"Россия", "rossiya-rossiya", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 181, Amount: 1_500_000_00}, "2026-10-20", 1_500_000_00, nil, "12.5"},
+		// ПСБ: «Мой доход» в офисе, 181 день — 14,10 %; «Моя копилка» 181 день, 25 млн — 11,7 на 20 млн и 0,65 ставки сверх.
+		{"ПСБ, Мой доход", "psb-moy-dohod", Holding{Variant: "office", OpenedOn: day("2026-10-16"), Term: 181, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "14.1"},
+		{"ПСБ, Моя копилка", "psb-moya-kopilka", Holding{Variant: "monthly", OpenedOn: day("2026-10-16"), Term: 181, Amount: 25_000_000_00}, "2026-10-20", 25_000_000_00, nil, "10.881"},
+		// «Акцент на процент»: покупки от 100 000 ₽ — 14 %.
+		{"ПСБ, Акцент", "psb-akcent", Holding{Variant: "daily", OpenedOn: day("2026-01-10")}, "2026-10-20", 500_000_00, map[string]int{"spend": 2}, "14"},
+		{"ПСБ, Про запас", "psb-pro-zapas", Holding{Variant: "minimum", OpenedOn: day("2026-10-10")}, "2026-10-20", 500_000_00, map[string]int{"new_client": 0}, "13"},
 	}
 	for _, c := range cases {
 		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))
