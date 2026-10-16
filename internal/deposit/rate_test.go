@@ -328,6 +328,21 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		// «Акцент на процент»: покупки от 100 000 ₽ — 14 %.
 		{"ПСБ, Акцент", "psb-akcent", Holding{Variant: "daily", OpenedOn: day("2026-01-10")}, "2026-10-20", 500_000_00, map[string]int{"spend": 2}, "14"},
 		{"ПСБ, Про запас", "psb-pro-zapas", Holding{Variant: "minimum", OpenedOn: day("2026-10-10")}, "2026-10-20", 500_000_00, map[string]int{"new_client": 0}, "13"},
+		// Ozon: непополняемый на 3 месяца — номинальные 13,55 % (в рекламе «с капитализацией» 13,7 %).
+		{"Ozon, вклад", "ozon-vklad", Holding{Variant: "fixed", OpenedOn: day("2026-10-16"), Term: 3, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "13.55"},
+		// Ozon, накопительный: с 3-го периода 12,7 % при 1,4 млн ₽ в банке.
+		{"Ozon, накопительный", "ozon-nakopitelny", Holding{Variant: "minimum", OpenedOn: day("2026-01-10")}, "2026-10-20", 1_500_000_00, map[string]int{"balance": 0}, "12.7"},
+		// ОТП «Горизонт»: 181 день, от 1,5 млн — 13,5 %; накопительный 11,5 % до 2 млн, сверх — ничего.
+		{"ОТП, Горизонт", "otp-gorizont", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 181, Amount: 2_000_000_00}, "2026-10-20", 2_000_000_00, nil, "13.5"},
+		{"ОТП, накопительный", "otp-nakopitelny", Holding{Variant: "daily", OpenedOn: day("2026-01-10")}, "2026-10-20", 4_000_000_00, nil, "5.75"},
+		// ТКБ «Ключевой доход», 105 дней: КС, КС − 0,15, КС − 0,3 по периодам — 14 / 13,85 / 13,7.
+		{"ТКБ, первый период", "tkb-klyuchevoy-dohod", Holding{Variant: "d105", OpenedOn: day("2026-10-16"), Term: 105, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "14"},
+		{"ТКБ, третий период", "tkb-klyuchevoy-dohod", Holding{Variant: "d105", OpenedOn: day("2026-10-16"), Term: 105, Amount: 100_000_00}, "2027-01-10", 100_000_00, nil, "13.7"},
+		// Кубань Кредит: «Управляемый» — ½ КС; «Ключевой» 367–545 дней от 1 млн — КС − 1,2.
+		{"Кубань, Управляемый", "kubankredit-upravlyaemy", Holding{Variant: "capitalize", OpenedOn: day("2026-10-16"), Term: 1100, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "7"},
+		{"Кубань, Ключевой", "kubankredit-klyuchevoy", Holding{Variant: "monthly", OpenedOn: day("2026-10-16"), Term: 400, Amount: 1_500_000_00}, "2026-10-20", 1_500_000_00, nil, "12.8"},
+		// Новиком «Капитал Сезонный», 121 день — 14,2 %.
+		{"Новиком", "novikom-kapital-sezonny", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 121, Amount: 200_000_00}, "2026-10-20", 200_000_00, nil, "14.2"},
 	}
 	for _, c := range cases {
 		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))

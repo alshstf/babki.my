@@ -1,0 +1,25 @@
+id: novikom-kapital-sezonny
+bank: novikom
+name: Вклад «Капитал Сезонный»
+kind: deposit
+watch:
+  - https://novikom.ru/individuals/deposit/
+editions:
+  - from: 2026-10-07
+    checked_on: 2026-10-16
+    sources:
+      - https://novikom.ru/documents/pasport-vklada-kapital-sezonnyy-06102026.pdf
+      - https://novikom.ru/documents/minimalnye-garantirovannye-stavki-po-vkladam-06102026.pdf
+    notes: >-
+      Минимальные гарантированные ставки с 07.10.2026: 121 день — 14,2 %, 366 дней — 13,8 %. От 100 000 ₽, только
+      в «Интер@ктив», без пополнения и снятия, проценты в день окончания срока, без продления. Открыть можно до
+      31.12.2026. Досрочно — ставка «до востребования».
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 121, to: 121, amount_from: 10000000, percent: "14.2" }
+          - { from: 366, to: 366, amount_from: 10000000, percent: "13.8" }

@@ -1,0 +1,48 @@
+id: ozon-vklad
+bank: ozon
+name: Вклад
+kind: deposit
+watch:
+  - https://finance.ozon.ru/documents/deposit-tariffs
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://finance.ozon.ru/documents/deposit-tariffs
+    notes: >-
+      Дата редакции у банка не указана — действует не позже дня сверки. От 10 000 ₽, проценты капитализируются
+      ежемесячно в число открытия. Здесь — номинальные ставки тарифа; в рекламе банк называет ставку «с
+      капитализацией» (например, 13,7 % вместо 13,55 % на 3 месяца). Непополняемый — деньги кладутся один раз при
+      открытии. Досрочно — 0,1 % без капитализации. Продление — на тот же срок по условиям дня продления.
+    variants:
+      - id: fixed
+        name: Непополняемый
+        payouts: [capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 1000000, percent: "13.01" }
+          - { from: 2, to: 2, amount_from: 1000000, percent: "10.96" }
+          - { from: 3, to: 3, amount_from: 1000000, percent: "13.55" }
+          - { from: 4, to: 4, amount_from: 1000000, percent: "10.86" }
+          - { from: 5, to: 5, amount_from: 1000000, percent: "12.06" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "12.67" }
+          - { from: 7, to: 7, amount_from: 1000000, percent: "11.85" }
+          - { from: 8, to: 8, amount_from: 1000000, percent: "11.79" }
+          - { from: 9, to: 9, amount_from: 1000000, percent: "11.74" }
+          - { from: 10, to: 10, amount_from: 1000000, percent: "11.59" }
+          - { from: 11, to: 11, amount_from: 1000000, percent: "11.54" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "12.29" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "10.65" }
+      - id: topup
+        name: Пополняемый
+        payouts: [capitalize]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 1, to: 1, amount_from: 1000000, percent: "10.51" }
+          - { from: 2, to: 2, amount_from: 1000000, percent: "10.46" }
+          - { from: 3, to: 3, amount_from: 1000000, percent: "10.42" }
+          - { from: 4, to: 4, amount_from: 1000000, percent: "10.37" }
+          - { from: 5, to: 5, amount_from: 1000000, percent: "10.33" }
+          - { from: 6, to: 6, amount_from: 1000000, percent: "10.28" }

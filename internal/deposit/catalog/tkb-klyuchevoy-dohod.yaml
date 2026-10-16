@@ -1,0 +1,36 @@
+id: tkb-klyuchevoy-dohod
+bank: tkb
+name: Вклад «Ключевой доход»
+kind: deposit
+watch:
+  - https://www.tkbbank.ru/private/savings/deposit/key-income/
+editions:
+  - from: 2026-10-13
+    checked_on: 2026-10-16
+    sources:
+      - https://www.tkbbank.ru/private/savings/deposit/key-income/
+    notes: >-
+      Подробные условия с 13.10.2026. Ставка — ключевая ставка Банка России на каждый день срока плюс или минус
+      значение, зафиксированное при открытии; не ниже 0,01 %. Срок делится на три процентных периода, проценты — в
+      конце каждого. У вклада на 105 дней значение по периодам: 0, −0,15, −0,3; у 195 и 375 дней — 0. От 50 000 ₽, без
+      пополнения и снятия, без продления. Досрочно — 0,01 %.
+    variants:
+      - id: d105
+        name: 105 дней
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 105, to: 105, amount_from: 5000000, key_plus: "0", floor: "0.01" }
+        schedule:
+          - { name: Первый период, days: 35, grid: [{ from: 105, to: 105, amount_from: 5000000, key_plus: "0", floor: "0.01" }] }
+          - { name: Второй период, days: 35, grid: [{ from: 105, to: 105, amount_from: 5000000, key_plus: "-0.15", floor: "0.01" }] }
+          - { name: Третий период, days: 35, grid: [{ from: 105, to: 105, amount_from: 5000000, key_plus: "-0.3", floor: "0.01" }] }
+      - id: longer
+        name: 195 или 375 дней
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 195, to: 195, amount_from: 5000000, key_plus: "0", floor: "0.01" }
+          - { from: 375, to: 375, amount_from: 5000000, key_plus: "0", floor: "0.01" }
