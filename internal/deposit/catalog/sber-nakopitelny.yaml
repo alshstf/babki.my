@@ -1,6 +1,6 @@
 id: sber-nakopitelny
 bank: sber
-name: Накопительный счёт Сбера
+name: Накопительный счёт
 kind: savings
 watch:
   - https://www.sberbank.ru/ru/person/contributions/deposits/nakopi

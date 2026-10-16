@@ -1,6 +1,6 @@
 id: sber-klyuchevoy
 bank: sber
-name: Вклад «Ключевой» Сбера
+name: Вклад «Ключевой»
 kind: deposit
 watch:
   - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_kluchevoy

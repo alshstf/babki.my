@@ -1,6 +1,6 @@
 id: tbank-nakopitelny
 bank: tbank
-name: Накопительный счёт Т-Банка
+name: Накопительный счёт
 kind: savings
 watch:
   - https://www.tbank.ru/savings/saving-account/
