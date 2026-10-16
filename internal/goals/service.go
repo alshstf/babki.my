@@ -40,7 +40,20 @@ type Service struct {
 	accounts   accounts
 	// keys strike a deposit's rate tied to the key rate (WithKeyRates).
 	keys keyRates
-	now  func() time.Time
+	// measures tell the conditions of the accounts in the automatic mode.
+	measures measures
+	now      func() time.Time
+}
+
+type measures interface {
+	MeasuresFor(ctx context.Context, spaceID uuid.UUID) (account.Measure, error)
+}
+
+// WithMeasures lets a goal grow on an account whose programme's conditions
+// the program tells from the family's data (Р-53).
+func (s *Service) WithMeasures(m measures) *Service {
+	s.measures = m
+	return s
 }
 
 // WithKeyRates lets a goal grow on a deposit whose rate is tied to the key
@@ -120,6 +133,15 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 	if err != nil {
 		return nil, "", err
 	}
+	var measure account.Measure
+	for _, b := range bindings {
+		if b.Conditions == account.ConditionsAuto && s.measures != nil {
+			if measure, err = s.measures.MeasuresFor(ctx, spaceID); err != nil {
+				return nil, "", err
+			}
+			break
+		}
+	}
 	keyOn := func(day time.Time) (decimal.Decimal, bool, error) {
 		if s.keys == nil {
 			return decimal.Zero, false, nil
@@ -155,7 +177,7 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 		weighed, weight := decimal.Zero, decimal.Zero
 		for _, f := range g.Funds {
 			r := g.Yield
-			src := account.RateSource{Rates: rates[f.Account], Marks: marks[f.Account]}
+			src := account.RateSource{Rates: rates[f.Account], Marks: marks[f.Account], Measure: measure}
 			if b, ok := bindings[f.Account]; ok {
 				src.Binding = &b
 			}

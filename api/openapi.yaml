@@ -3945,7 +3945,7 @@ components:
         percent: { type: string }
     ProgrammeCondition:
       type: object
-      required: [id, name, kind, check, group, plus, levels, met, level]
+      required: [id, name, kind, check, group, plus, levels, met, level, told, measured_minor, measured_month]
       properties:
         id: { type: string }
         name: { type: string }
@@ -3954,8 +3954,14 @@ components:
         group: { type: string, nullable: true, description: "Of the bonuses of a group only the greatest counts" }
         plus: { type: string, nullable: true, description: "A bonus of one level: what it adds" }
         levels: { type: array, items: { $ref: "#/components/schemas/BonusLevel" } }
-        met: { type: boolean, description: "What the marks say of it this month" }
+        met: { type: boolean, description: "Whether it holds this month: by a mark, or by the program's data in the automatic mode" }
         level: { type: integer, description: "The level met this month, 0 for a bonus of one" }
+        told:
+          type: string
+          enum: [mark, data, none]
+          description: "What told it: the family's mark (over everything), the program's data (automatic mode), or nothing"
+        measured_minor: { type: integer, format: int64, nullable: true, description: "What the data measured — purchases on the bank's cards, wages paid into it, the balance kept in it — when told by them" }
+        measured_month: { type: string, nullable: true, description: "The month YYYY-MM the data were measured for: an unfinished month is told by the one before" }
     BonusLevel:
       type: object
       required: [from, plus]

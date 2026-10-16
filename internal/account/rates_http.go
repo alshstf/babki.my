@@ -22,6 +22,19 @@ type keyRates interface {
 	KeyRateOn(ctx context.Context, day time.Time) (decimal.Decimal, bool, error)
 }
 
+// MeasureSource is what tells a programme's conditions from the family's
+// data in the automatic mode (Р-53).
+type MeasureSource interface {
+	MeasuresFor(ctx context.Context, spaceID uuid.UUID) (Measure, error)
+}
+
+// WithMeasures lets the rates' answer tell the conditions of an account in
+// the automatic mode.
+func (h *Handler) WithMeasures(m MeasureSource) *Handler {
+	h.measures = m
+	return h
+}
+
 // WithKeyRates lets the rates' answer strike a rate tied to the key rate.
 func (h *Handler) WithKeyRates(k keyRates) *Handler {
 	h.keys = k
@@ -138,7 +151,7 @@ func (h *Handler) writeRates(w http.ResponseWriter, r *http.Request, spaceID, id
 	}
 	if binding != nil {
 		if p, found := deposit.ByID(binding.Programme); found {
-			if err := h.writeProgramme(&out, *binding, p, marks, a, today, keyOn); err != nil {
+			if err := h.writeProgramme(ctx, &out, *binding, p, marks, a, today, keyOn); err != nil {
 				family.WriteError(w, err)
 				return
 			}
@@ -149,7 +162,7 @@ func (h *Handler) writeRates(w http.ResponseWriter, r *http.Request, spaceID, id
 
 // writeProgramme fills the answer's programme, its quote on today's balance
 // and the conditions with what the marks say of them this month.
-func (h *Handler) writeProgramme(out *apitypes.AccountRates, b Binding, p deposit.Programme, marks []Mark, a WithBalance, today time.Time, keyOn func(time.Time) (decimal.Decimal, bool, error)) error {
+func (h *Handler) writeProgramme(ctx context.Context, out *apitypes.AccountRates, b Binding, p deposit.Programme, marks []Mark, a WithBalance, today time.Time, keyOn func(time.Time) (decimal.Decimal, bool, error)) error {
 	banks, _ := intermediary.Load()
 	bank, _ := banks.ByID(p.Bank)
 	on := today
@@ -174,13 +187,20 @@ func (h *Handler) writeProgramme(out *apitypes.AccountRates, b Binding, p deposi
 		ap.AmountMinor = nullable.NewNullableWithValue(*b.Amount)
 	}
 	out.Programme = nullable.NewNullableWithValue(ap)
-	say := MarksSay(marks)
-	out.Conditions = conditionsAPI(v, say, time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
+	var measure Measure
+	if b.Conditions == ConditionsAuto && h.measures != nil {
+		m, err := h.measures.MeasuresFor(ctx, a.SpaceID)
+		if err != nil {
+			return err
+		}
+		measure = m
+	}
+	out.Conditions = conditionsAPI(v, Tell(b, p, marks, measure, today), time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
 	balance := int64(0)
 	if a.Balance != nil {
 		balance = a.Balance.AmountMinor
 	}
-	res, ok, err := Resolve(RateSource{Binding: &b, Marks: marks}, today, balance, keyOn)
+	res, ok, err := Resolve(RateSource{Binding: &b, Marks: marks, Measure: measure}, today, balance, keyOn)
 	if err != nil || !ok {
 		return err
 	}

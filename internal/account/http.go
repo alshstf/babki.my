@@ -45,9 +45,10 @@ type Handler struct {
 	// account by its balance.
 	journals journalValuer
 	// keys strike a rate tied to the key rate (WithKeyRates).
-	keys keyRates
-	auth *family.Auth
-	sm   *scs.SessionManager
+	keys     keyRates
+	measures MeasureSource
+	auth     *family.Auth
+	sm       *scs.SessionManager
 }
 
 func NewHandler(store *Store, spaces spaceStore, converter converter, journals journalValuer, auth *family.Auth, sm *scs.SessionManager) *Handler {

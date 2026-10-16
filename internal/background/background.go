@@ -18,6 +18,7 @@ import (
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
+	"babki.my/babki/internal/depositcheck"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/goals"
 	"babki.my/babki/internal/importer/tinvest"
@@ -204,7 +205,8 @@ func NewWorkers(
 	reminders := notify.WithStorages(notify.NewRemindersWorker(notify.NewStore(pool),
 		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
 		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log), worth)
-	river.AddWorker(workers, notify.WithGoals(reminders, goals.NewService(pool, structures, accounts).WithKeyRates(mdStore)))
+	river.AddWorker(workers, notify.WithGoals(reminders, goals.NewService(pool, structures, accounts).WithKeyRates(mdStore).
+		WithMeasures(depositcheck.New(accounts, operations, category.NewStore(pool)))))
 	return workers
 }
 

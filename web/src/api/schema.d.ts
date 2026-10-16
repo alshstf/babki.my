@@ -2937,10 +2937,22 @@ export interface components {
             /** @description A bonus of one level: what it adds */
             plus: string | null;
             levels: components["schemas"]["BonusLevel"][];
-            /** @description What the marks say of it this month */
+            /** @description Whether it holds this month: by a mark, or by the program's data in the automatic mode */
             met: boolean;
             /** @description The level met this month, 0 for a bonus of one */
             level: number;
+            /**
+             * @description What told it: the family's mark (over everything), the program's data (automatic mode), or nothing
+             * @enum {string}
+             */
+            told: "mark" | "data" | "none";
+            /**
+             * Format: int64
+             * @description What the data measured — purchases on the bank's cards, wages paid into it, the balance kept in it — when told by them
+             */
+            measured_minor: number | null;
+            /** @description The month YYYY-MM the data were measured for: an unfinished month is told by the one before */
+            measured_month: string | null;
         };
         BonusLevel: {
             /**

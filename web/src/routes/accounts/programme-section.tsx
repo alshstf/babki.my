@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { AccountWithBalance } from "@/api/accounts";
 import {
+  useDeleteMark,
   useDeleteProgramme,
   useDepositProgrammes,
   useSetMark,
@@ -90,15 +91,16 @@ export function ProgrammeBlock({ account, data, canEdit }: { account: AccountWit
           {p.term !== null && ` · ${t("programme.term", { term: p.term, unit })}`}
           {p.amount_minor !== null && ` · ${formatMinor(p.amount_minor, RUB)}`}
         </div>
+        <div className="text-muted-foreground">{p.conditions === "auto" ? t("programme.modeAuto") : t("programme.modeManual")}</div>
         {data.quote === null && <div className="text-amber-700 dark:text-amber-400">{t("programme.noQuote")}</div>}
       </div>
       {data.conditions.length > 0 && (
         <div className="grid gap-1.5" data-testid="account-programme-conditions">
           <div className="text-sm font-medium">{t("programme.conditions")}</div>
           {data.conditions.map((c) => (
-            <ConditionRow key={c.id} account={account} condition={c} canEdit={canEdit} />
+            <ConditionRow key={c.id} account={account} data={data} condition={c} canEdit={canEdit} />
           ))}
-          <p className="text-xs text-muted-foreground">{t("programme.marksHint")}</p>
+          <p className="text-xs text-muted-foreground">{p.conditions === "auto" ? t("programme.autoHint") : t("programme.marksHint")}</p>
         </div>
       )}
       {canEdit && (
@@ -116,26 +118,61 @@ export function ProgrammeBlock({ account, data, canEdit }: { account: AccountWit
   );
 }
 
-// ConditionRow is a condition with the family's mark of it for this month:
-// a check for one of one level, a choice of steps for one of several.
-function ConditionRow({ account, condition: c, canEdit }: { account: AccountWithBalance; condition: ProgrammeCondition; canEdit: boolean }) {
+// ConditionRow is a condition with how it stands this month: a check for
+// one of one level, a choice of steps for one of several. In the automatic
+// mode, what the data told — or that they told nothing — and a mark of the
+// family's, which stands over them, can be taken back.
+function ConditionRow({ account, data, condition: c, canEdit }: { account: AccountWithBalance; data: AccountRates; condition: ProgrammeCondition; canEdit: boolean }) {
   const { t } = useTranslation();
   const mark = useSetMark(account.id);
+  const unmark = useDeleteMark(account.id);
+  const auto = data.programme?.conditions === "auto" && c.check !== "manual";
   const plus = c.plus !== null ? ` (+${rate(c.plus)})` : "";
+  const busy = !canEdit || mark.isPending || unmark.isPending;
+  const month = c.measured_month ? monthName(c.measured_month) : "";
+  const latest = [...data.marks].filter((m) => m.condition === c.id).sort((a, b) => b.from_on.localeCompare(a.from_on))[0];
+  const note = !auto ? null : c.told === "data" ? (
+    <span className="text-xs text-muted-foreground">
+      {c.check === "card_spend"
+        ? t("programme.toldSpend", { month, amount: formatMinor(c.measured_minor ?? 0, RUB) })
+        : c.check === "wages"
+          ? t("programme.toldWages", { month, amount: formatMinor(c.measured_minor ?? 0, RUB) })
+          : t("programme.toldBalance", { month, amount: formatMinor(c.measured_minor ?? 0, RUB) })}
+    </span>
+  ) : c.told === "mark" ? (
+    <span className="text-xs text-muted-foreground">
+      {t("programme.toldMark")}
+      {canEdit && latest && (
+        <>
+          {" "}
+          <button type="button" className="underline" disabled={busy} onClick={() => unmark.mutate({ condition: c.id, fromOn: latest.from_on })}>
+            {t("programme.backToData")}
+          </button>
+        </>
+      )}
+    </span>
+  ) : (
+    <span className="text-xs text-amber-700 dark:text-amber-400">
+      {c.check === "bank_balance" ? t("programme.noBalance", { month }) : t("programme.noData", { month })}
+    </span>
+  );
   if (c.levels.length === 0) {
     const id = `cond-${c.id}`;
     return (
-      <div className="flex items-start gap-2 text-sm">
-        <Checkbox
-          id={id}
-          checked={c.met}
-          disabled={!canEdit || mark.isPending}
-          onCheckedChange={(v) => mark.mutate({ condition: c.id, from_on: thisMonth(), level: 0, met: v === true })}
-        />
-        <Label htmlFor={id} className="font-normal leading-snug">
-          {c.name}
-          {plus}
-        </Label>
+      <div className="grid gap-0.5">
+        <div className="flex items-start gap-2 text-sm">
+          <Checkbox
+            id={id}
+            checked={c.met}
+            disabled={busy}
+            onCheckedChange={(v) => mark.mutate({ condition: c.id, from_on: thisMonth(), level: 0, met: v === true })}
+          />
+          <Label htmlFor={id} className="font-normal leading-snug">
+            {c.name}
+            {plus}
+          </Label>
+        </div>
+        {note && <div className="pl-6">{note}</div>}
       </div>
     );
   }
@@ -143,27 +180,37 @@ function ConditionRow({ account, condition: c, canEdit }: { account: AccountWith
   // A step told by a sum shows the sum; one told by a mark — its number.
   const step = (from: number, i: number) => (c.check === "manual" ? t("programme.level", { n: i + 1 }) : t("programme.from", { amount: formatMinor(from, RUB) }));
   return (
-    <div className="grid gap-1 text-sm sm:grid-cols-[1fr_auto] sm:items-center sm:gap-3">
-      <span>{c.name}</span>
-      <Select
-        value={value}
-        disabled={!canEdit || mark.isPending}
-        onValueChange={(v) => mark.mutate({ condition: c.id, from_on: thisMonth(), level: v === "none" ? 0 : Number(v), met: v !== "none" })}
-      >
-        <SelectTrigger className="h-8 w-full sm:w-56" aria-label={c.name}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="none">{t("programme.notMet")}</SelectItem>
-          {c.levels.map((l, i) => (
-            <SelectItem key={l.from} value={String(i)}>
-              {step(l.from, i)} (+{rate(l.plus)})
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <div className="grid gap-0.5">
+      <div className="grid gap-1 text-sm sm:grid-cols-[1fr_auto] sm:items-center sm:gap-3">
+        <span>{c.name}</span>
+        <Select
+          value={value}
+          disabled={busy}
+          onValueChange={(v) => mark.mutate({ condition: c.id, from_on: thisMonth(), level: v === "none" ? 0 : Number(v), met: v !== "none" })}
+        >
+          <SelectTrigger className="h-8 w-full sm:w-56" aria-label={c.name}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">{t("programme.notMet")}</SelectItem>
+            {c.levels.map((l, i) => (
+              <SelectItem key={l.from} value={String(i)}>
+                {step(l.from, i)} (+{rate(l.plus)})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {note}
     </div>
   );
+}
+
+// monthName is a month YYYY-MM as a word in the prepositional case: «сентябрь
+// 2026» → «сентябрь 2026», for «по операциям за …».
+function monthName(m: string): string {
+  const [y, mm] = m.split("-").map(Number);
+  return new Date(Date.UTC(y, mm - 1, 1)).toLocaleDateString("ru-RU", { month: "long", year: "numeric", timeZone: "UTC" }).replace(" г.", "");
 }
 
 // ProgrammeDialog ties the account to a programme of the catalog: its bank's
@@ -193,6 +240,7 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
   const amount = parseToMinor(amountText);
   const termOK = kind === "savings" || (Number.isInteger(term) && (variant?.terms ?? []).some((r) => term >= r.from && term <= r.to));
   const amountOK = kind === "savings" || (amount !== null && amount >= (variant?.amount_from_minor ?? 0));
+  const [mode, setMode] = useState<"manual" | "auto">(was?.conditions ?? "auto");
   const valid = !!programme && !!variant && /^\d{4}-\d{2}-\d{2}$/.test(openedOn) && termOK && amountOK;
   const unit = variant?.term_unit === "months" ? t("programme.months") : t("programme.days");
   const submit = () => {
@@ -204,7 +252,7 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
         opened_on: openedOn,
         term: kind === "deposit" ? term : null,
         amount_minor: kind === "deposit" ? amount : null,
-        conditions: was?.conditions ?? "manual",
+        conditions: mode,
       },
       { onSuccess: onClose },
     );
@@ -277,6 +325,20 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
                     <span className="text-xs text-muted-foreground">{t("programme.amountFrom", { amount: formatMinor(variant.amount_from_minor, RUB) })}</span>
                   </div>
                 </div>
+              )}
+              {variant && variant.conditions.length > 0 && (
+                <fieldset className="grid gap-1.5">
+                  <legend className="mb-1 text-sm font-medium">{t("programme.mode")}</legend>
+                  {(["auto", "manual"] as const).map((m) => (
+                    <label key={m} className="flex items-start gap-2 text-sm">
+                      <input type="radio" name="programme-mode" className="mt-1" checked={mode === m} onChange={() => setMode(m)} />
+                      <span>
+                        {m === "auto" ? t("programme.modeAutoChoice") : t("programme.modeManualChoice")}
+                        <span className="block text-xs text-muted-foreground">{m === "auto" ? t("programme.modeAutoHint") : t("programme.modeManualHint")}</span>
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
               )}
               {programme.notes && <p className="text-xs text-muted-foreground">{programme.notes}</p>}
               <p className="text-xs text-muted-foreground">

@@ -72,15 +72,23 @@ func variantAPI(v deposit.Variant) apitypes.DepositVariant {
 }
 
 // conditionsAPI are the variant's conditions — its periods' requirements
-// and its bonuses — with what say tells of them in month (nothing met
-// without say).
-func conditionsAPI(v deposit.Variant, say deposit.Conditions, month time.Time) []apitypes.ProgrammeCondition {
+// and its bonuses — with how tell says they stand in month (nothing met
+// without tell).
+func conditionsAPI(v deposit.Variant, tell func(id string, month time.Time) Told, month time.Time) []apitypes.ProgrammeCondition {
 	out := []apitypes.ProgrammeCondition{}
-	state := func(id string) (int, bool) {
-		if say == nil {
-			return 0, false
+	state := func(c *apitypes.ProgrammeCondition) {
+		c.Told, c.MeasuredMinor, c.MeasuredMonth = apitypes.ProgrammeConditionToldNone, nullable.NewNullNullable[int64](), nullable.NewNullNullable[string]()
+		if tell == nil {
+			return
 		}
-		return say(id, month)
+		t := tell(c.Id, month)
+		c.Met, c.Level, c.Told = t.Met, t.Level, apitypes.ProgrammeConditionTold(t.By)
+		if t.By == "data" {
+			c.MeasuredMinor = nullable.NewNullableWithValue(t.Value)
+		}
+		if !t.Month.IsZero() {
+			c.MeasuredMonth = nullable.NewNullableWithValue(t.Month.Format("2006-01"))
+		}
 	}
 	seen := map[string]bool{}
 	for _, s := range v.Schedule {
@@ -88,17 +96,17 @@ func conditionsAPI(v deposit.Variant, say deposit.Conditions, month time.Time) [
 			continue
 		}
 		seen[s.Requires] = true
-		level, met := state(s.Requires)
-		out = append(out, apitypes.ProgrammeCondition{
+		c := apitypes.ProgrammeCondition{
 			Id: s.Requires, Name: deposit.Requirements[s.Requires], Kind: apitypes.Requirement, Check: apitypes.ProgrammeConditionCheckManual,
-			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{}, Met: met, Level: level,
-		})
+			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{},
+		}
+		state(&c)
+		out = append(out, c)
 	}
 	for _, b := range v.Bonuses {
-		level, met := state(b.ID)
 		c := apitypes.ProgrammeCondition{
 			Id: b.ID, Name: b.Name, Kind: apitypes.Bonus, Check: apitypes.ProgrammeConditionCheck(b.Check),
-			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{}, Met: met, Level: level,
+			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{},
 		}
 		if b.Group != "" {
 			c.Group = nullable.NewNullableWithValue(b.Group)
@@ -109,6 +117,7 @@ func conditionsAPI(v deposit.Variant, say deposit.Conditions, month time.Time) [
 		for _, l := range b.Levels {
 			c.Levels = append(c.Levels, apitypes.BonusLevel{From: l.From, Plus: l.Plus})
 		}
+		state(&c)
 		out = append(out, c)
 	}
 	return out

@@ -84,8 +84,8 @@ const tied: AccountRates = {
     parts: [{ from_minor: 0, to_minor: 1_000_000_00, percent: "12.000" }, { from_minor: 1_000_000_00, to_minor: 1_200_000_00, percent: "6.000" }],
   },
   conditions: [
-    { id: "salary", name: "Зарплата в ВТБ", kind: "bonus", check: "wages", group: "status", plus: "2", levels: [], met: true, level: 0 },
-    { id: "spend", name: "Покупки по картам ВТБ за месяц", kind: "bonus", check: "card_spend", group: null, plus: null, levels: [{ from: 2_000_000, plus: "1" }, { from: 5_000_000, plus: "4" }], met: true, level: 1 },
+    { id: "salary", name: "Зарплата в ВТБ", kind: "bonus", check: "wages", group: "status", plus: "2", levels: [], met: true, level: 0, told: "mark", measured_minor: null, measured_month: null },
+    { id: "spend", name: "Покупки по картам ВТБ за месяц", kind: "bonus", check: "card_spend", group: null, plus: null, levels: [{ from: 2_000_000, plus: "1" }, { from: 5_000_000, plus: "4" }], met: true, level: 1, told: "mark", measured_minor: null, measured_month: null },
   ],
 };
 
@@ -176,7 +176,28 @@ describe("RatePanel", () => {
     fireEvent.click(save);
     const put = await sent("PUT", "/api/v1/accounts/dep-1/programme");
     expect(await put.json()).toEqual({
-      programme_id: "gpb-km", variant_id: "end", opened_on: "2026-10-05", term: 367, amount_minor: 50_000_000, conditions: "manual",
+      programme_id: "gpb-km", variant_id: "end", opened_on: "2026-10-05", term: 367, amount_minor: 50_000_000, conditions: "auto",
     });
+  });
+
+  it("in the automatic mode says what the journals told, and gives a mark back to them", async () => {
+    answer({
+      ...tied,
+      programme: { ...tied.programme!, conditions: "auto" },
+      marks: [{ condition: "salary", from_on: "2026-10-01", level: 0, met: true }],
+      conditions: [
+        { ...tied.conditions[0], told: "mark" },
+        { ...tied.conditions[1], told: "data", measured_minor: 5_520_000, measured_month: "2026-09" },
+        { id: "level", name: "Уровень «Расти с ВТБ»", kind: "bonus", check: "manual", group: null, plus: null, levels: [{ from: 1, plus: "1" }], met: false, level: 0, told: "none", measured_minor: null, measured_month: null },
+      ],
+    });
+    show();
+    const block = norm((await screen.findByTestId("account-programme")).textContent);
+    expect(block).toContain("Условия проверяет программа по операциям и остаткам");
+    expect(block).toContain("по операциям за сентябрь 2026: покупки по картам банка 55 200,00 ₽");
+    expect(block).toContain("отмечено вами — главнее проверки.");
+    expect(block).not.toContain("нет операций"); // a condition only a mark tells is not «no data»
+    fireEvent.click(screen.getByRole("button", { name: "Вернуть проверку программой" }));
+    await sent("DELETE", "/api/v1/accounts/dep-1/marks/salary/2026-10-01");
   });
 });
