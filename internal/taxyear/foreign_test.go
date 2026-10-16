@@ -67,10 +67,11 @@ func TestTheForeignLines(t *testing.T) {
 	if a.ID != kz.ID || a.Person != alex.ID || len(a.Payouts) != 3 || len(a.Sales) != 2 {
 		t.Fatalf("account = %+v", a)
 	}
-	if d := a.Payouts[0]; d.Kind != KindDividends || d.Paper != "Apple" || d.Country != "US" || d.TaxRU != 11_100 || d.Credit != 11_100 {
+	if d := a.Payouts[0]; d.Kind != KindDividends || d.Paper != "Apple" || d.Country != "US" || d.TaxRU != 11_100 || d.Credit != 11_100 ||
+		d.Treaty != "partly" || d.TreatyFrom.Format(time.DateOnly) != "2023-08-08" {
 		t.Errorf("dividend = %+v", d)
 	}
-	if c := a.Payouts[1]; c.Kind != KindSecurities || c.Country != "XS" || c.Credit != 0 {
+	if c := a.Payouts[1]; c.Kind != KindSecurities || c.Country != "XS" || c.Credit != 0 || c.Treaty != TreatyNoCountry {
 		t.Errorf("coupon = %+v", c)
 	}
 	if i := a.Payouts[2]; i.Kind != KindInterest || i.Paper != "" || i.TaxRU != 0 {
@@ -91,5 +92,44 @@ func TestTheForeignLines(t *testing.T) {
 	}
 	if api.Sales[0].ResultBaseMinor.MustGet() != 2_984_000 || !api.Sales[1].ResultBaseMinor.IsNull() {
 		t.Errorf("API sales = %+v", api.Sales)
+	}
+}
+
+// A dividend's tax is credited only where the treaty applies on its day
+// (decision Р-50): Canada suspended its treaty whole from 18.11.2024, so its
+// bank's withheld 15 % offsets nothing — in the return's lines and in the
+// year's estimate alike — while the United States' treaty, suspended only in
+// part, still credits.
+func TestTheTreatyDecidesTheCredit(t *testing.T) {
+	alex := member("Алекс", family.RoleOwner)
+	kz := broker("Freedom KZ", &alex.ID, true)
+	apple, bank := uuid.New(), uuid.New()
+	day := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+	r := decimal.NewFromInt(80)
+	rows := fakeRows{kz.ID: {Payouts: []portfolio.Payout{
+		{On: day("2026-05-15"), Type: portfolio.TypeDividend, Instrument: &apple, Currency: "USD", Minor: 10_000, Withheld: 1_000, Rate: r, Known: true, InBase: 800_000, WithheldInBase: 80_000},
+		{On: day("2026-06-01"), Type: portfolio.TypeDividend, Instrument: &bank, Currency: "USD", Minor: 10_000, Withheld: 1_500, Rate: r, Known: true, InBase: 800_000, WithheldInBase: 120_000},
+	}}}
+	papers := fakePapers{apple: {Name: "Apple", ISIN: "US0378331005"}, bank: {Name: "Royal Bank of Canada", ISIN: "CA7800871021"}}
+	facts := fakeFacts{kz.ID: {Dividends: 1_600_000, Withheld: 200_000}}
+	svc := NewService(fakeAccounts{kz}, facts, fakeSpaces{residency: "RU", members: []family.Member{alex}}, fakeKeys{}).WithForeign(rows, papers)
+
+	f, err := svc.ForeignOf(t.Context(), uuid.New(), 2026)
+	if err != nil {
+		t.Fatal(err)
+	}
+	us, ca := f.Accounts[0].Payouts[0], f.Accounts[0].Payouts[1]
+	if us.Treaty != "partly" || us.Credit != 80_000 {
+		t.Errorf("Apple = %+v", us)
+	}
+	if ca.Treaty != "suspended" || ca.TreatyFrom.Format(time.DateOnly) != "2024-11-18" || ca.TaxRU != 104_000 || ca.Credit != 0 {
+		t.Errorf("Royal Bank of Canada = %+v", ca)
+	}
+	y, err := svc.Of(t.Context(), uuid.New(), 2026)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y.People[0].Credit != 80_000 {
+		t.Errorf("the year credits %d, want only the American 800", y.People[0].Credit)
 	}
 }

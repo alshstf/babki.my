@@ -1,0 +1,378 @@
+# Соглашения России об избежании двойного налогообложения (решение Р-50 А): когда
+# каждое применяется, когда Указ № 585 приостановил его статьи о доходах и ставках
+# (статью об устранении двойного налогообложения он не трогал), когда партнёр
+# приостановил его полностью и когда оно прекращено. Первоисточник — Минфин,
+# «Информация о статусе международных договоров об избежании двойного
+# налогообложения … по состоянию на 14.07.2026» (minfin.gov.ru, «Международные
+# налоговые отношения»). Налог, уплаченный за рубежом, засчитывается в порядке
+# договора (ст. 232 НК): без применяемого соглашения — без зачёта.
+# Абхазия (соглашение с 01.01.2025) не входит: у неё нет кода страны ISO.
+checked_on: 2026-10-16
+source_as_of: 2026-07-14
+treaties:
+  - country: AE
+    name: ОАЭ
+    applies_from: 2026-01-01
+    note: "Для граждан — соглашение от 17.02.2025, применяется с 01.01.2026; соглашение от 07.12.2011 — о доходах от инвестиций самих государств."
+  - country: AL
+    name: Албания
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Конвенции"
+  - country: AM
+    name: Армения
+    applies_from: 1999-01-01
+  - country: AR
+    name: Аргентина
+    applies_from: 2013-01-01
+  - country: AT
+    name: Австрия
+    applies_from: 2003-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24, 26.1 и 26.2 Конвенции, а также пункта 1, положения \"В дополнение к статье 5\", положения \"В дополнение к статье 6\", положения \"В дополнение к статье 7\", положения \"В дополнение к статьям 7 и 9\", положения \"В дополнение к статье 25\" Протокола к ней,"
+  - country: AU
+    name: Австралия
+    applies_from: 2004-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21 и 23 Соглашения, а также пунктов 1, 2, 4 - 8 Протокола к нему"
+    note: "Австралия намерена приостановить соглашение в полной мере на основе международного права в соответствии с нотой от 21.11.2025 № 25/EUD/054. Последующего официального уведомления о принятии конкретных мер получено не было."
+  - country: AZ
+    name: Азербайджан
+    applies_from: 1999-01-01
+  - country: BE
+    name: Бельгия
+    applies_from: 2001-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24 и 27 Конвенции"
+    note: "Применяется конвенция 1995 года; конвенция 2015 года не вступила в силу."
+  - country: BG
+    name: Болгария
+    applies_from: 1996-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Соглашения"
+  - country: BR
+    name: Бразилия
+    applies_from: 2018-01-01
+  - country: BW
+    name: Ботсвана
+    applies_from: 2010-01-01
+  - country: BY
+    name: Беларусь
+    applies_from: 1998-01-01
+  - country: CA
+    name: Канада
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24 и 28 Соглашения, а также Протокола к нему"
+    suspended_from: 2024-11-18
+    note: "Нотой от 20.11.2024 № 0088/24 Канада проинформировала о полном приостановлении действия Соглашения с 18.11.2024."
+  - country: CH
+    name: Швейцария
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24 и 25b Соглашения"
+    note: "Швейцария изучает возможность частичного приостановления действия Соглашения в качестве контрмеры в соответствии с нотой от 27.12.2023 № 187."
+  - country: CL
+    name: Чили
+    applies_from: 2013-01-01
+  - country: CN
+    name: Китай
+    applies_from: 2017-01-01
+  - country: CU
+    name: Куба
+    applies_from: 2011-01-01
+  - country: CY
+    name: Кипр
+    applies_from: 2000-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24, 27 и 29 Соглашения"
+  - country: CZ
+    name: Чехия
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции"
+    note: "Нотой от 13.09.2023 № 1688-1/2023-MZV/MOSK Чешская Республика проинформировала, что Чехия также не будет выполнять приостановленные Российской Федерацией положения Конвенции с 11.08.2023."
+  - country: DE
+    name: Германия
+    applies_from: 1997-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Соглашения"
+    suspended_from: 2027-01-01
+    note: "Нотой от 26.06.2026 № 156/2026 Федеративная Республика Германия проинформировала о полном приостановлении действия Соглашения и Протокола к нему с 01.01.2027."
+  - country: DK
+    name: Дания
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции"
+    ended_from: 2024-01-01
+    note: "Конвенция прекратила своё действие с 01.01.2024 в связи с нотой Королевства Дания от 19.06.2023 № 27/23."
+  - country: DZ
+    name: Алжир
+    applies_from: 2009-01-01
+  - country: EC
+    name: Эквадор
+    applies_from: 2019-01-01
+  - country: EG
+    name: Египет
+    applies_from: 2001-01-01
+  - country: ES
+    name: Испания
+    applies_from: 2001-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции, а также пунктов II - VIII Протокола к ней"
+  - country: FI
+    name: Финляндия
+    applies_from: 2003-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21 и 23 Соглашения, а также Протокола к нему"
+    suspended_from: 2026-07-01
+    note: "Нотой от 13.03.2026 № VN/1187/2026-UM-10 Финляндская Республика проинформировала о полном приостановлении действия Соглашения c 01.07.2026"
+  - country: FR
+    name: Франция
+    applies_from: 2000-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции, а также пунктов 2-9 Протокола к ней"
+    note: "Нотой от 12.02.2024 № 2024-0063519 Французская Республика проинформировала о приостановлении действия статей 5 - 22 и 24 Конвенции, а также пунктов 2-9 Протокола к ней с 08.08.2023 в качестве ответной меры."
+  - country: GB
+    name: Великобритания
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21, 23 и 24 Конвенции"
+    suspended_from: 2025-04-01
+    note: "Нотой от 28.03.2025 № 0019/2025 Соединенное Королевство Великобритании и Северной Ирландии проинформировало о полном приостановлении действия Конвенции и Соглашения в качестве ответной меры с 01.04.2025."
+  - country: GR
+    name: Греция
+    applies_from: 2008-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции"
+    note: "Греция сохраняет за собой право прибегнуть к соответствующим мерам на основе международного права в соответствии с нотой от 17.11.2023 № 1153ДИМ/АП 1307. Последующего официального уведомления о принятии конкретных мер получено не было."
+  - country: HK
+    name: САР Гонконг КНР
+    applies_from: 2017-01-01
+  - country: HR
+    name: Хорватия
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Соглашения"
+  - country: HU
+    name: Венгрия
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции"
+  - country: ID
+    name: Индонезия
+    applies_from: 2003-01-01
+  - country: IE
+    name: Ирландия
+    applies_from: 1996-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Соглашения"
+  - country: IL
+    name: Израиль
+    applies_from: 2001-01-01
+  - country: IN
+    name: Индия
+    applies_from: 1999-01-01
+  - country: IR
+    name: Иран
+    applies_from: 2003-01-01
+  - country: IS
+    name: Исландия
+    applies_from: 2004-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Конвенции"
+  - country: IT
+    name: Италия
+    applies_from: 1999-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Конвенции, а также пунктов \"a\" - \"d\" и \"f\" Дополнительного протокола к ней"
+  - country: JP
+    name: Япония
+    applies_from: 2019-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21, 23 и 26 Конвенции, а также пунктов 1 - 3 Протокола к ней"
+  - country: KG
+    name: Киргизия
+    applies_from: 2001-01-01
+  - country: KP
+    name: КНДР
+    applies_from: 2001-01-01
+  - country: KR
+    name: Корея
+    applies_from: 1996-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21 и 23 Конвенции"
+  - country: KW
+    name: Кувейт
+    applies_from: 2004-01-01
+  - country: KZ
+    name: Казахстан
+    applies_from: 1998-01-01
+  - country: LB
+    name: Ливан
+    applies_from: 2001-01-01
+  - country: LK
+    name: Шри-Ланка
+    applies_from: 2003-01-01
+  - country: LT
+    name: Литва
+    applies_from: 2006-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23, 25 и 28 Соглашения, а также Протокола к нему"
+    ended_from: 2026-01-01
+    note: "Нотой от 14.10.2024 № 5-619/2024 Литовская Республика проинформировала о прекращении действия Соглашения с 01.01.2026."
+  - country: LU
+    name: Люксембург
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24, 28 и 29 Соглашения"
+  - country: LV
+    name: Латвия
+    applies_from: 2013-01-01
+    ended_from: 2024-01-01
+    note: "Соглашение денонсировано Федеральным законом от 28.02.2023 № 40-ФЗ и прекратило своё действие с 01.01.2024."
+  - country: MA
+    name: Марокко
+    applies_from: 2000-01-01
+  - country: MD
+    name: Молдова
+    applies_from: 1998-01-01
+  - country: ME
+    name: Черногория
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Конвенции"
+  - country: MK
+    name: Македония
+    applies_from: 2001-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Соглашения"
+  - country: ML
+    name: Мали
+    applies_from: 2000-01-01
+  - country: MN
+    name: Монголия
+    applies_from: 1998-01-01
+  - country: MT
+    name: Мальта
+    applies_from: 2015-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21, 23 и 27 Конвенции, а также пункта 2 Протокола к ней"
+  - country: MX
+    name: Мексика
+    applies_from: 2009-01-01
+  - country: MY
+    name: Малайзия
+    applies_from: 1989-01-01
+    note: "С 01.01.2026 — новое соглашение от 17.05.2024 вместо соглашения СССР 1987 года."
+  - country: NA
+    name: Намибия
+    applies_from: 2001-01-01
+  - country: NL
+    name: Нидерланды
+    applies_from: 1999-01-01
+    ended_from: 2022-01-01
+    note: "Соглашение денонсировано Федеральным законом от 26.05.2021 № 139-ФЗ и прекратило своё действие с 01.01.2022."
+  - country: NO
+    name: Норвегия
+    applies_from: 2003-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24 и 27 Конвенции, а также Протокола к ней"
+  - country: NZ
+    name: Новая Зеландия
+    applies_from: 2004-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 21 и 23 Соглашения, а также пунктов 2 - 11 Протокола к нему"
+  - country: OM
+    name: Оман
+    applies_from: 2024-01-01
+  - country: PH
+    name: Филиппины
+    applies_from: 1998-01-01
+  - country: PL
+    name: Польша
+    applies_from: 1994-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 4 - 20 и 22 Соглашения"
+    note: "Нотой от 18.10.2023 № PD.2701.2.2023 Республика Польша проинформировала, что Польша не принимает к сведению информацию о приостановлении применения Российской стороной отдельных положений Соглашения."
+  - country: PT
+    name: Португалия
+    applies_from: 2003-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Конвенции, а также пунктов 2 - 4 Протокола к ней"
+  - country: QA
+    name: Катар
+    applies_from: 2001-01-01
+  - country: RO
+    name: Румыния
+    applies_from: 1996-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Конвенции"
+    note: "Румыния оставляет за собой право принять соответствующие меры согласно Венской конвенции о праве международных договоров в соответствии с нотой от 19.09.2023 № G1/1982. Последующего официального уведомления о принятии конкретных мер получено не было."
+  - country: RS
+    name: Сербия
+    applies_from: 1998-01-01
+    note: "Конвенция с Югославией 1995 года; приостановление по Указу № 585 — только в отношении Черногории."
+  - country: SA
+    name: Саудовская Аравия
+    applies_from: 2011-01-01
+  - country: SE
+    name: Швеция
+    applies_from: 1996-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22, 24, 27, 28 и 30 Конвенции, а также пункта 2 Протокола к ней"
+    suspended_from: 2025-02-01
+    note: "Нотой от 25.10.2024 № 64/27 Королевство Швеции проинформировало о полном приостановлении действия Конвенции в качестве ответной меры с 01.02.2025."
+  - country: SG
+    name: Сингапур
+    applies_from: 2010-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Соглашения, а также пунктов 3.1 - 7 Протокола к нему"
+  - country: SI
+    name: Словения
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 23 и 25 Конвенции"
+  - country: SK
+    name: Словакия
+    applies_from: 1998-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "статей 5 - 22 и 24 Соглашения"
+  - country: SY
+    name: Сирия
+    applies_from: 2004-01-01
+  - country: TH
+    name: Таиланд
+    applies_from: 2010-01-01
+  - country: TJ
+    name: Таджикистан
+    applies_from: 2004-01-01
+  - country: TM
+    name: Туркменистан
+    applies_from: 2000-01-01
+  - country: TR
+    name: Турция
+    applies_from: 2000-01-01
+  - country: UA
+    name: Украина
+    applies_from: 2000-01-01
+    ended_from: 2023-01-01
+    note: "Соглашение прекратило своё действие с 01.01.2023 в связи с нотой Украины от 08.06.2022 № 612119/23-017-65."
+  - country: US
+    name: США
+    applies_from: 1994-01-01
+    partly_suspended_from: 2023-08-08
+    suspended_articles: "пункта 4 статьи 1, статей 5 - 21 и 23 Договора, а также Протокола к нему"
+    note: "Нотой от 17.06.2024 № 213-н Соединенные Штаты Америки уведомили о взаимном приостановлении действия положений пункта 4 статьи 1, статей 5 - 21 и 23 Договора, а также Протокола к нему с 16.08.2024."
+  - country: UZ
+    name: Узбекистан
+    applies_from: 1996-01-01
+  - country: VE
+    name: Венесуэла
+    applies_from: 2010-01-01
+  - country: VN
+    name: Вьетнам
+    applies_from: 1997-01-01
+  - country: ZA
+    name: ЮАР
+    applies_from: 2001-01-01

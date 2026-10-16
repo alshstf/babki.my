@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -45,7 +46,9 @@ const (
 type Foreign struct {
 	Year     int
 	Currency string
-	Accounts []ForeignAccount
+	// TreatiesAsOf is the day of the ministry's list the credit is judged by.
+	TreatiesAsOf string
+	Accounts     []ForeignAccount
 }
 
 // ForeignAccount is one account's lines; Taxes the tax rows set against no
@@ -70,16 +73,55 @@ type ForeignAccount struct {
 // ForeignPayout is a payment's line of Приложение 2: its income kind, the
 // paper and the country of its issuer as the ISIN tells it (line 010), the
 // Russian tax on it at the first band's rate (line 160) and what the tax
-// withheld abroad offsets of it (line 170), no more than that tax. Whether a
-// treaty lets it offset is the return's question, not this one's.
+// withheld abroad offsets of it (line 170), no more than that tax and only
+// where the residency's treaty with that country applies on the payment's day
+// (decision Р-50): Treaty is its state, TreatyFrom the day that state began.
 type ForeignPayout struct {
 	portfolio.Payout
-	Kind    string
-	Paper   string
-	ISIN    string
-	Country string
-	TaxRU   int64
-	Credit  int64
+	Kind       string
+	Paper      string
+	ISIN       string
+	Country    string
+	TaxRU      int64
+	Credit     int64
+	Treaty     string
+	TreatyFrom *time.Time
+}
+
+// A payment's treaty when no state of the residency's book fits: the paper
+// names no country (no ISIN, or an international one), so the treaty cannot
+// be told.
+const TreatyNoCountry = "no_country"
+
+// credit is what a payment's tax withheld abroad offsets: the Russian tax on it
+// at the first band, the withheld no more than that, where the treaty with
+// the issuer's country applies on its day. Without the residency's treaties
+// in the application, the treaty is not judged.
+func credit(p portfolio.Payout, country string, rules family.TaxRules, book family.Treaties, haveBook bool) (taxRU, credited int64, state string, from *time.Time) {
+	if !p.Known {
+		return 0, 0, "", nil
+	}
+	taxRU = family.Banded([]family.TaxBand{{BP: rules.InvestmentBands[0].BP}}, p.InBase, rules.TaxUnitMinor)
+	credited = min(max(p.WithheldInBase, 0), taxRU)
+	if !haveBook {
+		return taxRU, credited, "", nil
+	}
+	if _, err := countryCodeOf(country); err != nil {
+		return taxRU, 0, TreatyNoCountry, nil
+	}
+	t, st := book.Of(country, p.On)
+	switch st {
+	case family.TreatyPartly:
+		from = t.PartlySuspendedFrom
+	case family.TreatySuspended:
+		from = t.SuspendedFrom
+	case family.TreatyEnded:
+		from = t.EndedFrom
+	}
+	if !st.Credits() {
+		credited = 0
+	}
+	return taxRU, credited, string(st), from
 }
 
 // ForeignSale is a disposal's line, named.
@@ -132,7 +174,13 @@ func (s *Service) ForeignOf(ctx context.Context, spaceID uuid.UUID, year int) (F
 		named[*id] = p
 		return p, nil
 	}
-	firstBand := []family.TaxBand{{BP: rules.InvestmentBands[0].BP}}
+	book, haveBook, err := family.TreatiesOf(sp.TaxResidency)
+	if err != nil {
+		return Foreign{}, err
+	}
+	if haveBook {
+		out.TreatiesAsOf = book.SourceAsOf
+	}
 	for _, a := range list {
 		if a.Status != account.StatusActive || a.Type != account.TypeBrokerage || !a.ForeignBroker {
 			continue
@@ -168,10 +216,8 @@ func (s *Service) ForeignOf(ctx context.Context, spaceID uuid.UUID, year int) (F
 			}
 			if !p.Known {
 				fa.Unvalued++
-			} else {
-				line.TaxRU = family.Banded(firstBand, p.InBase, rules.TaxUnitMinor)
-				line.Credit = min(max(p.WithheldInBase, 0), line.TaxRU)
 			}
+			line.TaxRU, line.Credit, line.Treaty, line.TreatyFrom = credit(p, line.Country, rules, book, haveBook)
 			fa.Payouts = append(fa.Payouts, line)
 		}
 		for _, t := range r.OtherTaxes {

@@ -3763,6 +3763,8 @@ export interface components {
             supported: boolean;
             /** @description The year's tax currency, every *_base_minor's */
             currency: string;
+            /** @description Date YYYY-MM-DD of the Ministry of Finance's list of treaties the credit is judged by; empty when the residency's treaties are not kept */
+            treaties_as_of: string;
             accounts: components["schemas"]["TaxYearForeignAccount"][];
         };
         TaxYearForeignAccount: {
@@ -3842,9 +3844,16 @@ export interface components {
             tax_ru_minor: number;
             /**
              * Format: int64
-             * @description Line 170: the withheld tax, no more than line 160; whether a treaty in force lets it offset is not judged
+             * @description Line 170: the withheld tax, no more than line 160, where the treaty with the issuer's country applies on the payment's day (decision Р-50); 0 otherwise
              */
             credit_minor: number;
+            /**
+             * @description The residency's treaty with the issuer's country on the payment's day: applies; partly — some articles suspended (Указ № 585), crediting stands; suspended — the partner suspended it whole; ended; none — no treaty; no_country — the paper names no country; empty — the residency's treaties are not kept
+             * @enum {string}
+             */
+            treaty: "applies" | "partly" | "suspended" | "ended" | "none" | "no_country" | "";
+            /** @description Date YYYY-MM-DD the treaty's state began: partly, suspended or ended */
+            treaty_from: string | null;
         };
         TaxYearForeignSale: {
             /** @description Date YYYY-MM-DD */
