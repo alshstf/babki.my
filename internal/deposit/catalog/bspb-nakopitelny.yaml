@@ -1,0 +1,36 @@
+id: bspb-nakopitelny
+bank: bspb
+name: «Накопительный счёт БСПБ»
+kind: savings
+watch:
+  - https://www.bspb.ru/retail/deposits/savings
+editions:
+  - from: 2026-07-01
+    checked_on: 2026-10-16
+    sources:
+      - https://www.bspb.ru/retail/deposits/savings
+    notes: >-
+      Ставки с 01.07.2026 для счетов, открытых с 02.09.2025; у открытых раньше — свои условия, ручная ставка.
+      Проценты — на минимальный остаток месяца: базовые 10,5 % — на сумму до 10 млн ₽, надбавки — до 1,5 млн ₽ (у
+      участников «Премиум» и Private Banking — до 10 млн ₽). За покупки по картам банка от 20 000 ₽ (с последнего
+      дня прошлого месяца по предпоследний текущего) +2. Приветственная надбавка +5 — первые два месяца первого
+      накопительного счёта, тоже при покупках от 20 000 ₽, не вместе с надбавкой за покупки; без покупок в
+      приветственный месяц — базовая ставка, её стоит отметить вручную.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2025-09-02
+        grid:
+          - { percent: "10.5" }
+        cap: { amount: 1000000000, percent: "0" }
+        schedule:
+          - { name: Приветственная, months: 2, plus: "5", cap: 150000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Банка «Санкт-Петербург» от 20 000 ₽ за месяц
+            check: card_spend
+            cap: 150000000
+            levels: [{ from: 2000000, plus: "2" }]

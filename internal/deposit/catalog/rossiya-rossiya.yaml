@@ -1,0 +1,79 @@
+id: rossiya-rossiya
+bank: rossiya
+name: Вклад «РОССИЯ»
+kind: deposit
+watch:
+  - https://abr.ru/face/deposits/rossiya/
+editions:
+  - from: 2026-10-13
+    checked_on: 2026-10-16
+    sources:
+      - https://abr.ru/upload/iblock/96f/Minimalnye_garantirovannye_stavki_13.10.26.pdf
+      - https://abr.ru/face/deposits/rossiya/
+    notes: >-
+      Ставки с 13.10.2026 (они же минимальные гарантированные). От 3 000 ₽, без пополнения и частичных выдач,
+      проценты в конце срока, продления нет. В интернет-банке ставки на 1 п. п. выше, чем в офисе. Досрочно — ставка
+      «До востребования».
+    variants:
+      - id: online
+        name: В интернет-банке
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 300000, percent: "11.5" }
+          - { from: 91, to: 91, amount_from: 300000, percent: "11.6" }
+          - { from: 181, to: 181, amount_from: 300000, percent: "11.7" }
+          - { from: 271, to: 271, amount_from: 300000, percent: "11" }
+          - { from: 367, to: 367, amount_from: 300000, percent: "10.8" }
+          - { from: 31, to: 31, amount_from: 10000000, percent: "11.9" }
+          - { from: 91, to: 91, amount_from: 10000000, percent: "12" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "12.1" }
+          - { from: 271, to: 271, amount_from: 10000000, percent: "11.2" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "11" }
+          - { from: 31, to: 31, amount_from: 100000000, percent: "12.3" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "12.4" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "12.5" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "11.4" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "11.2" }
+          - { from: 31, to: 31, amount_from: 500000000, percent: "12.3" }
+          - { from: 91, to: 91, amount_from: 500000000, percent: "12.4" }
+          - { from: 181, to: 181, amount_from: 500000000, percent: "12.5" }
+          - { from: 271, to: 271, amount_from: 500000000, percent: "11.6" }
+          - { from: 367, to: 367, amount_from: 500000000, percent: "11.4" }
+          - { from: 31, to: 31, amount_from: 1000000000, percent: "12.3" }
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "12.4" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "12.5" }
+          - { from: 271, to: 271, amount_from: 1000000000, percent: "11.8" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "11.6" }
+      - id: office
+        name: В офисе
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 300000, percent: "10.5" }
+          - { from: 91, to: 91, amount_from: 300000, percent: "10.6" }
+          - { from: 181, to: 181, amount_from: 300000, percent: "10.7" }
+          - { from: 271, to: 271, amount_from: 300000, percent: "1E+1" }
+          - { from: 367, to: 367, amount_from: 300000, percent: "9.8" }
+          - { from: 31, to: 31, amount_from: 10000000, percent: "10.9" }
+          - { from: 91, to: 91, amount_from: 10000000, percent: "11" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "11.1" }
+          - { from: 271, to: 271, amount_from: 10000000, percent: "10.2" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "1E+1" }
+          - { from: 31, to: 31, amount_from: 100000000, percent: "11.3" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "11.4" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "11.5" }
+          - { from: 271, to: 271, amount_from: 100000000, percent: "10.4" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "10.2" }
+          - { from: 31, to: 31, amount_from: 500000000, percent: "11.3" }
+          - { from: 91, to: 91, amount_from: 500000000, percent: "11.4" }
+          - { from: 181, to: 181, amount_from: 500000000, percent: "11.5" }
+          - { from: 271, to: 271, amount_from: 500000000, percent: "10.6" }
+          - { from: 367, to: 367, amount_from: 500000000, percent: "10.4" }
+          - { from: 31, to: 31, amount_from: 1000000000, percent: "11.3" }
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "11.4" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "11.5" }
+          - { from: 271, to: 271, amount_from: 1000000000, percent: "10.8" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "10.6" }

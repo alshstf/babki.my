@@ -1,0 +1,29 @@
+id: psb-hranitel
+bank: psb
+name: Накопительный счёт «Хранитель»
+kind: savings
+watch:
+  - https://www.psbank.ru/personal/savingsaccount
+editions:
+  - from: 2026-08-14
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns.pdf
+    notes: >-
+      Условия накопительных счетов с 14.08.2026. Способ начисления выбирается при открытии. Банк меняет ставки
+      новыми условиями; к открытым счетам новая ставка — с даты изменения.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "10.5" }
+      - id: daily
+        name: На ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "9.5" }

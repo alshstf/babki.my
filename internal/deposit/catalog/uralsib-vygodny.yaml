@@ -1,0 +1,24 @@
+id: uralsib-vygodny
+bank: uralsib
+name: Вклад «Выгодный»
+kind: deposit
+watch:
+  - https://uralsib.ru/vklady-scheta/vklady
+editions:
+  - from: 2026-09-25
+    checked_on: 2026-10-16
+    sources:
+      - https://uralsib.ru/api/directory-engine/files/rates/vygodnyj_250926_voqgs5lc.pdf
+    notes: >-
+      91 день, без пополнения и снятия, проценты в конце срока. От 100 000 ₽ (онлайн — от 50 000 ₽) — 13,3 %, от 1 млн
+      ₽ (не больше 1 399 999,99 ₽) — 13,5 %. Досрочно — 0,01 %. Продление по выбору — на условиях вклада «Выгодный
+      Про» в день продления.
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 5000000, percent: "13.3" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "13.5" }

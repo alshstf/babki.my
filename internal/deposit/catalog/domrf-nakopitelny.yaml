@@ -1,0 +1,28 @@
+id: domrf-nakopitelny
+bank: domrf
+name: Накопительный счёт
+kind: savings
+watch:
+  - https://domrfbank.ru/deposits/savings-account/
+  - https://domrfbank.ru/deposits/docs/
+editions:
+  - from: 2026-10-09
+    checked_on: 2026-10-16
+    sources:
+      - https://domrfbank.ru/upload/iblock/800/n33j3oorrtxgwcuvzx0npw3zuw7yv7bf/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2009.10.2026.pdf
+    notes: >-
+      В месяц открытия и следующий — 13,4 %, потом 4 % (банк меняет ставку новыми таблицами). Зарплатным и
+      премиальным клиентам — 13,5 % и 4,5 %. Проценты — на ежедневный остаток на начало дня, выплата в последний
+      день месяца; закрыл счёт — за месяц закрытия процентов нет.
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "13.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }

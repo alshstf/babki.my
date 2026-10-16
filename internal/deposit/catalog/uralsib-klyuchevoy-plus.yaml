@@ -1,0 +1,25 @@
+id: uralsib-klyuchevoy-plus
+bank: uralsib
+name: Вклад «Ключевой Плюс»
+kind: deposit
+watch:
+  - https://uralsib.ru/vklady-scheta/vklady
+editions:
+  - from: 2026-09-25
+    checked_on: 2026-10-16
+    sources:
+      - https://uralsib.ru/api/directory-engine/files/rates/klyuchevoj-plyus_250926_c2xs8slj.pdf
+    notes: >-
+      Ставка — ключевая ставка Банка России минус 0,8 (91 день) или 0,7 (181 и 367 дней) п. п.; меняется с даты
+      изменения ключевой, прошлые периоды не пересчитываются. От 500 000 ₽; ставки от 2 млн ₽ — для пакетов «Премиум» и
+      «Частный», у них ручная ставка. Проценты ежемесячно — на отдельный счёт или на вклад. Досрочно — 0,01 %.
+    variants:
+      - id: monthly
+        name: Проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 50000000, key_plus: "-0.8" }
+          - { from: 181, to: 181, amount_from: 50000000, key_plus: "-0.7" }
+          - { from: 367, to: 367, amount_from: 50000000, key_plus: "-0.7" }

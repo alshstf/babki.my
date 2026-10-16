@@ -1,0 +1,36 @@
+id: psb-akcent
+bank: psb
+name: Накопительный счёт «Акцент на процент»
+kind: savings
+watch:
+  - https://www.psbank.ru/personal/savingsaccount
+editions:
+  - from: 2026-08-14
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns.pdf
+    notes: >-
+      Условия накопительных счетов с 14.08.2026. Базовая 5 % на ежедневный остаток. Надбавка — по покупкам по картам
+      ПСБ в прошлом календарном месяце (от 10 000 ₽ +7, 50 000 ₽ +8, 100 000 ₽ +9, 150 000 ₽ +10, 250 000 ₽ +11), на
+      остаток до 1,5 млн ₽ (Orange Premium Club — до 3 млн ₽); в месяц открытия надбавки нет. Переводы, СБП и оплата
+      по QR-коду не считаются.
+    variants:
+      - id: daily
+        name: «Акцент на процент»
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "5" }
+        bonuses:
+          - id: spend
+            name: Покупки по картам ПСБ за прошлый месяц
+            check: card_spend
+            next_month: true
+            cap: 150000000
+            levels:
+              - { from: 1000000, plus: "7" }
+              - { from: 5000000, plus: "8" }
+              - { from: 10000000, plus: "9" }
+              - { from: 15000000, plus: "10" }
+              - { from: 25000000, plus: "11" }
