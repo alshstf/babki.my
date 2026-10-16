@@ -1,0 +1,25 @@
+id: psb-stavka-na-budushchee
+bank: psb
+name: Вклад «Ставка на будущее»
+kind: deposit
+watch:
+  - https://www.psbank.ru/personal/saving/stavka-na-budushchee
+  - https://www.psbank.ru/personal/saving
+editions:
+  - from: 2026-09-29
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/conditionsterms.pdf
+    notes: >-
+      Условия вкладов с 29.09.2026. Открывается вместе с договором долгосрочных сбережений с НПФ ПСБ и первым взносом по нему; от 30 000 ₽ и не больше взноса, до 3 вкладов на человека. Без пополнения и снятия, проценты в конце срока. Расторгли договор в 14 дней — ставка снижается до 0,01 % с начала вклада: тогда впишите ставку вручную. Продление не больше 3 раз — на условиях «Моей выгоды».
+    variants:
+      - id: main
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 32, to: 32, amount_from: 3000000, percent: "28" }
+          - { from: 91, to: 91, amount_from: 3000000, percent: "20" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "16" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "15" }

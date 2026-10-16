@@ -1,0 +1,22 @@
+id: rshb-socialny
+bank: rshb
+name: Социальный банковский вклад
+kind: deposit
+watch:
+  - https://www.rshb.ru/natural/deposits/social-deposit
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.rshb.ru/natural/deposits/social-deposit
+    notes: >-
+      Для получателей социальной поддержки, один такой вклад во всех банках. Переменная ставка — наибольшая ставка банка по вкладам (13,8 % в день сверки), меняется со дня новой ставки банка — программа берёт ставку из редакции каждого дня. 365 дней, до 50 000 ₽, проценты ежемесячно в последний день месяца.
+    variants:
+      - id: main
+        name: Социальный банковский вклад
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        floating: true
+        grid:
+          - { from: 365, to: 365, amount_from: 1, percent: "13.8" }

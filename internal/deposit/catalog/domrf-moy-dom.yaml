@@ -13,7 +13,9 @@ editions:
     notes: >-
       Ставки «Процентные ставки по вкладам с 09.10.2026» (банк публикует новую таблицу раз в одну-две недели). Ступень —
       по сумме вклада: от 30 000 ₽ и от 1,5 млн ₽. Надбавка «Новый клиент» или за «новые деньги» — только у вклада без
-      пополнения и снятия на 91 день, только в основной срок и если новые все деньги вклада. Досрочно — 0,01 %.
+      пополнения и снятия на 91 день, только в основной срок и если новые все деньги вклада. Пенсионерам («Вклад для
+      пенсионеров») — +0,7 на 91 день и +0,1 на другие сроки; с надбавкой «новым» не складывается. В юанях и
+      долларах — от 500 до 200 000; с пополнением ставка 0,01 %. Досрочно — 0,01 %.
     variants:
       - id: none-end
         name: Без пополнения и снятия, проценты в конце срока
@@ -46,7 +48,12 @@ editions:
           - { from: 730, to: 730, amount_from: 150000000, percent: "11.7" }
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "11.2" }
         bonuses:
-          - { id: new_money, name: Новый клиент или «новые деньги» — на весь вклад, check: manual, terms: [{ from: 91, to: 91, plus: "0.7" }] }
+          - { id: new_money, name: Новый клиент или «новые деньги» — на весь вклад, check: manual, group: extra, terms: [{ from: 91, to: 91, plus: "0.7" }] }
+          - id: pensioner
+            name: Пенсионер (вклад для пенсионеров)
+            check: manual
+            group: extra
+            terms: [{ from: 61, to: 61, plus: "0.1" }, { from: 91, to: 91, plus: "0.7" }, { from: 122, to: 1100, plus: "0.1" }]
       - id: none-monthly
         name: Без пополнения и снятия, проценты ежемесячно
         payouts: [monthly]
@@ -78,7 +85,12 @@ editions:
           - { from: 730, to: 730, amount_from: 150000000, percent: "10" }
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "9" }
         bonuses:
-          - { id: new_money, name: Новый клиент или «новые деньги» — на весь вклад, check: manual, terms: [{ from: 91, to: 91, plus: "0.7" }] }
+          - { id: new_money, name: Новый клиент или «новые деньги» — на весь вклад, check: manual, group: extra, terms: [{ from: 91, to: 91, plus: "0.7" }] }
+          - id: pensioner
+            name: Пенсионер (вклад для пенсионеров)
+            check: manual
+            group: extra
+            terms: [{ from: 61, to: 61, plus: "0.1" }, { from: 91, to: 91, plus: "0.7" }, { from: 122, to: 1100, plus: "0.1" }]
       - id: topup-end
         name: С пополнением, проценты в конце срока
         payouts: [end]
@@ -199,3 +211,29 @@ editions:
           - { from: 550, to: 550, amount_from: 150000000, percent: "5" }
           - { from: 730, to: 730, amount_from: 150000000, percent: "4.1" }
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "1.9" }
+      - id: cny
+        name: В юанях, без пополнения и снятия
+        payouts: [end, monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 50000, percent: "2.5" }
+          - { from: 181, to: 181, amount_from: 50000, percent: "3" }
+          - { from: 367, to: 367, amount_from: 50000, percent: "3.5" }
+          - { from: 550, to: 550, amount_from: 50000, percent: "3.5" }
+          - { from: 730, to: 730, amount_from: 50000, percent: "3.5" }
+          - { from: 1100, to: 1100, amount_from: 50000, percent: "0.01" }
+        currency: CNY
+      - id: usd
+        name: В долларах, без пополнения и снятия
+        payouts: [end, monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 50000, percent: "0.3" }
+          - { from: 181, to: 181, amount_from: 50000, percent: "0.5" }
+          - { from: 367, to: 367, amount_from: 50000, percent: "0.7" }
+          - { from: 550, to: 550, amount_from: 50000, percent: "0.01" }
+          - { from: 730, to: 730, amount_from: 50000, percent: "0.01" }
+          - { from: 1100, to: 1100, amount_from: 50000, percent: "0.01" }
+        currency: USD

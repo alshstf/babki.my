@@ -1,0 +1,31 @@
+id: psb-stabilny-dohod
+bank: psb
+name: Вклад «Стабильный доход»
+kind: deposit
+watch:
+  - https://www.psbank.ru/personal/saving
+  - https://www.psbank.ru/personal/saving
+editions:
+  - from: 2026-09-29
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/conditionsterms.pdf
+    notes: >-
+      Условия вкладов с 29.09.2026. От 50 000 ₽ (ступень — от 3 млн ₽), без пополнения и снятия, проценты ежемесячно на другой счёт. Досрочно — «до востребования». Продление не больше 3 раз.
+    variants:
+      - id: main
+        name: Проценты ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 5000000, percent: "13" }
+          - { from: 270, to: 270, amount_from: 5000000, percent: "12.8" }
+          - { from: 367, to: 367, amount_from: 5000000, percent: "12.3" }
+          - { from: 547, to: 547, amount_from: 5000000, percent: "10.5" }
+          - { from: 731, to: 731, amount_from: 5000000, percent: "10.5" }
+          - { from: 181, to: 181, amount_from: 300000000, percent: "13.5" }
+          - { from: 270, to: 270, amount_from: 300000000, percent: "13.3" }
+          - { from: 367, to: 367, amount_from: 300000000, percent: "12.8" }
+          - { from: 547, to: 547, amount_from: 300000000, percent: "11" }
+          - { from: 731, to: 731, amount_from: 300000000, percent: "11" }

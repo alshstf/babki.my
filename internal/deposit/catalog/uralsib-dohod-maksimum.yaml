@@ -1,0 +1,27 @@
+id: uralsib-dohod-maksimum
+bank: uralsib
+name: Вклад «Доход Максимум»
+kind: deposit
+watch:
+  - https://uralsib.ru/vklady-scheta/dohod-maximum
+editions:
+  - from: 2026-09-12
+    checked_on: 2026-10-16
+    sources:
+      - https://uralsib.ru/api/directory-engine/files/rates/dep_dohod_maximum_120926_pfsni8zt.pdf
+    notes: >-
+      Тарифы с 12.09.2026. Для тех, кто заключил в банке договор долгосрочных сбережений с НПФ Совкомбанк и внёс
+      первый взнос: открыть в 5 дней, в офисе, от 100 000 до 5 000 000 ₽ и не больше первого взноса. Без
+      пополнения и снятия, проценты в конце срока. Ставка без условий связки — 12,1 % (31 день) и 13,3 % (181 день);
+      надбавка за договор — до 25 и 16,5 %.
+    variants:
+      - id: end
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 10000000, percent: "12.1" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "13.3" }
+        bonuses:
+          - { id: pds, name: Договор долгосрочных сбережений с НПФ Совкомбанк действует, check: manual, terms: [{ from: 31, to: 31, plus: "12.9" }, { from: 181, to: 181, plus: "3.2" }] }

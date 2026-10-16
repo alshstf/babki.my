@@ -1,0 +1,48 @@
+id: uralsib-komfort-plus
+bank: uralsib
+name: Вклад «Комфорт Плюс»
+kind: deposit
+watch:
+  - https://uralsib.ru/vklady-scheta/vklady
+editions:
+  - from: 2026-09-25
+    checked_on: 2026-10-16
+    sources:
+      - https://uralsib.ru/api/directory-engine/files/rates/komfort-plyus_250926_xxsyfqxo.pdf
+    notes: >-
+      Для пакетов «Премиум» и Private Banking («Частный»). Ставка — ключевая ставка Банка России минус дисконт по
+      сроку и неснижаемому остатку (от 2, 10 и 50 млн ₽); пополнение и снятие до неснижаемого остатка, проценты
+      ежемесячно. Здесь — базовая ставка, без учёта капитализации.
+    variants:
+      - id: premium
+        name: «Комфорт Плюс. Премиум»
+        payouts: [monthly, capitalize]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 200000000, key_plus: "-0.9" }
+          - { from: 181, to: 181, amount_from: 200000000, key_plus: "-0.8" }
+          - { from: 367, to: 367, amount_from: 200000000, key_plus: "-0.7" }
+          - { from: 732, to: 732, amount_from: 200000000, key_plus: "-0.7" }
+          - { from: 1100, to: 1100, amount_from: 200000000, key_plus: "-0.6" }
+      - id: private
+        name: «Комфорт Плюс. Частный»
+        payouts: [monthly, capitalize]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 200000000, key_plus: "-0.9" }
+          - { from: 181, to: 181, amount_from: 200000000, key_plus: "-0.8" }
+          - { from: 367, to: 367, amount_from: 200000000, key_plus: "-0.7" }
+          - { from: 732, to: 732, amount_from: 200000000, key_plus: "-0.7" }
+          - { from: 1100, to: 1100, amount_from: 200000000, key_plus: "-0.6" }
+          - { from: 91, to: 91, amount_from: 1000000000, key_plus: "-0.8" }
+          - { from: 181, to: 181, amount_from: 1000000000, key_plus: "-0.7" }
+          - { from: 367, to: 367, amount_from: 1000000000, key_plus: "-0.6" }
+          - { from: 732, to: 732, amount_from: 1000000000, key_plus: "-0.6" }
+          - { from: 1100, to: 1100, amount_from: 1000000000, key_plus: "-0.5" }
+          - { from: 91, to: 91, amount_from: 5000000000, key_plus: "-0.7" }
+          - { from: 181, to: 181, amount_from: 5000000000, key_plus: "-0.5" }
+          - { from: 367, to: 367, amount_from: 5000000000, key_plus: "-0.4" }
+          - { from: 732, to: 732, amount_from: 5000000000, key_plus: "-0.4" }
+          - { from: 1100, to: 1100, amount_from: 5000000000, key_plus: "-0.3" }

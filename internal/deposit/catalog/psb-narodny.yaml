@@ -1,0 +1,33 @@
+id: psb-narodny
+bank: psb
+name: «Народный вклад»
+kind: deposit
+watch:
+  - https://www.psbank.ru/personal/saving/narodnyy-vklad
+  - https://www.psbank.ru/personal/saving
+editions:
+  - from: 2026-09-29
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/conditionsterms.pdf
+    notes: >-
+      Условия вкладов с 29.09.2026. Только для новых вкладчиков (180 дней без вкладов и накопительных в ПСБ), один раз, от 10 000 до 50 000 ₽, без пополнения, проценты в конце срока. Для пенсионеров (заявление о переводе пенсии в ПСБ не раньше 30 дней до открытия) — своя сетка. Продление не больше 3 раз — на условиях «Моей выгоды».
+    variants:
+      - id: main
+        name: Новый вкладчик
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 32, to: 32, amount_from: 1000000, percent: "30" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "22" }
+          - { from: 122, to: 122, amount_from: 1000000, percent: "20" }
+      - id: pensioner
+        name: Новый вкладчик — пенсионер
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 32, to: 32, amount_from: 1000000, percent: "30" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "27" }
+          - { from: 122, to: 122, amount_from: 1000000, percent: "25" }

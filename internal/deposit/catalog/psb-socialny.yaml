@@ -1,0 +1,24 @@
+id: psb-socialny
+bank: psb
+name: Социальный вклад
+kind: deposit
+watch:
+  - https://www.psbank.ru/personal/saving/social
+editions:
+  - from: 2026-09-29
+    checked_on: 2026-10-16
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/conditionsterms.pdf
+    notes: >-
+      Условия вкладов с 29.09.2026. Для получателей мер социальной поддержки. Ставка — наибольшая ставка ПСБ по
+      вкладам до года (31 % в день сверки) и меняется вместе с ней — программа берёт ставку из редакции каждого дня.
+      365 дней, до 50 000 ₽.
+    variants:
+      - id: main
+        name: Социальный вклад
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        floating: true
+        grid:
+          - { from: 365, to: 365, amount_from: 1, percent: "31" }
