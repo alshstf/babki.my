@@ -23,8 +23,8 @@ const (
 
 // Rate is a savings account's or a deposit's rate from From on (decision
 // Р-51 А): Percent a year when fixed, the margin over the key rate when tied
-// to it. ByHand: the family wrote it in — over anything a catalog of the
-// banks' programmes would say (Р-52).
+// to it. ByHand: the family wrote it in — over anything the program would
+// learn of the bank by itself.
 type Rate struct {
 	From    time.Time
 	Kind    RateKind
