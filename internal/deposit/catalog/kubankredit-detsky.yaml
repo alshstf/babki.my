@@ -1,0 +1,23 @@
+id: kubankredit-detsky
+bank: kubankredit
+name: Вклад «Детский»
+kind: deposit
+watch:
+  - https://kk.ru/deposits/detskiy/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://kk.ru/deposits/detskiy/
+    notes: >-
+      Вклад, чтобы накопить к совершеннолетию ребёнка. Ставка — от ключевой ставки Банка России: от 10 000 ₽ — 0,8
+      ключевой, от 3 млн ₽ — 0,9 ключевой; 365 дней.
+    variants:
+      - id: main
+        name: «Детский»
+        payouts: [capitalize]
+        ops: topup
+        term_unit: days
+        grid:
+          - { from: 365, to: 365, amount_from: 1000000, key_times: "0.8" }
+          - { from: 365, to: 365, amount_from: 300000000, key_times: "0.9" }

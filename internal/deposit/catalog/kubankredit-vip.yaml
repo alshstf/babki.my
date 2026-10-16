@@ -1,0 +1,71 @@
+id: kubankredit-vip
+bank: kubankredit
+name: Вклады «Ключевой VIP» и «VIP Управляемый»
+kind: deposit
+watch:
+  - https://kk.ru/deposits/klyuchevoy-vip/
+  - https://kk.ru/deposits/vklad-vip-upravlyaemyy/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://kk.ru/deposits/klyuchevoy-vip/
+      - https://kk.ru/deposits/vklad-vip-upravlyaemyy/
+    notes: >-
+      Дата редакции у банка не указана — ставки страниц в день сверки. «Ключевой VIP» — ключевая ставка Банка России
+      минус дисконт по сроку и сумме (от 5 млн и от 50 млн ₽), проценты ежемесячно. «VIP Управляемый» — 366 дней,
+      доля ключевой по совокупному остатку клиента и близких родственников в банке на дату открытия (вариант);
+      при остатке на вкладе от 50 млн ₽ — половина ключевой на всю сумму.
+    variants:
+      - id: klyuchevoy
+        name: «Ключевой VIP»
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 270, amount_from: 500000000, key_plus: "-1.2" }
+          - { from: 271, to: 366, amount_from: 500000000, key_plus: "-1.1" }
+          - { from: 367, to: 545, amount_from: 500000000, key_plus: "-1" }
+          - { from: 181, to: 270, amount_from: 5000000000, key_plus: "-1" }
+          - { from: 271, to: 366, amount_from: 5000000000, key_plus: "-0.9" }
+          - { from: 367, to: 545, amount_from: 5000000000, key_plus: "-0.7" }
+      - id: upravlyaemy-5m
+        name: «VIP Управляемый», совокупный остаток от 5 до 10 млн ₽
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 366, to: 366, amount_from: 1000000, key_times: "0.6" }
+          - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
+      - id: upravlyaemy-10m
+        name: «VIP Управляемый», совокупный остаток от 10 до 50 млн ₽
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 366, to: 366, amount_from: 1000000, key_times: "0.65" }
+          - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
+      - id: upravlyaemy-50m
+        name: «VIP Управляемый», совокупный остаток от 50 до 100 млн ₽
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 366, to: 366, amount_from: 1000000, key_times: "0.67" }
+          - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
+      - id: upravlyaemy-100m
+        name: «VIP Управляемый», совокупный остаток от 100 до 200 млн ₽
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 366, to: 366, amount_from: 1000000, key_times: "0.7" }
+          - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
+      - id: upravlyaemy-200m
+        name: «VIP Управляемый», совокупный остаток от 200 млн ₽
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 366, to: 366, amount_from: 1000000, key_times: "0.75" }
+          - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }

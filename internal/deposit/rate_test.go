@@ -378,6 +378,11 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		{"Россия, Стабильное будущее", "rossiya-stabilnoe-budushchee", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "19.5"},
 		{"ПСБ, Народный пенсионеру", "psb-narodny", Holding{Variant: "pensioner", OpenedOn: day("2026-10-16"), Term: 91, Amount: 50_000_00}, "2026-10-20", 50_000_00, nil, "27"},
 		{"ПСБ, Ставка на будущее", "psb-stavka-na-budushchee", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 32, Amount: 100_000_00}, "2026-10-20", 100_000_00, nil, "28"},
+		// Кубань Кредит «Пенсионный специальный»: ½ КС на 100 000 ₽ и 0,4 КС сверх — 200 000 ₽ при ключевой 14 — 6,3.
+		{"Кубань, пенсионный", "kubankredit-pensionny", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 1100, Amount: 200_000_00}, "2026-10-20", 200_000_00, nil, "6.3"},
+		{"Кубань, детский", "kubankredit-detsky", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 365, Amount: 3_000_000_00}, "2026-10-20", 3_000_000_00, nil, "12.6"},
+		{"Новиком, Капитал", "novikom-kapital", Holding{Variant: "rub", OpenedOn: day("2026-10-16"), Term: 91, Amount: 1_000_000_00}, "2026-10-20", 1_000_000_00, nil, "11"},
+		{"Новиком, премиум онлайн", "novikom-kapital", Holding{Variant: "premium-online", OpenedOn: day("2026-10-16"), Term: 91, Amount: 60_000_000_00}, "2026-10-20", 60_000_000_00, nil, "13.8"},
 	}
 	for _, c := range cases {
 		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))

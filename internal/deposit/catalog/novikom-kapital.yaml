@@ -1,0 +1,106 @@
+id: novikom-kapital
+bank: novikom
+name: Вклад «Капитал»
+kind: deposit
+watch:
+  - https://novikom.ru/deposit/
+editions:
+  - from: 2026-10-07
+    checked_on: 2026-10-16
+    sources:
+      - https://novikom.ru/deposit/
+      - https://novikom.ru/documents/minimalnye-garantirovannye-stavki-po-vkladam-06102026.pdf
+    notes: >-
+      Ставки страницы вклада и минимальные гарантированные ставки с 07.10.2026. Ступень — по первоначальному взносу:
+      в рублях от 10 000 ₽ и от 1 млн ₽, в юанях от 10 000 и от 100 000 ¥. Без пополнения и снятия, проценты
+      присоединяются в день окончания срока. Линейки «Капитал Социальный» (для получателей соцвыплат),
+      «Капитал зарплатный онлайн» (для зарплатных клиентов) и премиальные — отдельными вариантами; у них здесь —
+      ставки минимального взноса (у бо́льших сумм банк может давать выше).
+    variants:
+      - id: rub
+        name: В рублях
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 1000000, percent: "10.5" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "9.5" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "9.5" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "9" }
+          - { from: 1100, to: 1100, amount_from: 1000000, percent: "9" }
+          - { from: 91, to: 91, amount_from: 100000000, percent: "11" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "9.8" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "9.8" }
+          - { from: 730, to: 730, amount_from: 100000000, percent: "9" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "9" }
+      - id: cny
+        name: В юанях
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 1000000, percent: "1.5" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "2" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "2.2" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "2.7" }
+          - { from: 1100, to: 1100, amount_from: 1000000, percent: "2.7" }
+          - { from: 91, to: 91, amount_from: 10000000, percent: "1.8" }
+          - { from: 181, to: 181, amount_from: 10000000, percent: "2.3" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "2.5" }
+          - { from: 730, to: 730, amount_from: 10000000, percent: "3" }
+          - { from: 1100, to: 1100, amount_from: 10000000, percent: "3" }
+        currency: CNY
+      - id: social
+        name: «Капитал Социальный»
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 1000000, percent: "10.8" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "9.8" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "9.8" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "9.1" }
+          - { from: 1100, to: 1100, amount_from: 1000000, percent: "9.1" }
+      - id: salary-online
+        name: «Капитал зарплатный онлайн»
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 1000000, percent: "13" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "12.6" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "11.8" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "10" }
+          - { from: 1100, to: 1100, amount_from: 1000000, percent: "10" }
+      - id: premium
+        name: «Премиум / Premium Капитал»
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 1000000, percent: "13.1" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "12.5" }
+          - { from: 367, to: 367, amount_from: 1000000, percent: "11.5" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "9.7" }
+          - { from: 1100, to: 1100, amount_from: 1000000, percent: "9.7" }
+      - id: premium-online
+        name: «Капитал премиум онлайн»
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 1000000000, percent: "13.4" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "13.3" }
+          - { from: 367, to: 367, amount_from: 1000000000, percent: "12.1" }
+          - { from: 730, to: 730, amount_from: 1000000000, percent: "10" }
+          - { from: 1110, to: 1110, amount_from: 1000000000, percent: "10" }
+          - { from: 91, to: 91, amount_from: 5000000000, percent: "13.8" }
+          - { from: 181, to: 181, amount_from: 5000000000, percent: "13.7" }
+          - { from: 367, to: 367, amount_from: 5000000000, percent: "12.4" }
+          - { from: 730, to: 730, amount_from: 5000000000, percent: "10" }
+          - { from: 1110, to: 1110, amount_from: 5000000000, percent: "10" }
+          - { from: 91, to: 91, amount_from: 10000000000, percent: "13.9" }
+          - { from: 181, to: 181, amount_from: 10000000000, percent: "13.8" }
+          - { from: 367, to: 367, amount_from: 10000000000, percent: "12.5" }
+          - { from: 730, to: 730, amount_from: 10000000000, percent: "10" }
+          - { from: 1110, to: 1110, amount_from: 10000000000, percent: "10" }
