@@ -30,7 +30,7 @@ editions:
           - { name: Приветственная, months: 2, grid: [{ percent: "14.2" }], cap: 100000000, requires: new_client }
         bonuses: &vtb-bonuses
           - { id: salary, name: Зарплата в ВТБ, plus: "2", check: wages, group: status, cap: 100000000 }
-          - { id: pension, name: Пенсия в ВТБ, plus: "2", check: wages, group: status, cap: 100000000 }
+          - { id: pension, name: Пенсия в ВТБ, plus: "2", check: manual, group: status, cap: 100000000 }
           - { id: subscription, name: Подписка ВТБ Плюс, plus: "2", check: manual, group: status, cap: 100000000 }
           - id: spend
             name: Покупки по картам ВТБ за месяц
