@@ -10,6 +10,78 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AccountProgrammeConditions.
+const (
+	AccountProgrammeConditionsAuto   AccountProgrammeConditions = "auto"
+	AccountProgrammeConditionsManual AccountProgrammeConditions = "manual"
+)
+
+// Valid indicates whether the value is a known member of the AccountProgrammeConditions enum.
+func (e AccountProgrammeConditions) Valid() bool {
+	switch e {
+	case AccountProgrammeConditionsAuto:
+		return true
+	case AccountProgrammeConditionsManual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountProgrammeKind.
+const (
+	AccountProgrammeKindDeposit AccountProgrammeKind = "deposit"
+	AccountProgrammeKindSavings AccountProgrammeKind = "savings"
+)
+
+// Valid indicates whether the value is a known member of the AccountProgrammeKind enum.
+func (e AccountProgrammeKind) Valid() bool {
+	switch e {
+	case AccountProgrammeKindDeposit:
+		return true
+	case AccountProgrammeKindSavings:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountProgrammeTermUnit.
+const (
+	AccountProgrammeTermUnitDays   AccountProgrammeTermUnit = "days"
+	AccountProgrammeTermUnitMonths AccountProgrammeTermUnit = "months"
+)
+
+// Valid indicates whether the value is a known member of the AccountProgrammeTermUnit enum.
+func (e AccountProgrammeTermUnit) Valid() bool {
+	switch e {
+	case AccountProgrammeTermUnitDays:
+		return true
+	case AccountProgrammeTermUnitMonths:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountProgrammeInputConditions.
+const (
+	AccountProgrammeInputConditionsAuto   AccountProgrammeInputConditions = "auto"
+	AccountProgrammeInputConditionsManual AccountProgrammeInputConditions = "manual"
+)
+
+// Valid indicates whether the value is a known member of the AccountProgrammeInputConditions enum.
+func (e AccountProgrammeInputConditions) Valid() bool {
+	switch e {
+	case AccountProgrammeInputConditionsAuto:
+		return true
+	case AccountProgrammeInputConditionsManual:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AccountRateKind.
 const (
 	AccountRateKindFixed AccountRateKind = "fixed"
@@ -58,6 +130,27 @@ func (e AccountRateNowKind) Valid() bool {
 	case AccountRateNowKindFixed:
 		return true
 	case AccountRateNowKindKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountRatesSource.
+const (
+	AccountRatesSourceByHand    AccountRatesSource = "by_hand"
+	AccountRatesSourceNone      AccountRatesSource = "none"
+	AccountRatesSourceProgramme AccountRatesSource = "programme"
+)
+
+// Valid indicates whether the value is a known member of the AccountRatesSource enum.
+func (e AccountRatesSource) Valid() bool {
+	switch e {
+	case AccountRatesSourceByHand:
+		return true
+	case AccountRatesSourceNone:
+		return true
+	case AccountRatesSourceProgramme:
 		return true
 	default:
 		return false
@@ -216,16 +309,16 @@ func (e AllocationCutRowVerdict) Valid() bool {
 
 // Defines values for AllocationMode.
 const (
-	Rebalance AllocationMode = "rebalance"
-	Topup     AllocationMode = "topup"
+	AllocationModeRebalance AllocationMode = "rebalance"
+	AllocationModeTopup     AllocationMode = "topup"
 )
 
 // Valid indicates whether the value is a known member of the AllocationMode enum.
 func (e AllocationMode) Valid() bool {
 	switch e {
-	case Rebalance:
+	case AllocationModeRebalance:
 		return true
-	case Topup:
+	case AllocationModeTopup:
 		return true
 	default:
 		return false
@@ -547,6 +640,108 @@ func (e CreditCardTermsGraceRunFrom) Valid() bool {
 	case CreditCardTermsGraceRunFromNextDay:
 		return true
 	case CreditCardTermsGraceRunFromPurchase:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositProgrammeKind.
+const (
+	DepositProgrammeKindDeposit DepositProgrammeKind = "deposit"
+	DepositProgrammeKindSavings DepositProgrammeKind = "savings"
+)
+
+// Valid indicates whether the value is a known member of the DepositProgrammeKind enum.
+func (e DepositProgrammeKind) Valid() bool {
+	switch e {
+	case DepositProgrammeKindDeposit:
+		return true
+	case DepositProgrammeKindSavings:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositVariantAccrual.
+const (
+	DepositVariantAccrualDaily   DepositVariantAccrual = "daily"
+	DepositVariantAccrualMinimum DepositVariantAccrual = "minimum"
+)
+
+// Valid indicates whether the value is a known member of the DepositVariantAccrual enum.
+func (e DepositVariantAccrual) Valid() bool {
+	switch e {
+	case DepositVariantAccrualDaily:
+		return true
+	case DepositVariantAccrualMinimum:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositVariantOps.
+const (
+	DepositVariantOpsNone          DepositVariantOps = "none"
+	DepositVariantOpsTopup         DepositVariantOps = "topup"
+	DepositVariantOpsTopupWithdraw DepositVariantOps = "topup_withdraw"
+)
+
+// Valid indicates whether the value is a known member of the DepositVariantOps enum.
+func (e DepositVariantOps) Valid() bool {
+	switch e {
+	case DepositVariantOpsNone:
+		return true
+	case DepositVariantOpsTopup:
+		return true
+	case DepositVariantOpsTopupWithdraw:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositVariantPayouts.
+const (
+	DepositVariantPayoutsCapitalize DepositVariantPayouts = "capitalize"
+	DepositVariantPayoutsDaily      DepositVariantPayouts = "daily"
+	DepositVariantPayoutsEnd        DepositVariantPayouts = "end"
+	DepositVariantPayoutsMonthly    DepositVariantPayouts = "monthly"
+	DepositVariantPayoutsQuarterly  DepositVariantPayouts = "quarterly"
+)
+
+// Valid indicates whether the value is a known member of the DepositVariantPayouts enum.
+func (e DepositVariantPayouts) Valid() bool {
+	switch e {
+	case DepositVariantPayoutsCapitalize:
+		return true
+	case DepositVariantPayoutsDaily:
+		return true
+	case DepositVariantPayoutsEnd:
+		return true
+	case DepositVariantPayoutsMonthly:
+		return true
+	case DepositVariantPayoutsQuarterly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositVariantTermUnit.
+const (
+	DepositVariantTermUnitDays   DepositVariantTermUnit = "days"
+	DepositVariantTermUnitMonths DepositVariantTermUnit = "months"
+)
+
+// Valid indicates whether the value is a known member of the DepositVariantTermUnit enum.
+func (e DepositVariantTermUnit) Valid() bool {
+	switch e {
+	case DepositVariantTermUnitDays:
+		return true
+	case DepositVariantTermUnitMonths:
 		return true
 	default:
 		return false
@@ -1309,6 +1504,48 @@ func (e PriceSource) Valid() bool {
 	}
 }
 
+// Defines values for ProgrammeConditionCheck.
+const (
+	ProgrammeConditionCheckBankBalance ProgrammeConditionCheck = "bank_balance"
+	ProgrammeConditionCheckCardSpend   ProgrammeConditionCheck = "card_spend"
+	ProgrammeConditionCheckManual      ProgrammeConditionCheck = "manual"
+	ProgrammeConditionCheckWages       ProgrammeConditionCheck = "wages"
+)
+
+// Valid indicates whether the value is a known member of the ProgrammeConditionCheck enum.
+func (e ProgrammeConditionCheck) Valid() bool {
+	switch e {
+	case ProgrammeConditionCheckBankBalance:
+		return true
+	case ProgrammeConditionCheckCardSpend:
+		return true
+	case ProgrammeConditionCheckManual:
+		return true
+	case ProgrammeConditionCheckWages:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProgrammeConditionKind.
+const (
+	Bonus       ProgrammeConditionKind = "bonus"
+	Requirement ProgrammeConditionKind = "requirement"
+)
+
+// Valid indicates whether the value is a known member of the ProgrammeConditionKind enum.
+func (e ProgrammeConditionKind) Valid() bool {
+	switch e {
+	case Bonus:
+		return true
+	case Requirement:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RealizedGap.
 const (
 	NoRate RealizedGap = "no_rate"
@@ -1389,22 +1626,22 @@ func (e ReceiptNewSource) Valid() bool {
 
 // Defines values for RecurringPaymentCadence.
 const (
-	Monthly   RecurringPaymentCadence = "monthly"
-	Quarterly RecurringPaymentCadence = "quarterly"
-	Weekly    RecurringPaymentCadence = "weekly"
-	Yearly    RecurringPaymentCadence = "yearly"
+	RecurringPaymentCadenceMonthly   RecurringPaymentCadence = "monthly"
+	RecurringPaymentCadenceQuarterly RecurringPaymentCadence = "quarterly"
+	RecurringPaymentCadenceWeekly    RecurringPaymentCadence = "weekly"
+	RecurringPaymentCadenceYearly    RecurringPaymentCadence = "yearly"
 )
 
 // Valid indicates whether the value is a known member of the RecurringPaymentCadence enum.
 func (e RecurringPaymentCadence) Valid() bool {
 	switch e {
-	case Monthly:
+	case RecurringPaymentCadenceMonthly:
 		return true
-	case Quarterly:
+	case RecurringPaymentCadenceQuarterly:
 		return true
-	case Weekly:
+	case RecurringPaymentCadenceWeekly:
 		return true
-	case Yearly:
+	case RecurringPaymentCadenceYearly:
 		return true
 	default:
 		return false
@@ -2126,6 +2363,51 @@ type AccountJournal struct {
 	UnpricedPositions int `json:"unpriced_positions"`
 }
 
+// AccountProgramme defines model for AccountProgramme.
+type AccountProgramme struct {
+	AmountMinor   nullable.Nullable[int64]                    `json:"amount_minor"`
+	BankId        string                                      `json:"bank_id"`
+	BankName      string                                      `json:"bank_name"`
+	Conditions    AccountProgrammeConditions                  `json:"conditions"`
+	Kind          AccountProgrammeKind                        `json:"kind"`
+	OpenedOn      string                                      `json:"opened_on"`
+	ProgrammeId   string                                      `json:"programme_id"`
+	ProgrammeName string                                      `json:"programme_name"`
+	Term          nullable.Nullable[int]                      `json:"term"`
+	TermUnit      nullable.Nullable[AccountProgrammeTermUnit] `json:"term_unit"`
+	VariantId     string                                      `json:"variant_id"`
+	VariantName   string                                      `json:"variant_name"`
+}
+
+// AccountProgrammeConditions defines model for AccountProgramme.Conditions.
+type AccountProgrammeConditions string
+
+// AccountProgrammeKind defines model for AccountProgramme.Kind.
+type AccountProgrammeKind string
+
+// AccountProgrammeTermUnit defines model for AccountProgramme.TermUnit.
+type AccountProgrammeTermUnit string
+
+// AccountProgrammeInput defines model for AccountProgrammeInput.
+type AccountProgrammeInput struct {
+	// AmountMinor A deposit's sum at opening; null for a savings account
+	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+
+	// Conditions How the conditions are told: by the family's marks, or by the program from its data where it can (Р-53)
+	Conditions AccountProgrammeInputConditions `json:"conditions"`
+
+	// OpenedOn Date YYYY-MM-DD the account was opened or last prolonged
+	OpenedOn    string `json:"opened_on"`
+	ProgrammeId string `json:"programme_id"`
+
+	// Term A deposit's term in the variant's unit; null for a savings account
+	Term      nullable.Nullable[int] `json:"term"`
+	VariantId string                 `json:"variant_id"`
+}
+
+// AccountProgrammeInputConditions How the conditions are told: by the family's marks, or by the program from its data where it can (Р-53)
+type AccountProgrammeInputConditions string
+
 // AccountRate defines model for AccountRate.
 type AccountRate struct {
 	ByHand  bool            `json:"by_hand"`
@@ -2165,13 +2447,31 @@ type AccountRateNowKind string
 
 // AccountRates defines model for AccountRates.
 type AccountRates struct {
+	// Conditions The conditions of the programme's variant, with what the marks say of them this month
+	Conditions []ProgrammeCondition `json:"conditions"`
+
 	// Current The rate in force today; null without one by today, or a key-tied one without the key rate
 	Current nullable.Nullable[AccountRateNow] `json:"current"`
 
 	// KeyRate The Central Bank's key rate today
 	KeyRate nullable.Nullable[string] `json:"key_rate"`
-	Rates   []AccountRate             `json:"rates"`
+
+	// Marks The marks of the conditions, by condition and day
+	Marks []ConditionMark `json:"marks"`
+
+	// Programme The account's programme of its bank; null without one
+	Programme nullable.Nullable[AccountProgramme] `json:"programme"`
+
+	// Quote The rate today by the programme's terms on today's balance; null without a programme, or when the catalog cannot reckon it (a term it has no rate for, an edition not known yet, no key rate)
+	Quote nullable.Nullable[ProgrammeQuote] `json:"quote"`
+	Rates []AccountRate                     `json:"rates"`
+
+	// Source Where today's rate comes from: written in by hand (over everything, Р-51), the programme's terms, or nowhere
+	Source AccountRatesSource `json:"source"`
 }
+
+// AccountRatesSource Where today's rate comes from: written in by hand (over everything, Р-51), the programme's terms, or nowhere
+type AccountRatesSource string
 
 // AccountReconciliation defines model for AccountReconciliation.
 type AccountReconciliation struct {
@@ -2677,6 +2977,13 @@ type Benchmarks struct {
 	To         string      `json:"to"`
 }
 
+// BonusLevel defines model for BonusLevel.
+type BonusLevel struct {
+	// From From what is measured — a sum in minor units, or a level's number for one told by a mark
+	From int64  `json:"from"`
+	Plus string `json:"plus"`
+}
+
 // Budget defines model for Budget.
 type Budget struct {
 	BaseCurrency string       `json:"base_currency"`
@@ -2918,6 +3225,24 @@ type ChangePasswordRequest struct {
 
 	// NewPassword The same rule as SetupRequest.password: eight to 1024 characters, counted as Unicode code points.
 	NewPassword string `json:"new_password"`
+}
+
+// ConditionMark defines model for ConditionMark.
+type ConditionMark struct {
+	Condition string `json:"condition"`
+	FromOn    string `json:"from_on"`
+	Level     int    `json:"level"`
+	Met       bool   `json:"met"`
+}
+
+// ConditionMarkInput defines model for ConditionMarkInput.
+type ConditionMarkInput struct {
+	Condition string `json:"condition"`
+
+	// FromOn Date YYYY-MM-DD
+	FromOn string `json:"from_on"`
+	Level  int    `json:"level"`
+	Met    bool   `json:"met"`
 }
 
 // CostBasisMethod How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
@@ -3648,6 +3973,60 @@ type DayPrice struct {
 	Source string `json:"source"`
 }
 
+// DepositProgramme defines model for DepositProgramme.
+type DepositProgramme struct {
+	BankId      string               `json:"bank_id"`
+	BankName    string               `json:"bank_name"`
+	CheckedOn   string               `json:"checked_on"`
+	EditionFrom string               `json:"edition_from"`
+	Id          string               `json:"id"`
+	Kind        DepositProgrammeKind `json:"kind"`
+	Name        string               `json:"name"`
+	Notes       string               `json:"notes"`
+	Sources     []string             `json:"sources"`
+	Variants    []DepositVariant     `json:"variants"`
+}
+
+// DepositProgrammeKind defines model for DepositProgramme.Kind.
+type DepositProgrammeKind string
+
+// DepositProgrammes defines model for DepositProgrammes.
+type DepositProgrammes struct {
+	Programmes []DepositProgramme `json:"programmes"`
+}
+
+// DepositVariant defines model for DepositVariant.
+type DepositVariant struct {
+	Accrual nullable.Nullable[DepositVariantAccrual] `json:"accrual"`
+
+	// AmountFromMinor The least sum the bank has a rate for
+	AmountFromMinor int64                                     `json:"amount_from_minor"`
+	Conditions      []ProgrammeCondition                      `json:"conditions"`
+	Id              string                                    `json:"id"`
+	Name            string                                    `json:"name"`
+	Ops             DepositVariantOps                         `json:"ops"`
+	Payouts         []DepositVariantPayouts                   `json:"payouts"`
+	TermUnit        nullable.Nullable[DepositVariantTermUnit] `json:"term_unit"`
+
+	// Terms The terms the bank has a rate for; empty for a savings account
+	Terms []TermRange `json:"terms"`
+
+	// Welcome The name of the schedule's first period, a welcome rate; null for none
+	Welcome nullable.Nullable[string] `json:"welcome"`
+}
+
+// DepositVariantAccrual defines model for DepositVariant.Accrual.
+type DepositVariantAccrual string
+
+// DepositVariantOps defines model for DepositVariant.Ops.
+type DepositVariantOps string
+
+// DepositVariantPayouts defines model for DepositVariant.Payouts.
+type DepositVariantPayouts string
+
+// DepositVariantTermUnit defines model for DepositVariant.TermUnit.
+type DepositVariantTermUnit string
+
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -3656,8 +4035,11 @@ type ErrorResponse struct {
 // ExportAccount defines model for ExportAccount.
 type ExportAccount struct {
 	// Balances Balance marks, oldest first
-	Balances  []ExportBalance `json:"balances"`
-	CreatedAt time.Time       `json:"created_at"`
+	Balances []ExportBalance `json:"balances"`
+
+	// ConditionMarks The marks of the programme's conditions (PUT /accounts/{accountId}/marks)
+	ConditionMarks []ConditionMark `json:"condition_marks"`
+	CreatedAt      time.Time       `json:"created_at"`
 
 	// CreditCard A credit card's terms (PUT /accounts/{accountId}/credit-card); null on every other account
 	CreditCard nullable.Nullable[CreditCardTerms] `json:"credit_card"`
@@ -3688,6 +4070,9 @@ type ExportAccount struct {
 
 	// OwnerUsername The member the account is personal to; null for a shared one
 	OwnerUsername nullable.Nullable[string] `json:"owner_username"`
+
+	// Programme A savings account's or a deposit's programme of its bank (PUT /accounts/{accountId}/programme); null without one
+	Programme nullable.Nullable[AccountProgrammeInput] `json:"programme"`
 
 	// Rates A savings account's or a deposit's rates, oldest first (PUT /accounts/{accountId}/rates); empty on every other account
 	Rates  []AccountRate `json:"rates"`
@@ -5080,6 +5465,60 @@ type PositionsResponse struct {
 // PriceSource defines model for PriceSource.
 type PriceSource string
 
+// ProgrammeCondition defines model for ProgrammeCondition.
+type ProgrammeCondition struct {
+	// Check How the program could tell it from its own data; manual — only by a mark
+	Check ProgrammeConditionCheck `json:"check"`
+
+	// Group Of the bonuses of a group only the greatest counts
+	Group nullable.Nullable[string] `json:"group"`
+	Id    string                    `json:"id"`
+
+	// Kind A bonus to the rate, or the condition of having a period — a welcome rate for a new client
+	Kind ProgrammeConditionKind `json:"kind"`
+
+	// Level The level met this month, 0 for a bonus of one
+	Level  int          `json:"level"`
+	Levels []BonusLevel `json:"levels"`
+
+	// Met What the marks say of it this month
+	Met  bool   `json:"met"`
+	Name string `json:"name"`
+
+	// Plus A bonus of one level: what it adds
+	Plus nullable.Nullable[string] `json:"plus"`
+}
+
+// ProgrammeConditionCheck How the program could tell it from its own data; manual — only by a mark
+type ProgrammeConditionCheck string
+
+// ProgrammeConditionKind A bonus to the rate, or the condition of having a period — a welcome rate for a new client
+type ProgrammeConditionKind string
+
+// ProgrammeQuote defines model for ProgrammeQuote.
+type ProgrammeQuote struct {
+	// Bonuses The ids of the bonuses that counted
+	Bonuses []string `json:"bonuses"`
+
+	// CheckedOn The day the edition was checked against the bank's documents
+	CheckedOn string `json:"checked_on"`
+
+	// EditionFrom The day the edition of the bank's terms holds from
+	EditionFrom string `json:"edition_from"`
+
+	// Mgs The minimum guaranteed rate the bank states
+	Mgs   nullable.Nullable[string] `json:"mgs"`
+	Notes string                    `json:"notes"`
+	Parts []QuotePart               `json:"parts"`
+
+	// Percent The rate a year on today's balance, weighed by its parts
+	Percent string `json:"percent"`
+
+	// Period The period of the schedule in force — a welcome rate — null for none
+	Period  nullable.Nullable[string] `json:"period"`
+	Sources []string                  `json:"sources"`
+}
+
 // PushKey defines model for PushKey.
 type PushKey struct {
 	// PublicKey Uncompressed P-256 point, base64url without padding
@@ -5097,6 +5536,13 @@ type PushSubscriptionRequest struct {
 type PushTestResult struct {
 	Delivered int `json:"delivered"`
 	Devices   int `json:"devices"`
+}
+
+// QuotePart defines model for QuotePart.
+type QuotePart struct {
+	FromMinor int64  `json:"from_minor"`
+	Percent   string `json:"percent"`
+	ToMinor   int64  `json:"to_minor"`
 }
 
 // RealizedCurrencyTotal defines model for RealizedCurrencyTotal.
@@ -6025,6 +6471,12 @@ type TaxYearWagePayment struct {
 	On            string             `json:"on"`
 	OperationId   openapi_types.UUID `json:"operation_id"`
 	WithheldMinor int64              `json:"withheld_minor"`
+}
+
+// TermRange defines model for TermRange.
+type TermRange struct {
+	From int `json:"from"`
+	To   int `json:"to"`
 }
 
 // TinvestAccountPick defines model for TinvestAccountPick.
@@ -7059,6 +7511,12 @@ type RecordLoanPaymentJSONRequestBody = LoanPaymentRequest
 
 // RecordLoanPrepaymentJSONRequestBody defines body for RecordLoanPrepayment for application/json ContentType.
 type RecordLoanPrepaymentJSONRequestBody = LoanPrepaymentRequest
+
+// SetConditionMarkJSONRequestBody defines body for SetConditionMark for application/json ContentType.
+type SetConditionMarkJSONRequestBody = ConditionMarkInput
+
+// SetAccountProgrammeJSONRequestBody defines body for SetAccountProgramme for application/json ContentType.
+type SetAccountProgrammeJSONRequestBody = AccountProgrammeInput
 
 // SetAccountRateJSONRequestBody defines body for SetAccountRate for application/json ContentType.
 type SetAccountRateJSONRequestBody = AccountRateInput

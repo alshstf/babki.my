@@ -2139,6 +2139,77 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/programme:
+    put:
+      tags: [accounts]
+      operationId: setAccountProgramme
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        Ties a savings account or a deposit to its bank's programme in the program's catalog (decisions Р-52 Б,
+        Р-53 Б): the variant chosen at opening, the day of opening or last prolongation, a deposit's term in the
+        bank's unit and its sum at opening, and how its conditions are told. 400 for a programme of another kind,
+        a variant it has not, a deposit's term or sum the catalog has no rate for on the day of opening.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccountProgrammeInput" } } } }
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [accounts]
+      operationId: deleteAccountProgramme
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: Unties the account from its programme; the marks of its conditions go with it.
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/marks:
+    put:
+      tags: [accounts]
+      operationId: setConditionMark
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        The family's word on a condition of the account's programme (Р-53): from a day on it holds at a level —
+        a bonus's step — or no longer holds. A month counts the last mark made in it or before. 400 for a
+        condition the programme has not, or a level past its steps.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConditionMarkInput" } } } }
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/marks/{condition}/{fromOn}:
+    delete:
+      tags: [accounts]
+      operationId: deleteConditionMark
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: condition, in: path, required: true, schema: { type: string } }
+        - { name: fromOn, in: path, required: true, schema: { type: string }, description: "Date YYYY-MM-DD" }
+      description: Forgets the mark of a condition made on the day.
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/deposit-programmes:
+    get:
+      tags: [accounts]
+      operationId: listDepositProgrammes
+      description: >-
+        The program's catalog of the banks' deposit and savings account programmes (decisions Р-52 Б, Р-53 Б), by
+        bank and name, each with its latest edition's variants: what is chosen at opening, the terms and least sum
+        the bank has a rate for, the conditions of the bonuses.
+      responses:
+        "200": { description: The catalog, content: { application/json: { schema: { $ref: "#/components/schemas/DepositProgrammes" } } } }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
       tags: [accounts]
@@ -3801,8 +3872,24 @@ components:
         by_hand: { type: boolean }
     AccountRates:
       type: object
-      required: [rates, current, key_rate]
+      required: [rates, current, key_rate, source, programme, quote, conditions, marks]
       properties:
+        source:
+          type: string
+          enum: [by_hand, programme, none]
+          description: "Where today's rate comes from: written in by hand (over everything, Р-51), the programme's terms, or nowhere"
+        programme:
+          nullable: true
+          description: The account's programme of its bank; null without one
+          allOf:
+            - $ref: "#/components/schemas/AccountProgramme"
+        quote:
+          nullable: true
+          description: "The rate today by the programme's terms on today's balance; null without a programme, or when the catalog cannot reckon it (a term it has no rate for, an edition not known yet, no key rate)"
+          allOf:
+            - $ref: "#/components/schemas/ProgrammeQuote"
+        conditions: { type: array, items: { $ref: "#/components/schemas/ProgrammeCondition" }, description: "The conditions of the programme's variant, with what the marks say of them this month" }
+        marks: { type: array, items: { $ref: "#/components/schemas/ConditionMark" }, description: "The marks of the conditions, by condition and day" }
         rates: { type: array, items: { $ref: "#/components/schemas/AccountRate" } }
         current:
           nullable: true
@@ -3810,6 +3897,126 @@ components:
           allOf:
             - $ref: "#/components/schemas/AccountRateNow"
         key_rate: { type: string, nullable: true, description: "The Central Bank's key rate today" }
+    AccountProgrammeInput:
+      type: object
+      required: [programme_id, variant_id, opened_on, term, amount_minor, conditions]
+      properties:
+        programme_id: { type: string }
+        variant_id: { type: string }
+        opened_on: { type: string, description: "Date YYYY-MM-DD the account was opened or last prolonged" }
+        term: { type: integer, nullable: true, description: "A deposit's term in the variant's unit; null for a savings account" }
+        amount_minor: { type: integer, format: int64, nullable: true, description: "A deposit's sum at opening; null for a savings account" }
+        conditions: { type: string, enum: [manual, auto], description: "How the conditions are told: by the family's marks, or by the program from its data where it can (Р-53)" }
+    AccountProgramme:
+      type: object
+      required: [programme_id, programme_name, bank_id, bank_name, kind, variant_id, variant_name, opened_on, term, term_unit, amount_minor, conditions]
+      properties:
+        programme_id: { type: string }
+        programme_name: { type: string }
+        bank_id: { type: string }
+        bank_name: { type: string }
+        kind: { type: string, enum: [deposit, savings] }
+        variant_id: { type: string }
+        variant_name: { type: string }
+        opened_on: { type: string }
+        term: { type: integer, nullable: true }
+        term_unit: { type: string, nullable: true, enum: [days, months] }
+        amount_minor: { type: integer, format: int64, nullable: true }
+        conditions: { type: string, enum: [manual, auto] }
+    ProgrammeQuote:
+      type: object
+      required: [percent, edition_from, checked_on, sources, notes, period, bonuses, parts, mgs]
+      properties:
+        percent: { type: string, description: "The rate a year on today's balance, weighed by its parts" }
+        edition_from: { type: string, description: "The day the edition of the bank's terms holds from" }
+        checked_on: { type: string, description: "The day the edition was checked against the bank's documents" }
+        sources: { type: array, items: { type: string } }
+        notes: { type: string }
+        period: { type: string, nullable: true, description: "The period of the schedule in force — a welcome rate — null for none" }
+        bonuses: { type: array, items: { type: string }, description: "The ids of the bonuses that counted" }
+        parts: { type: array, items: { $ref: "#/components/schemas/QuotePart" } }
+        mgs: { type: string, nullable: true, description: "The minimum guaranteed rate the bank states" }
+    QuotePart:
+      type: object
+      required: [from_minor, to_minor, percent]
+      properties:
+        from_minor: { type: integer, format: int64 }
+        to_minor: { type: integer, format: int64 }
+        percent: { type: string }
+    ProgrammeCondition:
+      type: object
+      required: [id, name, kind, check, group, plus, levels, met, level]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [bonus, requirement], description: "A bonus to the rate, or the condition of having a period — a welcome rate for a new client" }
+        check: { type: string, enum: [manual, card_spend, wages, bank_balance], description: "How the program could tell it from its own data; manual — only by a mark" }
+        group: { type: string, nullable: true, description: "Of the bonuses of a group only the greatest counts" }
+        plus: { type: string, nullable: true, description: "A bonus of one level: what it adds" }
+        levels: { type: array, items: { $ref: "#/components/schemas/BonusLevel" } }
+        met: { type: boolean, description: "What the marks say of it this month" }
+        level: { type: integer, description: "The level met this month, 0 for a bonus of one" }
+    BonusLevel:
+      type: object
+      required: [from, plus]
+      properties:
+        from: { type: integer, format: int64, description: "From what is measured — a sum in minor units, or a level's number for one told by a mark" }
+        plus: { type: string }
+    ConditionMarkInput:
+      type: object
+      required: [condition, from_on, level, met]
+      properties:
+        condition: { type: string }
+        from_on: { type: string, description: "Date YYYY-MM-DD" }
+        level: { type: integer }
+        met: { type: boolean }
+    ConditionMark:
+      type: object
+      required: [condition, from_on, level, met]
+      properties:
+        condition: { type: string }
+        from_on: { type: string }
+        level: { type: integer }
+        met: { type: boolean }
+    DepositProgrammes:
+      type: object
+      required: [programmes]
+      properties:
+        programmes: { type: array, items: { $ref: "#/components/schemas/DepositProgramme" } }
+    DepositProgramme:
+      type: object
+      required: [id, bank_id, bank_name, name, kind, edition_from, checked_on, sources, notes, variants]
+      properties:
+        id: { type: string }
+        bank_id: { type: string }
+        bank_name: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [deposit, savings] }
+        edition_from: { type: string }
+        checked_on: { type: string }
+        sources: { type: array, items: { type: string } }
+        notes: { type: string }
+        variants: { type: array, items: { $ref: "#/components/schemas/DepositVariant" } }
+    DepositVariant:
+      type: object
+      required: [id, name, accrual, payouts, ops, term_unit, terms, amount_from_minor, conditions, welcome]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        accrual: { type: string, nullable: true, enum: [daily, minimum] }
+        payouts: { type: array, items: { type: string, enum: [end, monthly, capitalize, daily, quarterly] } }
+        ops: { type: string, enum: [none, topup, topup_withdraw] }
+        term_unit: { type: string, nullable: true, enum: [days, months] }
+        terms: { type: array, items: { $ref: "#/components/schemas/TermRange" }, description: "The terms the bank has a rate for; empty for a savings account" }
+        amount_from_minor: { type: integer, format: int64, description: "The least sum the bank has a rate for" }
+        conditions: { type: array, items: { $ref: "#/components/schemas/ProgrammeCondition" } }
+        welcome: { type: string, nullable: true, description: "The name of the schedule's first period, a welcome rate; null for none" }
+    TermRange:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: integer }
+        to: { type: integer }
     ExportWageEntry:
       type: object
       required: [operation_id, gross_minor, withheld_minor]
@@ -3853,7 +4060,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments, credit_card_bank_figures, rates]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments, credit_card_bank_figures, rates, programme, condition_marks]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -3893,6 +4100,12 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AccountRate" }
           description: "A savings account's or a deposit's rates, oldest first (PUT /accounts/{accountId}/rates); empty on every other account"
+        programme:
+          nullable: true
+          description: "A savings account's or a deposit's programme of its bank (PUT /accounts/{accountId}/programme); null without one"
+          allOf:
+            - $ref: "#/components/schemas/AccountProgrammeInput"
+        condition_marks: { type: array, items: { $ref: "#/components/schemas/ConditionMark" }, description: "The marks of the programme's conditions (PUT /accounts/{accountId}/marks)" }
         credit_card_bank_figures:
           nullable: true
           description: "What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated"

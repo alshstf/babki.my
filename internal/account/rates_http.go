@@ -9,7 +9,9 @@ import (
 	"github.com/oapi-codegen/nullable"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/deposit"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/intermediary"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 )
@@ -84,21 +86,42 @@ func (h *Handler) handleDeleteRate(w http.ResponseWriter, r *http.Request) {
 	h.writeRates(w, r, p.SpaceID, id)
 }
 
-// writeRates answers with the account's rates and the one in force today.
+// writeRates answers with the account's rates, its programme, and the rate
+// in force today and where it comes from.
 func (h *Handler) writeRates(w http.ResponseWriter, r *http.Request, spaceID, id uuid.UUID) {
-	list, err := h.store.Rates(r.Context(), spaceID, id)
+	ctx := r.Context()
+	a, err := h.store.ByID(ctx, spaceID, id)
 	if err != nil {
 		family.WriteError(w, err)
 		return
 	}
-	out := apitypes.AccountRates{Rates: RatesAPI(list), Current: nullable.NewNullNullable[apitypes.AccountRateNow](), KeyRate: nullable.NewNullNullable[string]()}
+	list, err := h.store.Rates(ctx, spaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	binding, err := h.store.Binding(ctx, spaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	marks, err := h.store.Marks(ctx, spaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.AccountRates{
+		Rates: RatesAPI(list), Current: nullable.NewNullNullable[apitypes.AccountRateNow](), KeyRate: nullable.NewNullNullable[string](),
+		Source: apitypes.AccountRatesSourceNone, Programme: nullable.NewNullNullable[apitypes.AccountProgramme](), Quote: nullable.NewNullNullable[apitypes.ProgrammeQuote](),
+		Conditions: []apitypes.ProgrammeCondition{}, Marks: MarksAPI(marks),
+	}
 	keyOn := func(day time.Time) (decimal.Decimal, bool, error) {
 		if h.keys == nil {
 			return decimal.Zero, false, nil
 		}
-		return h.keys.KeyRateOn(r.Context(), day)
+		return h.keys.KeyRateOn(ctx, day)
 	}
-	today := time.Now().UTC()
+	today := time.Now().UTC().Truncate(24 * time.Hour)
 	if key, ok, err := keyOn(today); err == nil && ok {
 		out.KeyRate = nullable.NewNullableWithValue(key.String())
 	}
@@ -108,11 +131,81 @@ func (h *Handler) writeRates(w http.ResponseWriter, r *http.Request, spaceID, id
 		return
 	}
 	if ok {
+		out.Source = apitypes.AccountRatesSourceByHand
 		out.Current = nullable.NewNullableWithValue(apitypes.AccountRateNow{
 			Percent: pct.StringFixed(3), FromOn: row.From.Format(time.DateOnly), Kind: apitypes.AccountRateNowKind(row.Kind), ByHand: row.ByHand,
 		})
 	}
+	if binding != nil {
+		if p, found := deposit.ByID(binding.Programme); found {
+			if err := h.writeProgramme(&out, *binding, p, marks, a, today, keyOn); err != nil {
+				family.WriteError(w, err)
+				return
+			}
+		}
+	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// writeProgramme fills the answer's programme, its quote on today's balance
+// and the conditions with what the marks say of them this month.
+func (h *Handler) writeProgramme(out *apitypes.AccountRates, b Binding, p deposit.Programme, marks []Mark, a WithBalance, today time.Time, keyOn func(time.Time) (decimal.Decimal, bool, error)) error {
+	banks, _ := intermediary.Load()
+	bank, _ := banks.ByID(p.Bank)
+	on := today
+	if p.Kind == deposit.KindDeposit {
+		on = b.OpenedOn
+	}
+	e, ok := p.EditionOn(on)
+	if !ok {
+		e = p.Editions[len(p.Editions)-1]
+	}
+	v, _ := e.Variant(b.Variant)
+	ap := apitypes.AccountProgramme{
+		ProgrammeId: p.ID, ProgrammeName: p.Name, BankId: p.Bank, BankName: bank.Name, Kind: apitypes.AccountProgrammeKind(p.Kind),
+		VariantId: b.Variant, VariantName: v.Name, OpenedOn: b.OpenedOn.Format(time.DateOnly), Conditions: apitypes.AccountProgrammeConditions(b.Conditions),
+		Term: nullable.NewNullNullable[int](), TermUnit: nullable.NewNullNullable[apitypes.AccountProgrammeTermUnit](), AmountMinor: nullable.NewNullNullable[int64](),
+	}
+	if b.Term != nil {
+		ap.Term = nullable.NewNullableWithValue(*b.Term)
+		ap.TermUnit = nullable.NewNullableWithValue(apitypes.AccountProgrammeTermUnit(v.TermUnit))
+	}
+	if b.Amount != nil {
+		ap.AmountMinor = nullable.NewNullableWithValue(*b.Amount)
+	}
+	out.Programme = nullable.NewNullableWithValue(ap)
+	say := MarksSay(marks)
+	out.Conditions = conditionsAPI(v, say, time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
+	balance := int64(0)
+	if a.Balance != nil {
+		balance = a.Balance.AmountMinor
+	}
+	res, ok, err := Resolve(RateSource{Binding: &b, Marks: marks}, today, balance, keyOn)
+	if err != nil || !ok {
+		return err
+	}
+	q := *res.Quote
+	pq := apitypes.ProgrammeQuote{
+		Percent: q.Percent.StringFixed(3), EditionFrom: q.Edition, CheckedOn: e.CheckedOn, Sources: e.Sources, Notes: e.Notes,
+		Period: nullable.NewNullNullable[string](), Bonuses: q.Bonuses, Parts: []apitypes.QuotePart{}, Mgs: nullable.NewNullNullable[string](),
+	}
+	if pq.Bonuses == nil {
+		pq.Bonuses = []string{}
+	}
+	if q.Period != "" {
+		pq.Period = nullable.NewNullableWithValue(q.Period)
+	}
+	if v.MGS != "" {
+		pq.Mgs = nullable.NewNullableWithValue(v.MGS)
+	}
+	for _, part := range q.Parts {
+		pq.Parts = append(pq.Parts, apitypes.QuotePart{FromMinor: part.From, ToMinor: part.To, Percent: part.Percent.StringFixed(3)})
+	}
+	out.Quote = nullable.NewNullableWithValue(pq)
+	if out.Source == apitypes.AccountRatesSourceNone {
+		out.Source = apitypes.AccountRatesSourceProgramme
+	}
+	return nil
 }
 
 // RatesAPI are rates as the API writes them, oldest first.

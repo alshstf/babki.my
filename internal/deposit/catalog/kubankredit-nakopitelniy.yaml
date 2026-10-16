@@ -31,7 +31,7 @@ editions:
               - { key_times: "1" }
               - { amount_from: 100000001, key_times: "0.6" }
         bonuses:
-          - { id: income, name: Зарплата или пенсия в банке, plus: "3", check: income }
+          - { id: income, name: Зарплата или пенсия в банке, plus: "3", check: wages }
           - id: spend
             name: Покупки по картам банка за месяц
             check: card_spend

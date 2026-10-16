@@ -21,6 +21,8 @@ var exported = map[string]string{
 	"accounts":                    "",
 	"account_balances":            "",
 	"account_rates":               "",
+	"account_programmes":          "",
+	"account_condition_marks":     "",
 	"categories":                  "",
 	"category_defaults":           "a mark that the default categories were laid, not data",
 	"category_rules":              "",

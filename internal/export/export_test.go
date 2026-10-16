@@ -489,6 +489,16 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 	if resp, err := s.c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("rate: %v %v", resp, err)
 	}
+	for _, body := range []struct{ path, json string }{
+		{"/programme", `{"programme_id":"vtb-schet","variant_id":"minimum","opened_on":"2026-10-16","term":null,"amount_minor":null,"conditions":"manual"}`},
+		{"/marks", `{"condition":"spend","from_on":"2026-10-01","level":1,"met":true}`},
+	} {
+		req, _ = http.NewRequest(http.MethodPut, s.url+"/api/v1/accounts/"+savings+body.path, strings.NewReader(body.json))
+		req.Header.Set("Content-Type", "application/json")
+		if resp, err := s.c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %v %v", body.path, resp, err)
+		}
+	}
 	post(t, s.c, s.url+"/api/v1/allocation/plans", `{"name":"Октябрь","operations":[{"kind":"buy","account_id":"`+broker+`","instrument_id":"`+paper+`","currency":"RUB","amount_minor":10000000}]}`, http.StatusOK)
 
 	var who struct {
@@ -514,8 +524,10 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"instruments"`
 		Accounts []struct {
-			Name  string           `json:"name"`
-			Rates []map[string]any `json:"rates"`
+			Name           string           `json:"name"`
+			Rates          []map[string]any `json:"rates"`
+			Programme      map[string]any   `json:"programme"`
+			ConditionMarks []map[string]any `json:"condition_marks"`
 		} `json:"accounts"`
 		HiddenRegular     []map[string]any `json:"hidden_regular"`
 		InstrumentClasses []map[string]any `json:"instrument_classes"`
@@ -539,6 +551,9 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 		}
 		if len(a.Rates) != want || want == 1 && (a.Rates[0]["percent"] != "16.500" || a.Rates[0]["from_on"] != "2026-09-01" || a.Rates[0]["by_hand"] != true) {
 			t.Errorf("%s: rates = %v", a.Name, a.Rates)
+		}
+		if (a.Programme != nil) != (want == 1) || want == 1 && (a.Programme["programme_id"] != "vtb-schet" || len(a.ConditionMarks) != 1 || a.ConditionMarks[0]["level"] != float64(1)) {
+			t.Errorf("%s: programme = %v, marks %v", a.Name, a.Programme, a.ConditionMarks)
 		}
 	}
 	if len(doc.AllocationPlans) != 1 || doc.AllocationPlans[0]["name"] != "Октябрь" {

@@ -25,6 +25,8 @@ type accounts interface {
 	ByID(ctx context.Context, spaceID, id uuid.UUID) (account.WithBalance, error)
 	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
 	AllRates(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.Rate, error)
+	AllBindings(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]account.Binding, error)
+	AllMarks(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.Mark, error)
 }
 
 type keyRates interface {
@@ -71,7 +73,7 @@ type Valued struct {
 	// goal's yield — weighed by what it holds for the goal. FundRates are the
 	// accounts' own rates, where they have one today.
 	Growth    decimal.Decimal
-	FundRates map[uuid.UUID]account.Rate
+	FundRates map[uuid.UUID]account.Resolved
 	RateNow   map[uuid.UUID]decimal.Decimal
 	// OnBroker: some of its money is on a brokerage account, where a
 	// contribution is a top-up to invest (Р-37).
@@ -99,10 +101,22 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 		return nil, "", err
 	}
 	broker := map[uuid.UUID]bool{}
+	balances := map[uuid.UUID]int64{}
 	for _, a := range all {
 		broker[a.ID] = a.Type == account.TypeBrokerage
+		if a.Balance != nil {
+			balances[a.ID] = a.Balance.AmountMinor
+		}
 	}
 	rates, err := s.accounts.AllRates(ctx, spaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	bindings, err := s.accounts.AllBindings(ctx, spaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	marks, err := s.accounts.AllMarks(ctx, spaceID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -137,16 +151,20 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 				v.Overdrawn = append(v.Overdrawn, f.Account)
 			}
 		}
-		v.FundRates, v.RateNow = map[uuid.UUID]account.Rate{}, map[uuid.UUID]decimal.Decimal{}
+		v.FundRates, v.RateNow = map[uuid.UUID]account.Resolved{}, map[uuid.UUID]decimal.Decimal{}
 		weighed, weight := decimal.Zero, decimal.Zero
 		for _, f := range g.Funds {
 			r := g.Yield
-			pct, row, ok, err := account.RateOn(rates[f.Account], today, keyOn)
+			src := account.RateSource{Rates: rates[f.Account], Marks: marks[f.Account]}
+			if b, ok := bindings[f.Account]; ok {
+				src.Binding = &b
+			}
+			res, ok, err := account.Resolve(src, today, balances[f.Account], keyOn)
 			if err != nil {
 				return nil, "", err
 			}
 			if ok {
-				r, v.FundRates[f.Account], v.RateNow[f.Account] = pct, *row, pct
+				r, v.FundRates[f.Account], v.RateNow[f.Account] = res.Percent, res, res.Percent
 			}
 			// Weighed by what each holds for the goal; with nothing held yet,
 			// all alike.
