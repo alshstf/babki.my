@@ -24,6 +24,11 @@ type structures interface {
 type accounts interface {
 	ByID(ctx context.Context, spaceID, id uuid.UUID) (account.WithBalance, error)
 	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
+	AllRates(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.Rate, error)
+}
+
+type keyRates interface {
+	KeyRateOn(ctx context.Context, day time.Time) (decimal.Decimal, bool, error)
 }
 
 // Service keeps the goals and values them.
@@ -31,7 +36,16 @@ type Service struct {
 	db         db.Executor
 	structures structures
 	accounts   accounts
-	now        func() time.Time
+	// keys strike a deposit's rate tied to the key rate (WithKeyRates).
+	keys keyRates
+	now  func() time.Time
+}
+
+// WithKeyRates lets a goal grow on a deposit whose rate is tied to the key
+// rate.
+func (s *Service) WithKeyRates(k keyRates) *Service {
+	s.keys = k
+	return s
 }
 
 func NewService(x db.Executor, s structures, a accounts) *Service {
@@ -52,6 +66,13 @@ type Valued struct {
 	// Overdrawn: the sums out of one account across the goals come to more
 	// than it holds.
 	Overdrawn []uuid.UUID
+	// Growth is the rate a year the goal grows at (decision Р-51 А): each
+	// fund's — a savings account's or a deposit's own rate, anything else the
+	// goal's yield — weighed by what it holds for the goal. FundRates are the
+	// accounts' own rates, where they have one today.
+	Growth    decimal.Decimal
+	FundRates map[uuid.UUID]account.Rate
+	RateNow   map[uuid.UUID]decimal.Decimal
 	// OnBroker: some of its money is on a brokerage account, where a
 	// contribution is a top-up to invest (Р-37).
 	OnBroker bool
@@ -81,6 +102,16 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 	for _, a := range all {
 		broker[a.ID] = a.Type == account.TypeBrokerage
 	}
+	rates, err := s.accounts.AllRates(ctx, spaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	keyOn := func(day time.Time) (decimal.Decimal, bool, error) {
+		if s.keys == nil {
+			return decimal.Zero, false, nil
+		}
+		return s.keys.KeyRateOn(ctx, day)
+	}
 	parts := map[uuid.UUID]int64{}
 	for _, g := range list {
 		for _, f := range g.Funds {
@@ -106,7 +137,32 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 				v.Overdrawn = append(v.Overdrawn, f.Account)
 			}
 		}
-		v.Progress = progress(g, saved, today)
+		v.FundRates, v.RateNow = map[uuid.UUID]account.Rate{}, map[uuid.UUID]decimal.Decimal{}
+		weighed, weight := decimal.Zero, decimal.Zero
+		for _, f := range g.Funds {
+			r := g.Yield
+			pct, row, ok, err := account.RateOn(rates[f.Account], today, keyOn)
+			if err != nil {
+				return nil, "", err
+			}
+			if ok {
+				r, v.FundRates[f.Account], v.RateNow[f.Account] = pct, *row, pct
+			}
+			// Weighed by what each holds for the goal; with nothing held yet,
+			// all alike.
+			w := decimal.NewFromInt(max(v.FundValues[f.Account], 0))
+			if saved == 0 {
+				w = decimal.NewFromInt(1)
+			}
+			weighed, weight = weighed.Add(r.Mul(w)), weight.Add(w)
+		}
+		v.Growth = g.Yield
+		if weight.IsPositive() {
+			v.Growth = weighed.Div(weight).Round(3)
+		}
+		grown := g
+		grown.Yield = v.Growth
+		v.Progress = progress(grown, saved, today)
 		out = append(out, v)
 	}
 	return out, worth.BaseCurrency, nil

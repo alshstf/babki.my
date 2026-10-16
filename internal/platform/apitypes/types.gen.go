@@ -10,6 +10,60 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AccountRateKind.
+const (
+	AccountRateKindFixed AccountRateKind = "fixed"
+	AccountRateKindKey   AccountRateKind = "key"
+)
+
+// Valid indicates whether the value is a known member of the AccountRateKind enum.
+func (e AccountRateKind) Valid() bool {
+	switch e {
+	case AccountRateKindFixed:
+		return true
+	case AccountRateKindKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountRateInputKind.
+const (
+	AccountRateInputKindFixed AccountRateInputKind = "fixed"
+	AccountRateInputKindKey   AccountRateInputKind = "key"
+)
+
+// Valid indicates whether the value is a known member of the AccountRateInputKind enum.
+func (e AccountRateInputKind) Valid() bool {
+	switch e {
+	case AccountRateInputKindFixed:
+		return true
+	case AccountRateInputKindKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountRateNowKind.
+const (
+	AccountRateNowKindFixed AccountRateNowKind = "fixed"
+	AccountRateNowKindKey   AccountRateNowKind = "key"
+)
+
+// Valid indicates whether the value is a known member of the AccountRateNowKind enum.
+func (e AccountRateNowKind) Valid() bool {
+	switch e {
+	case AccountRateNowKindFixed:
+		return true
+	case AccountRateNowKindKey:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AccountReconciliationStatus.
 const (
 	Agrees  AccountReconciliationStatus = "agrees"
@@ -2072,6 +2126,53 @@ type AccountJournal struct {
 	UnpricedPositions int `json:"unpriced_positions"`
 }
 
+// AccountRate defines model for AccountRate.
+type AccountRate struct {
+	ByHand  bool            `json:"by_hand"`
+	FromOn  string          `json:"from_on"`
+	Kind    AccountRateKind `json:"kind"`
+	Percent string          `json:"percent"`
+}
+
+// AccountRateKind defines model for AccountRate.Kind.
+type AccountRateKind string
+
+// AccountRateInput defines model for AccountRateInput.
+type AccountRateInput struct {
+	// FromOn Date YYYY-MM-DD the rate holds from
+	FromOn string               `json:"from_on"`
+	Kind   AccountRateInputKind `json:"kind"`
+
+	// Percent Decimal: a year when fixed; the margin over the key rate when tied to it, may be negative
+	Percent string `json:"percent"`
+}
+
+// AccountRateInputKind defines model for AccountRateInput.Kind.
+type AccountRateInputKind string
+
+// AccountRateNow defines model for AccountRateNow.
+type AccountRateNow struct {
+	ByHand bool               `json:"by_hand"`
+	FromOn string             `json:"from_on"`
+	Kind   AccountRateNowKind `json:"kind"`
+
+	// Percent The rate in force today, a year; a key-tied one with today's key rate
+	Percent string `json:"percent"`
+}
+
+// AccountRateNowKind defines model for AccountRateNow.Kind.
+type AccountRateNowKind string
+
+// AccountRates defines model for AccountRates.
+type AccountRates struct {
+	// Current The rate in force today; null without one by today, or a key-tied one without the key rate
+	Current nullable.Nullable[AccountRateNow] `json:"current"`
+
+	// KeyRate The Central Bank's key rate today
+	KeyRate nullable.Nullable[string] `json:"key_rate"`
+	Rates   []AccountRate             `json:"rates"`
+}
+
 // AccountReconciliation defines model for AccountReconciliation.
 type AccountReconciliation struct {
 	// BalanceAsOf Date YYYY-MM-DD of the balance mark compared against
@@ -3587,7 +3688,10 @@ type ExportAccount struct {
 
 	// OwnerUsername The member the account is personal to; null for a shared one
 	OwnerUsername nullable.Nullable[string] `json:"owner_username"`
-	Status        string                    `json:"status"`
+
+	// Rates A savings account's or a deposit's rates, oldest first (PUT /accounts/{accountId}/rates); empty on every other account
+	Rates  []AccountRate `json:"rates"`
+	Status string        `json:"status"`
 
 	// TaxOwnerUsername Whose the account is for tax when set apart from its owner; null otherwise
 	TaxOwnerUsername nullable.Nullable[string] `json:"tax_owner_username"`
@@ -3956,9 +4060,12 @@ type FullValuation string
 
 // Goal defines model for Goal.
 type Goal struct {
-	Funds        []GoalFund               `json:"funds"`
-	Id           openapi_types.UUID       `json:"id"`
-	MonthlyMinor nullable.Nullable[int64] `json:"monthly_minor"`
+	Funds []GoalFund `json:"funds"`
+
+	// GrowthPercent The rate a year the goal grows at (decision Р-51 А): each fund's — a savings account's or a deposit's own rate today, anything else yield_percent — weighed by what it holds for the goal
+	GrowthPercent string                   `json:"growth_percent"`
+	Id            openapi_types.UUID       `json:"id"`
+	MonthlyMinor  nullable.Nullable[int64] `json:"monthly_minor"`
 
 	// Months Months to the date, or to reach_on
 	Months int    `json:"months"`
@@ -3992,7 +4099,7 @@ type Goal struct {
 	// TargetOn Date YYYY-MM-DD
 	TargetOn nullable.Nullable[string] `json:"target_on"`
 
-	// YieldPercent The family's expected yield a year, decimal percent; 0 by default
+	// YieldPercent The family's expected yield a year on what has no rate of its own — a broker's account and the like — decimal percent; 0 by default
 	YieldPercent string `json:"yield_percent"`
 }
 
@@ -4005,6 +4112,12 @@ type GoalFund struct {
 
 	// AmountMinor A sum out of the account in the base currency; null: the whole account
 	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
+
+	// RateByHand The rate was written in by hand
+	RateByHand bool `json:"rate_by_hand"`
+
+	// RatePercent The account's own rate today, a year; null without one — the goal's yield is used
+	RatePercent nullable.Nullable[string] `json:"rate_percent"`
 
 	// ValueMinor What it comes to for the goal now
 	ValueMinor int64 `json:"value_minor"`
@@ -6946,6 +7059,9 @@ type RecordLoanPaymentJSONRequestBody = LoanPaymentRequest
 
 // RecordLoanPrepaymentJSONRequestBody defines body for RecordLoanPrepayment for application/json ContentType.
 type RecordLoanPrepaymentJSONRequestBody = LoanPrepaymentRequest
+
+// SetAccountRateJSONRequestBody defines body for SetAccountRate for application/json ContentType.
+type SetAccountRateJSONRequestBody = AccountRateInput
 
 // SetValuablesBankPriceJSONRequestBody defines body for SetValuablesBankPrice for application/json ContentType.
 type SetValuablesBankPriceJSONRequestBody = ValuablesBankPrice

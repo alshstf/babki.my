@@ -484,6 +484,11 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 	if resp, err := s.c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("class: %v %v", resp, err)
 	}
+	req, _ = http.NewRequest(http.MethodPut, s.url+"/api/v1/accounts/"+savings+"/rates", strings.NewReader(`{"from_on":"2026-09-01","kind":"fixed","percent":"16.5"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := s.c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("rate: %v %v", resp, err)
+	}
 	post(t, s.c, s.url+"/api/v1/allocation/plans", `{"name":"Октябрь","operations":[{"kind":"buy","account_id":"`+broker+`","instrument_id":"`+paper+`","currency":"RUB","amount_minor":10000000}]}`, http.StatusOK)
 
 	var who struct {
@@ -508,6 +513,10 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 		Instruments []struct {
 			ID string `json:"id"`
 		} `json:"instruments"`
+		Accounts []struct {
+			Name  string           `json:"name"`
+			Rates []map[string]any `json:"rates"`
+		} `json:"accounts"`
 		HiddenRegular     []map[string]any `json:"hidden_regular"`
 		InstrumentClasses []map[string]any `json:"instrument_classes"`
 		SavingsGoals      []map[string]any `json:"savings_goals"`
@@ -522,6 +531,15 @@ func TestTheExportCarriesThePlans(t *testing.T) {
 	if len(doc.SavingsGoals) != 1 || doc.SavingsGoals[0]["name"] != "Подушка" || doc.SavingsGoals[0]["yield_percent"] != "14.00" ||
 		len(doc.SavingsGoals[0]["funds"].([]any)) != 2 {
 		t.Errorf("goals = %v", doc.SavingsGoals)
+	}
+	for _, a := range doc.Accounts {
+		want := 0
+		if a.Name == "Накопительный" {
+			want = 1
+		}
+		if len(a.Rates) != want || want == 1 && (a.Rates[0]["percent"] != "16.500" || a.Rates[0]["from_on"] != "2026-09-01" || a.Rates[0]["by_hand"] != true) {
+			t.Errorf("%s: rates = %v", a.Name, a.Rates)
+		}
 	}
 	if len(doc.AllocationPlans) != 1 || doc.AllocationPlans[0]["name"] != "Октябрь" {
 		t.Errorf("plans = %v", doc.AllocationPlans)

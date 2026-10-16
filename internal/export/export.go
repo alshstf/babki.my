@@ -53,6 +53,7 @@ type spaces interface {
 type accounts interface {
 	ListWithBalance(ctx context.Context, spaceID uuid.UUID) ([]account.WithBalance, error)
 	BalanceHistory(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.BalancePoint, error)
+	AllRates(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]account.Rate, error)
 }
 
 type journals interface {
@@ -236,6 +237,10 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	if err != nil {
 		return apitypes.SpaceExport{}, err
 	}
+	rates, err := h.accounts.AllRates(ctx, spaceID)
+	if err != nil {
+		return apitypes.SpaceExport{}, err
+	}
 	history, err := h.accounts.BalanceHistory(ctx, spaceID)
 	if err != nil {
 		return apitypes.SpaceExport{}, err
@@ -268,6 +273,7 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 			return apitypes.SpaceExport{}, err
 		}
 		out := exportAccount(a, history[a.ID], ops, stated, usernames)
+		out.Rates = account.RatesAPI(rates[a.ID])
 		if t, ok := loanOf[a.ID]; ok {
 			out.Loan = nullable.NewNullableWithValue(loan.TermsAPI(t))
 			for _, p := range t.Prepayments {
@@ -522,6 +528,7 @@ func exportAccount(a account.WithBalance, marks []account.BalancePoint, ops []op
 		WithheldStated:         []apitypes.ExportWithheldStated{},
 		Loan:                   nullable.NewNullNullable[apitypes.LoanTerms](),
 		LoanPrepayments:        []apitypes.LoanPrepayment{},
+		Rates:                  []apitypes.AccountRate{},
 		CreditCardInstallments: []apitypes.ExportCardInstallment{},
 		CreditCard:             nullable.NewNullNullable[apitypes.CreditCardTerms](),
 		CreditCardBankFigures:  nullable.NewNullNullable[apitypes.CreditCardBankFigures](),

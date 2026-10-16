@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -55,4 +56,18 @@ func (s *Store) LatestKeyRateDay(ctx context.Context) (time.Time, error) {
 		return time.Time{}, pgx.ErrNoRows
 	}
 	return *on, nil
+}
+
+// KeyRateOn is the key rate in force on day: the last stored on or before it.
+// found is false before the first.
+func (s *Store) KeyRateOn(ctx context.Context, day time.Time) (rate decimal.Decimal, found bool, err error) {
+	var r *decimal.Decimal
+	err = s.db.QueryRow(ctx, `SELECT rate FROM key_rates WHERE on_date <= $1 ORDER BY on_date DESC LIMIT 1`, day).Scan(&r)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && r == nil) {
+		return decimal.Zero, false, nil
+	}
+	if err != nil {
+		return decimal.Zero, false, err
+	}
+	return *r, true, nil
 }

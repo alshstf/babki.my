@@ -1480,6 +1480,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A savings account's or a deposit's rates (decision Р-51 А), oldest first, and the one in force today: fixed, or the Central Bank's key rate on each day plus a margin. by_hand marks a rate the family wrote in — over anything a catalog of the banks' programmes would say (Р-52). */
+        get: operations["getAccountRates"];
+        /** @description States the rate from a day, over one stated for the same day; written by hand. 400 for an account that is not a savings account or a deposit, a fixed rate outside 0 to under 100, a margin outside ±50, more than three decimals. */
+        put: operations["setAccountRate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/rates/{fromOn}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Forgets the rate stated from the day. */
+        delete: operations["deleteAccountRate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/summary": {
         parameters: {
             query?: never;
@@ -2334,8 +2369,10 @@ export interface components {
             target_on: string | null;
             /** Format: int64 */
             monthly_minor: number | null;
-            /** @description The family's expected yield a year, decimal percent; 0 by default */
+            /** @description The family's expected yield a year on what has no rate of its own — a broker's account and the like — decimal percent; 0 by default */
             yield_percent: string;
+            /** @description The rate a year the goal grows at (decision Р-51 А): each fund's — a savings account's or a deposit's own rate today, anything else yield_percent — weighed by what it holds for the goal */
+            growth_percent: string;
             funds: components["schemas"]["GoalFund"][];
             /**
              * Format: int64
@@ -2371,6 +2408,10 @@ export interface components {
         GoalFund: {
             /** Format: uuid */
             account_id: string;
+            /** @description The account's own rate today, a year; null without one — the goal's yield is used */
+            rate_percent: string | null;
+            /** @description The rate was written in by hand */
+            rate_by_hand: boolean;
             /**
              * Format: int64
              * @description A sum out of the account in the base currency; null: the whole account
@@ -2706,6 +2747,36 @@ export interface components {
              */
             amount_minor: number | null;
         };
+        AccountRateInput: {
+            /** @description Date YYYY-MM-DD the rate holds from */
+            from_on: string;
+            /** @enum {string} */
+            kind: "fixed" | "key";
+            /** @description Decimal: a year when fixed; the margin over the key rate when tied to it, may be negative */
+            percent: string;
+        };
+        AccountRate: {
+            from_on: string;
+            /** @enum {string} */
+            kind: "fixed" | "key";
+            percent: string;
+            by_hand: boolean;
+        };
+        AccountRateNow: {
+            /** @description The rate in force today, a year; a key-tied one with today's key rate */
+            percent: string;
+            from_on: string;
+            /** @enum {string} */
+            kind: "fixed" | "key";
+            by_hand: boolean;
+        };
+        AccountRates: {
+            rates: components["schemas"]["AccountRate"][];
+            /** @description The rate in force today; null without one by today, or a key-tied one without the key rate */
+            current: components["schemas"]["AccountRateNow"] | null;
+            /** @description The Central Bank's key rate today */
+            key_rate: string | null;
+        };
         ExportWageEntry: {
             /** Format: uuid */
             operation_id: string;
@@ -2778,6 +2849,8 @@ export interface components {
             loan_prepayments: components["schemas"]["LoanPrepayment"][];
             /** @description A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account */
             credit_card_installments: components["schemas"]["ExportCardInstallment"][];
+            /** @description A savings account's or a deposit's rates, oldest first (PUT /accounts/{accountId}/rates); empty on every other account */
+            rates: components["schemas"]["AccountRate"][];
             /** @description What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated */
             credit_card_bank_figures: components["schemas"]["CreditCardBankFigures"] | null;
             /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
@@ -9196,6 +9269,87 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getAccountRates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setAccountRate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRateInput"];
+            };
+        };
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteAccountRate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                /** @description Date YYYY-MM-DD */
+                fromOn: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRates"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getSummary: {

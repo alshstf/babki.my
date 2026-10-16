@@ -2096,6 +2096,49 @@ paths:
               schema: { $ref: "#/components/schemas/CapitalSeries" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/rates:
+    get:
+      tags: [accounts]
+      operationId: getAccountRates
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        A savings account's or a deposit's rates (decision Р-51 А), oldest first, and the one in force today:
+        fixed, or the Central Bank's key rate on each day plus a margin. by_hand marks a rate the family wrote
+        in — over anything a catalog of the banks' programmes would say (Р-52).
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [accounts]
+      operationId: setAccountRate
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >-
+        States the rate from a day, over one stated for the same day; written by hand. 400 for an account that is
+        not a savings account or a deposit, a fixed rate outside 0 to under 100, a margin outside ±50, more than
+        three decimals.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRateInput" } } } }
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/rates/{fromOn}:
+    delete:
+      tags: [accounts]
+      operationId: deleteAccountRate
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: fromOn, in: path, required: true, schema: { type: string }, description: "Date YYYY-MM-DD" }
+      description: Forgets the rate stated from the day.
+      responses:
+        "200": { description: The rates, content: { application/json: { schema: { $ref: "#/components/schemas/AccountRates" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
       tags: [accounts]
@@ -3340,14 +3383,15 @@ components:
         broker_monthly_minor: { type: integer, format: int64, description: "Of monthly_minor, the goals' with money on a brokerage account: a top-up to invest" }
     Goal:
       type: object
-      required: [id, name, target_minor, target_on, monthly_minor, yield_percent, funds, saved_minor, percent, status, projected_minor, short_minor, needed_minor, reach_on, months, overdrawn]
+      required: [id, name, target_minor, target_on, monthly_minor, yield_percent, growth_percent, funds, saved_minor, percent, status, projected_minor, short_minor, needed_minor, reach_on, months, overdrawn]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         target_minor: { type: integer, format: int64, nullable: true, description: "In the base currency" }
         target_on: { type: string, nullable: true, description: "Date YYYY-MM-DD" }
         monthly_minor: { type: integer, format: int64, nullable: true }
-        yield_percent: { type: string, description: "The family's expected yield a year, decimal percent; 0 by default" }
+        yield_percent: { type: string, description: "The family's expected yield a year on what has no rate of its own — a broker's account and the like — decimal percent; 0 by default" }
+        growth_percent: { type: string, description: "The rate a year the goal grows at (decision Р-51 А): each fund's — a savings account's or a deposit's own rate today, anything else yield_percent — weighed by what it holds for the goal" }
         funds: { type: array, items: { $ref: "#/components/schemas/GoalFund" } }
         saved_minor: { type: integer, format: int64, description: "What the funds come to now" }
         status: { type: string, enum: [done, ahead, on_track, at_risk, none] }
@@ -3360,9 +3404,11 @@ components:
         overdrawn: { type: array, items: { type: string, format: uuid }, description: "Accounts whose sums across the goals come to more than they hold" }
     GoalFund:
       type: object
-      required: [account_id, amount_minor, value_minor]
+      required: [account_id, amount_minor, value_minor, rate_percent, rate_by_hand]
       properties:
         account_id: { type: string, format: uuid }
+        rate_percent: { type: string, nullable: true, description: "The account's own rate today, a year; null without one — the goal's yield is used" }
+        rate_by_hand: { type: boolean, description: "The rate was written in by hand" }
         amount_minor: { type: integer, format: int64, nullable: true, description: "A sum out of the account in the base currency; null: the whole account" }
         value_minor: { type: integer, format: int64, description: "What it comes to for the goal now" }
     GoalInput:
@@ -3730,6 +3776,40 @@ components:
       properties:
         account_id: { type: string, format: uuid }
         amount_minor: { type: integer, format: int64, nullable: true, description: "A sum out of the account in the base currency; null: the whole account" }
+    AccountRateInput:
+      type: object
+      required: [from_on, kind, percent]
+      properties:
+        from_on: { type: string, description: "Date YYYY-MM-DD the rate holds from" }
+        kind: { type: string, enum: [fixed, key] }
+        percent: { type: string, description: "Decimal: a year when fixed; the margin over the key rate when tied to it, may be negative" }
+    AccountRate:
+      type: object
+      required: [from_on, kind, percent, by_hand]
+      properties:
+        from_on: { type: string }
+        kind: { type: string, enum: [fixed, key] }
+        percent: { type: string }
+        by_hand: { type: boolean }
+    AccountRateNow:
+      type: object
+      required: [percent, from_on, kind, by_hand]
+      properties:
+        percent: { type: string, description: "The rate in force today, a year; a key-tied one with today's key rate" }
+        from_on: { type: string }
+        kind: { type: string, enum: [fixed, key] }
+        by_hand: { type: boolean }
+    AccountRates:
+      type: object
+      required: [rates, current, key_rate]
+      properties:
+        rates: { type: array, items: { $ref: "#/components/schemas/AccountRate" } }
+        current:
+          nullable: true
+          description: "The rate in force today; null without one by today, or a key-tied one without the key rate"
+          allOf:
+            - $ref: "#/components/schemas/AccountRateNow"
+        key_rate: { type: string, nullable: true, description: "The Central Bank's key rate today" }
     ExportWageEntry:
       type: object
       required: [operation_id, gross_minor, withheld_minor]
@@ -3773,7 +3853,7 @@ components:
         currency: { type: string }
     ExportAccount:
       type: object
-      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments, credit_card_bank_figures]
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, trades_abroad, kept_by_operations, foreign_broker, tax_owner_username, created_at, balances, operations, withheld_stated, loan, loan_prepayments, credit_card, credit_card_installments, credit_card_bank_figures, rates]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -3809,6 +3889,10 @@ components:
           type: array
           items: { $ref: "#/components/schemas/ExportCardInstallment" }
           description: "A credit card's purchases in installments (PUT /accounts/{accountId}/credit-card/installments/{operationId}); empty on every other account"
+        rates:
+          type: array
+          items: { $ref: "#/components/schemas/AccountRate" }
+          description: "A savings account's or a deposit's rates, oldest first (PUT /accounts/{accountId}/rates); empty on every other account"
         credit_card_bank_figures:
           nullable: true
           description: "What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated"
