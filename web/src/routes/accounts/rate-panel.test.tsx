@@ -37,15 +37,24 @@ const stated: AccountRates = {
   key_rate: "17",
 };
 
-// The catalog's ВТБ-Счёт and Газпромбанк's deposit, for the dialog.
+// The catalog's ВТБ-Счёт, Газпромбанк's deposit and one in yuan, for the
+// dialog.
 const catalog = {
   programmes: [
     {
       id: "gpb-km", bank_id: "gazprombank", bank_name: "Газпромбанк", name: "Вклад «Ключевой момент»", kind: "deposit", edition_from: "2026-10-03",
       checked_on: "2026-10-16", sources: ["https://example.ru/gpb"], notes: "",
       variants: [{
-        id: "end", name: "Проценты в конце срока", accrual: null, payouts: ["end"], ops: "none", term_unit: "days",
+        id: "end", name: "Проценты в конце срока", currency: "RUB", accrual: null, payouts: ["end"], ops: "none", term_unit: "days",
         terms: [{ from: 181, to: 181 }, { from: 367, to: 367 }], amount_from_minor: 100_000_00, conditions: [], welcome: null,
+      }],
+    },
+    {
+      id: "gpb-cny", bank_id: "gazprombank", bank_name: "Газпромбанк", name: "Вклад «Расширяй возможности»", kind: "deposit", edition_from: "2026-10-03",
+      checked_on: "2026-10-16", sources: [], notes: "",
+      variants: [{
+        id: "end", name: "В юанях", currency: "CNY", accrual: null, payouts: ["end"], ops: "none", term_unit: "days",
+        terms: [{ from: 91, to: 91 }], amount_from_minor: 5_000_00, conditions: [], welcome: null,
       }],
     },
     {
@@ -167,10 +176,11 @@ describe("RatePanel", () => {
     fireEvent.click(await within(dialog).findByRole("combobox"));
     fireEvent.click(await screen.findByRole("option", { name: "Газпромбанк · Вклад «Ключевой момент»" }));
     expect(screen.queryByRole("option", { name: /ВТБ-Счёт/ })).toBeNull(); // a savings account's programme is not offered
+    expect(screen.queryByRole("option", { name: /Расширяй возможности/ })).toBeNull(); // nor one in yuan to a rouble deposit
     fireEvent.change(within(dialog).getByLabelText("Когда открыт или продлён вклад"), { target: { value: "2026-10-05" } });
     const save = within(dialog).getByRole("button", { name: "Сохранить" });
     fireEvent.change(within(dialog).getByLabelText("Срок, дн."), { target: { value: "366" } });
-    fireEvent.change(within(dialog).getByLabelText("Сумма при открытии, ₽"), { target: { value: "500 000" } });
+    fireEvent.change(within(dialog).getByLabelText("Сумма при открытии, RUB"), { target: { value: "500 000" } });
     expect((save as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(within(dialog).getByLabelText("Срок, дн."), { target: { value: "367" } });
     fireEvent.click(save);

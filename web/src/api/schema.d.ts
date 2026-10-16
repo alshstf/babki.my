@@ -2994,6 +2994,8 @@ export interface components {
         DepositVariant: {
             id: string;
             name: string;
+            /** @description The variant's currency; only an account in it can be tied to the variant, and amount_from_minor is in its minor units */
+            currency: string;
             /** @enum {string|null} */
             accrual: "daily" | "minimum" | null;
             payouts: ("end" | "monthly" | "capitalize" | "daily" | "quarterly")[];

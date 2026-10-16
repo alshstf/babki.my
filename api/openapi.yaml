@@ -4005,10 +4005,11 @@ components:
         variants: { type: array, items: { $ref: "#/components/schemas/DepositVariant" } }
     DepositVariant:
       type: object
-      required: [id, name, accrual, payouts, ops, term_unit, terms, amount_from_minor, conditions, welcome]
+      required: [id, name, currency, accrual, payouts, ops, term_unit, terms, amount_from_minor, conditions, welcome]
       properties:
         id: { type: string }
         name: { type: string }
+        currency: { type: string, description: "The variant's currency; only an account in it can be tied to the variant, and amount_from_minor is in its minor units" }
         accrual: { type: string, nullable: true, enum: [daily, minimum] }
         payouts: { type: array, items: { type: string, enum: [end, monthly, capitalize, daily, quarterly] } }
         ops: { type: string, enum: [none, topup, topup_withdraw] }

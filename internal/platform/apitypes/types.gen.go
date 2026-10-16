@@ -4021,13 +4021,16 @@ type DepositVariant struct {
 	Accrual nullable.Nullable[DepositVariantAccrual] `json:"accrual"`
 
 	// AmountFromMinor The least sum the bank has a rate for
-	AmountFromMinor int64                                     `json:"amount_from_minor"`
-	Conditions      []ProgrammeCondition                      `json:"conditions"`
-	Id              string                                    `json:"id"`
-	Name            string                                    `json:"name"`
-	Ops             DepositVariantOps                         `json:"ops"`
-	Payouts         []DepositVariantPayouts                   `json:"payouts"`
-	TermUnit        nullable.Nullable[DepositVariantTermUnit] `json:"term_unit"`
+	AmountFromMinor int64                `json:"amount_from_minor"`
+	Conditions      []ProgrammeCondition `json:"conditions"`
+
+	// Currency The variant's currency; only an account in it can be tied to the variant, and amount_from_minor is in its minor units
+	Currency string                                    `json:"currency"`
+	Id       string                                    `json:"id"`
+	Name     string                                    `json:"name"`
+	Ops      DepositVariantOps                         `json:"ops"`
+	Payouts  []DepositVariantPayouts                   `json:"payouts"`
+	TermUnit nullable.Nullable[DepositVariantTermUnit] `json:"term_unit"`
 
 	// Terms The terms the bank has a rate for; empty for a savings account
 	Terms []TermRange `json:"terms"`

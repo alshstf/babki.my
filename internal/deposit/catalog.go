@@ -9,6 +9,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
 	"sort"
 	"sync"
@@ -128,6 +129,24 @@ type Variant struct {
 	// that day or later — banks that keep the rates of savings accounts by
 	// when they were opened (Альфа-Банк, Газпромбанк).
 	OpenedFrom string `yaml:"opened_from"`
+	// Currency of the variant's money (and of its sums in the grid and caps,
+	// in minor units); empty is roubles.
+	Currency string `yaml:"currency"`
+	// Floating: a deposit whose rate follows the bank's editions day by day
+	// instead of the one of its opening — the social deposit, whose rate is by
+	// law the bank's highest on deposits of up to a year.
+	Floating bool `yaml:"floating"`
+}
+
+// currencyCode is a currency's code as ISO 4217 writes it.
+var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
+
+// Money is the currency of the variant: its own or roubles.
+func (v Variant) Money() string {
+	if v.Currency == "" {
+		return "RUB"
+	}
+	return v.Currency
 }
 
 // Cell is a rate for a term — From to To in the variant's unit, both in —
@@ -303,6 +322,17 @@ func (p Programme) Admits(id string, opened time.Time) bool {
 		}
 	}
 	return false
+}
+
+// VariantMoney is the currency of the variant as the latest edition that has
+// it states it.
+func (p Programme) VariantMoney(id string) (string, bool) {
+	for i := len(p.Editions) - 1; i >= 0; i-- {
+		if v, ok := p.Editions[i].Variant(id); ok {
+			return v.Money(), true
+		}
+	}
+	return "", false
 }
 
 func (v Variant) admits(opened time.Time) bool {
@@ -495,6 +525,12 @@ func (v Variant) check(kind Kind) error {
 		if !slices.Contains([]Check{CheckManual, CheckCardSpend, CheckWages, CheckBankBalance}, b.Check) {
 			return fmt.Errorf("bonus %s: check %q", b.ID, b.Check)
 		}
+	}
+	if v.Currency != "" && !currencyCode.MatchString(v.Currency) {
+		return fmt.Errorf("currency %q", v.Currency)
+	}
+	if v.Floating && kind != KindDeposit {
+		return fmt.Errorf("floating is a deposit's")
 	}
 	if _, err := time.Parse(time.DateOnly, v.OpenedFrom); v.OpenedFrom != "" && err != nil {
 		return fmt.Errorf("opened_from %q", v.OpenedFrom)

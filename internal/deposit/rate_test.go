@@ -108,6 +108,7 @@ editions:
 		"unknown check": replace(good, "grid:", `bonuses: [{ id: b, plus: "1", check: guess }], grid:`),
 		"no plus":       replace(good, "grid:", `bonuses: [{ id: b, check: manual, terms: [{ from: 1, to: 30 }] }], grid:`),
 		"terms upside":  replace(good, "grid:", `bonuses: [{ id: b, plus: "1", check: manual, terms: [{ from: 30, to: 1 }] }], grid:`),
+		"currency":      replace(good, "grid:", `currency: yuan, grid:`),
 	} {
 		if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(text)}}); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -359,5 +360,23 @@ func TestTheBanksOwnFigures(t *testing.T) {
 	_, err := programme(t, "alfa-schet").Quote(Holding{Variant: "minimum", OpenedOn: day("2026-02-10")}, day("2026-10-20"), 1, key, nil)
 	if !errors.Is(err, ErrOpened) {
 		t.Errorf("an account of February: %v", err)
+	}
+}
+
+// The social deposit: by law its rate is the bank's highest on deposits of up
+// to a year and moves with it — the deposit follows the editions day by day,
+// unlike a fixed one that keeps the edition of its opening.
+func TestAFloatingDepositFollowsTheEditions(t *testing.T) {
+	cell := func(pct string) []Cell { return []Cell{{From: 365, To: 365, Rate: Rate{Percent: pct}}} }
+	p := Programme{ID: "t", Kind: KindDeposit, Editions: []Edition{
+		{From: "2026-01-01", Variants: []Variant{{ID: "social", TermUnit: TermDays, Floating: true, Grid: cell("16")}, {ID: "fixed", TermUnit: TermDays, Grid: cell("16")}}},
+		{From: "2026-06-01", Variants: []Variant{{ID: "social", TermUnit: TermDays, Floating: true, Grid: cell("13")}, {ID: "fixed", TermUnit: TermDays, Grid: cell("13")}}},
+	}}
+	for variant, want := range map[string]string{"social": "13", "fixed": "16"} {
+		q, err := p.Quote(Holding{Variant: variant, OpenedOn: day("2026-02-01"), Term: 365, Amount: 50_000_00}, day("2026-07-01"), 50_000_00, nil, nil)
+		pct(t, q, err, want)
+	}
+	if money, _ := p.VariantMoney("social"); money != "RUB" {
+		t.Errorf("a variant without a currency is in %s, want roubles", money)
 	}
 }

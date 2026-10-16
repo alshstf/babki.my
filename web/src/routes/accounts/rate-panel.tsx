@@ -65,7 +65,7 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
           <div className="text-2xl font-bold tabular-nums" data-testid="account-rate-now">
             {t("rates.now", { percent: rate(quote.percent) })}
           </div>
-          <QuoteLine data={data} />
+          <QuoteLine data={data} currency={account.currency} />
         </div>
       ) : waitsForKey ? (
         <p className="text-sm text-amber-700 dark:text-amber-400">{t("rates.noKey")}</p>

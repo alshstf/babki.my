@@ -21,6 +21,7 @@ import {
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
 
+// The program measures the conditions (purchases, wages, a balance) in roubles.
 const RUB = "RUB";
 
 // A rate as the API writes it ("15.500"), as people read it ("15,5 %").
@@ -35,8 +36,8 @@ function thisMonth(): string {
 
 // QuoteLine says where the programme's rate comes from: the bank's terms of
 // the edition, the welcome period, the bonuses that counted, the parts of a
-// balance above a cap.
-export function QuoteLine({ data }: { data: AccountRates }) {
+// balance above a cap — in the account's currency.
+export function QuoteLine({ data, currency }: { data: AccountRates; currency: string }) {
   const { t } = useTranslation();
   const q = data.quote;
   const p = data.programme;
@@ -50,7 +51,7 @@ export function QuoteLine({ data }: { data: AccountRates }) {
       {q.period && <div className="text-green-700 dark:text-green-400">{t("programme.period", { name: q.period })}</div>}
       {q.bonuses.length > 0 && <div>{t("programme.bonuses", { names: q.bonuses.map(named).join(", ") })}</div>}
       {q.parts.length > 1 && (
-        <div>{q.parts.map((part) => t("programme.part", { from: formatMinor(part.from_minor, RUB), to: formatMinor(part.to_minor, RUB), percent: rate(part.percent) })).join(" · ")}</div>
+        <div>{q.parts.map((part) => t("programme.part", { from: formatMinor(part.from_minor, currency), to: formatMinor(part.to_minor, currency), percent: rate(part.percent) })).join(" · ")}</div>
       )}
     </div>
   );
@@ -89,7 +90,7 @@ export function ProgrammeBlock({ account, data, canEdit }: { account: AccountWit
         <div className="text-muted-foreground">
           {p.variant_name} · {t("programme.openedOn", { date: formatDate(p.opened_on) })}
           {p.term !== null && ` · ${t("programme.term", { term: p.term, unit })}`}
-          {p.amount_minor !== null && ` · ${formatMinor(p.amount_minor, RUB)}`}
+          {p.amount_minor !== null && ` · ${formatMinor(p.amount_minor, account.currency)}`}
         </div>
         <div className="text-muted-foreground">{p.conditions === "auto" ? t("programme.modeAuto") : t("programme.modeManual")}</div>
         {data.quote === null && <div className="text-amber-700 dark:text-amber-400">{t("programme.noQuote")}</div>}
@@ -215,17 +216,20 @@ function monthName(m: string): string {
 
 // ProgrammeDialog ties the account to a programme of the catalog: its bank's
 // first, the variant, the day of opening and, for a deposit, the term and
-// sum the bank has a rate for.
+// sum the bank has a rate for. Only the variants in the account's currency.
 function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalance; data: AccountRates; onClose: () => void }) {
   const { t } = useTranslation();
   const catalog = useDepositProgrammes();
   const save = useSetProgramme(account.id);
   const kind = account.type === "deposit" ? "deposit" : "savings";
   const programmes = useMemo(() => {
-    const own = (catalog.data ?? []).filter((p) => p.kind === kind);
+    const own = (catalog.data ?? [])
+      .filter((p) => p.kind === kind)
+      .map((p) => ({ ...p, variants: p.variants.filter((v) => v.currency === account.currency) }))
+      .filter((p) => p.variants.length > 0);
     const bank = account.intermediary_id ?? null;
-    return [...own].sort((a, b) => Number(b.bank_id === bank) - Number(a.bank_id === bank) || a.bank_name.localeCompare(b.bank_name, "ru"));
-  }, [catalog.data, kind, account.intermediary_id]);
+    return own.sort((a, b) => Number(b.bank_id === bank) - Number(a.bank_id === bank) || a.bank_name.localeCompare(b.bank_name, "ru"));
+  }, [catalog.data, kind, account.intermediary_id, account.currency]);
   const was = data.programme;
   const [programmeId, setProgrammeId] = useState(was?.programme_id ?? "");
   const programme: DepositProgramme | undefined = programmes.find((p) => p.id === programmeId);
@@ -320,9 +324,9 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
                     </span>
                   </div>
                   <div className="grid gap-1">
-                    <Label htmlFor="programme-amount">{t("programme.amount")}</Label>
+                    <Label htmlFor="programme-amount">{t("programme.amount", { currency: account.currency })}</Label>
                     <Input id="programme-amount" inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value)} />
-                    <span className="text-xs text-muted-foreground">{t("programme.amountFrom", { amount: formatMinor(variant.amount_from_minor, RUB) })}</span>
+                    <span className="text-xs text-muted-foreground">{t("programme.amountFrom", { amount: formatMinor(variant.amount_from_minor, account.currency) })}</span>
                   </div>
                 </div>
               )}
