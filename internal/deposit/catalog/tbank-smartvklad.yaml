@@ -1,0 +1,43 @@
+id: tbank-smartvklad
+bank: tbank
+name: СмартВклад
+kind: deposit
+watch:
+  - https://www.tbank.ru/savings/deposit/tariffs/
+editions:
+  - from: 2026-09-17
+    checked_on: 2026-10-16
+    sources:
+      - https://cdn.tbank.ru/static/documents/deposit-smartdeposit-multi_3_0.pdf
+    notes: >-
+      Тарифный план ТПД 3.0, рубли. «Непополняемый» пополняется только первые 30 дней (на 1 месяц — только в день
+      открытия), «пополняемый» — до 30 дней до конца срока, его сумма у вкладов от 6 месяцев — не больше остатка на
+      30-й день × 5. Частичное снятие — не раньше 60 дней, от 15 000 ₽. Минимальная сумма — 50 000 ₽.
+    variants:
+      - id: fixed
+        name: Непополняемый
+        payouts: [capitalize, monthly]
+        ops: topup
+        term_unit: months
+        mgs: "7.25"
+        grid:
+          - { from: 1, to: 1, amount_from: 5000000, percent: "12" }
+          - { from: 2, to: 3, amount_from: 5000000, percent: "12.3" }
+          - { from: 4, to: 6, amount_from: 5000000, percent: "11.5" }
+          - { from: 7, to: 9, amount_from: 5000000, percent: "11.2" }
+          - { from: 10, to: 12, amount_from: 5000000, percent: "11" }
+          - { from: 13, to: 18, amount_from: 5000000, percent: "10.8" }
+          - { from: 19, to: 24, amount_from: 5000000, percent: "10.5" }
+      - id: topup
+        name: Пополняемый
+        payouts: [capitalize, monthly]
+        ops: topup_withdraw
+        term_unit: months
+        mgs: "7.25"
+        grid:
+          - { from: 2, to: 3, amount_from: 5000000, percent: "9" }
+          - { from: 4, to: 6, amount_from: 5000000, percent: "9" }
+          - { from: 7, to: 9, amount_from: 5000000, percent: "8" }
+          - { from: 10, to: 12, amount_from: 5000000, percent: "8" }
+          - { from: 13, to: 18, amount_from: 5000000, percent: "7" }
+          - { from: 19, to: 24, amount_from: 5000000, percent: "7" }
