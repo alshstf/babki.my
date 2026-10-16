@@ -1,0 +1,24 @@
+id: gazprombank-socialny
+bank: gazprombank
+name: Социальный вклад
+kind: deposit
+watch:
+  - https://www.gazprombank.ru/personal/increase/deposits/detail/7889383/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/personal/increase/deposits/detail/7889383/
+    notes: >-
+      Для получателей мер социальной поддержки, через Госуслуги. Ставка — наибольшая среди вкладов банка сроком от
+      месяца до года (18,9 % в день сверки) и меняется вместе с ней — программа берёт ставку из редакции каждого дня.
+      1 год, от 0,01 до 50 000 ₽.
+    variants:
+      - id: main
+        name: Социальный вклад
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        floating: true
+        grid:
+          - { from: 365, to: 366, amount_from: 1, percent: "18.9" }

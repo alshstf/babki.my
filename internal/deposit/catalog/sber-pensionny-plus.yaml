@@ -1,0 +1,22 @@
+id: sber-pensionny-plus
+bank: sber
+name: Вклад «Пенсионный плюс»
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/pension_plus
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/pension_plus
+    notes: >-
+      Для пенсионеров и получателей социальных выплат, открывается в офисе. Дата редакции у банка не указана —
+      действует не позже дня сверки. 3,5 % годовых, от 1 ₽, срок 3 года; можно пополнять и снимать проценты.
+    variants:
+      - id: main
+        name: «Пенсионный плюс»
+        payouts: [capitalize, monthly]
+        ops: topup
+        term_unit: months
+        grid:
+          - { from: 36, to: 36, amount_from: 1, percent: "3.5" }

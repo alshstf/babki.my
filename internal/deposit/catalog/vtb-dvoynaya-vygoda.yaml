@@ -1,0 +1,26 @@
+id: vtb-dvoynaya-vygoda
+bank: vtb
+name: Вклад «Двойная выгода»
+kind: deposit
+watch:
+  - https://www.vtb.ru/personal/vklady-i-scheta/dvojnaya-vygoda/
+editions:
+  - from: 2026-04-20
+    checked_on: 2026-10-16
+    sources:
+      - https://www.vtb.ru/media-files/vtb.ru/sitepages/personal/vklady-i-scheta/dvojnaya-vygoda/dvoinaya_vigoda.pdf
+    notes: >-
+      Для участников программы долгосрочных сбережений НПФ ВТБ: открыть в 14 дней после договора (от 30 000 ₽), сумма
+      вклада — не больше первого взноса по нему, один вклад на договор. Без пополнения и снятия, проценты в конце
+      срока, без продления. Расторгли договор в «период охлаждения» — ставка вклада снижается до 0,01 %: тогда
+      впишите ставку вручную.
+    variants:
+      - id: main
+        name: Проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 3000000, percent: "18" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "15" }
+          - { from: 370, to: 370, amount_from: 3000000, percent: "13.5" }

@@ -1,0 +1,33 @@
+id: sber-nakopilka
+bank: sber
+name: «Накопилка» для молодёжи
+kind: savings
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/nakopilka
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/nakopilka
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1311?terrBankCode=038&timeZone=0
+    notes: >-
+      Бессрочный вклад с пополнением и снятием для молодёжи, проценты на ежедневный остаток, выплата ежемесячно;
+      ставки калькулятора страницы в день сверки. Базовая 6,5 %; надбавки за прошлый месяц (до 5-го числа): покупки
+      по картам Сбера от 5 000 ₽ +3,5, покупки у партнёров Сбера +1,5, СберПрайм +1. Сверх максимальной суммы —
+      0,01 %.
+    variants:
+      - id: daily
+        name: «Накопилка»
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "6.5" }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Сбера за прошлый месяц от 5 000 ₽
+            check: card_spend
+            next_month: true
+            levels: [{ from: 500000, plus: "3.5" }]
+          - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц, plus: "1.5", check: manual, next_month: true }
+          - { id: prime, name: Подписка СберПрайм, plus: "1", check: manual }

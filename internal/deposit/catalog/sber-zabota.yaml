@@ -1,0 +1,28 @@
+id: sber-zabota
+bank: sber
+name: Вклад «Забота о будущем»
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/zabota_o_budushchem
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/zabota_o_budushchem
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1312?terrBankCode=038&timeZone=0
+    notes: >-
+      Вклад в связке с программой долгосрочных сбережений НПФ Сбербанка: +10 п. п., если в день открытия внести
+      взнос по договору на ту же сумму; расторг договор — ставка падает до базовой (отметьте это). Открывается в
+      офисе, от 50 000 ₽, без пополнения и снятия, проценты в конце срока; ставки калькулятора в день сверки.
+    variants:
+      - id: main
+        name: В офисе, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 5000000, percent: "12" }
+          - { from: 6, to: 6, amount_from: 5000000, percent: "6" }
+          - { from: 12, to: 12, amount_from: 5000000, percent: "4.5" }
+        bonuses:
+          - { id: pds, name: Договор долгосрочных сбережений с НПФ Сбербанка действует, plus: "10", check: manual }

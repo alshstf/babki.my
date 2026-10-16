@@ -1,0 +1,25 @@
+id: sber-socialny
+bank: sber
+name: Социальный вклад
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/social
+editions:
+  - from: 2025-07-01
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/social
+    notes: >-
+      Для получателей мер социальной поддержки от 18 лет, открывается через Госуслуги, один такой вклад во всех
+      банках. Ставка 22 % — с 01.07.2025; по закону ставка социального вклада меняется вместе с наибольшей ставкой
+      банка, в том числе у открытых вкладов, — программа берёт ставку из редакции каждого дня. Срок 1 год, до 50 000
+      ₽, проценты каждый месяц.
+    variants:
+      - id: main
+        name: Социальный вклад
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: months
+        floating: true
+        grid:
+          - { from: 12, to: 12, amount_from: 1, percent: "22" }

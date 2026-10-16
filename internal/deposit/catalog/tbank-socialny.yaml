@@ -1,0 +1,25 @@
+id: tbank-socialny
+bank: tbank
+name: Социальный вклад
+kind: deposit
+watch:
+  - https://www.tbank.ru/savings/deposit/tariffs/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://cdn.tbank.ru/static/documents/tariff-product-social-contribution-tariff-plan-tpd-6-0-social.pdf
+      - https://cdn.tbank.ru/static/documents/passport-product-social-contribution.pdf
+    notes: >-
+      Тарифный план ТПД 6.0 (социальный); дата редакции в тарифе не указана — действует не позже дня сверки. Для
+      получателей мер социальной поддержки, через Госуслуги. 15 % на 12 месяцев, пополняемый, проценты ежемесячно.
+      По закону ставка следует за наибольшей ставкой банка — программа берёт ставку из редакции каждого дня.
+    variants:
+      - id: main
+        name: Социальный вклад
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: months
+        floating: true
+        grid:
+          - { from: 12, to: 12, amount_from: 1, percent: "15" }

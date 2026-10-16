@@ -1,0 +1,24 @@
+id: alfa-socialny
+bank: alfa
+name: Социальный вклад
+kind: deposit
+watch:
+  - https://alfabank.ru/make-money/deposits/vklad-socialnyi/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://alfabank.ru/make-money/deposits/vklad-socialnyi/
+    notes: >-
+      Для получателей социальной помощи, через Госуслуги. 23,76 % на 12 месяцев (в день сверки), до 50 000 ₽,
+      пополнение и снятие без ограничений, проценты ежемесячно. Ставка социального вклада следует за наибольшей
+      ставкой банка — программа берёт ставку из редакции каждого дня.
+    variants:
+      - id: main
+        name: Социальный вклад
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: months
+        floating: true
+        grid:
+          - { from: 12, to: 12, amount_from: 1, percent: "23.76" }

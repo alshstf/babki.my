@@ -1,0 +1,98 @@
+id: sber-molodezhny
+bank: sber
+name: «СберВклад молодёжный»
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/molodezh
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/molodezh
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1328?terrBankCode=038&timeZone=0
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1327?terrBankCode=038&timeZone=0
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1331?terrBankCode=038&timeZone=0
+    notes: >-
+      Для 14–24 лет; ставки калькулятора страницы в день сверки, без пополнения. Надбавки по 0,5 п. п. у вкладов до
+      года: СберПрайм; стипендия или зарплата на карту Сбера (14–17 лет — или покупки от 5 000 ₽ в месяц); покупки
+      от 2 000 ₽ у партнёров Сбера. Сумма для ставки — до 200 000 ₽ (14–17 лет) или до 1 млн ₽ (18–24), сверх —
+      0,01 %. Максимум — 13,3 % (14–17) и 13,5 % (18–24) на 3–7 месяцев с процентами в конце срока.
+    variants:
+      - id: y14-end
+        name: 14–17 лет, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 2, amount_from: 1000000, percent: "10.8" }
+          - { from: 3, to: 7, amount_from: 1000000, percent: "11.8" }
+          - { from: 8, to: 9, amount_from: 1000000, percent: "10.3" }
+          - { from: 10, to: 11, amount_from: 1000000, percent: "9.3" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "8.3" }
+          - { from: 18, to: 18, amount_from: 1000000, percent: "8.3" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "8.3" }
+          - { from: 36, to: 36, amount_from: 1000000, percent: "6.3" }
+        cap: { amount: 20000000, percent: "0.01" }
+        bonuses:
+          - { id: prime, name: Подписка СберПрайм, plus: "0.5", check: manual, terms: [{ from: 1, to: 12 }] }
+          - { id: salary, name: Стипендия или зарплата на карту Сбера, plus: "0.5", check: wages, group: income, terms: [{ from: 1, to: 12 }] }
+          - id: spend
+            name: Покупки по картам Сбера за прошлый месяц от 5 000 ₽
+            check: card_spend
+            group: income
+            next_month: true
+            levels: [{ from: 500000, plus: "0.5" }]
+            terms: [{ from: 1, to: 12 }]
+          - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц от 2 000 ₽, plus: "0.5", check: manual, next_month: true, terms: [{ from: 1, to: 12 }] }
+      - id: y14-monthly
+        name: 14–17 лет, проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 2, amount_from: 1000000, percent: "10.7" }
+          - { from: 3, to: 7, amount_from: 1000000, percent: "11.55" }
+          - { from: 8, to: 9, amount_from: 1000000, percent: "9.85" }
+          - { from: 10, to: 11, amount_from: 1000000, percent: "8.8" }
+          - { from: 12, to: 12, amount_from: 1000000, percent: "7.8" }
+          - { from: 18, to: 18, amount_from: 1000000, percent: "7.65" }
+          - { from: 24, to: 24, amount_from: 1000000, percent: "7.65" }
+          - { from: 36, to: 36, amount_from: 1000000, percent: "5.75" }
+        cap: { amount: 20000000, percent: "0.01" }
+        bonuses:
+          - { id: prime, name: Подписка СберПрайм, plus: "0.5", check: manual, terms: [{ from: 1, to: 12 }] }
+          - { id: salary, name: Стипендия или зарплата на карту Сбера, plus: "0.5", check: wages, group: income, terms: [{ from: 1, to: 12 }] }
+          - id: spend
+            name: Покупки по картам Сбера за прошлый месяц от 5 000 ₽
+            check: card_spend
+            group: income
+            next_month: true
+            levels: [{ from: 500000, plus: "0.5" }]
+            terms: [{ from: 1, to: 12 }]
+          - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц от 2 000 ₽, plus: "0.5", check: manual, next_month: true, terms: [{ from: 1, to: 12 }] }
+      - id: y18-end
+        name: 18–24 лет, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 1, to: 2, amount_from: 3000000, percent: "11" }
+          - { from: 3, to: 7, amount_from: 3000000, percent: "12" }
+          - { from: 8, to: 9, amount_from: 3000000, percent: "10.5" }
+          - { from: 10, to: 11, amount_from: 3000000, percent: "9.5" }
+          - { from: 12, to: 12, amount_from: 3000000, percent: "8.5" }
+          - { from: 18, to: 18, amount_from: 3000000, percent: "8.5" }
+          - { from: 24, to: 24, amount_from: 3000000, percent: "8.5" }
+          - { from: 36, to: 36, amount_from: 3000000, percent: "6.5" }
+        cap: { amount: 100000000, percent: "0.01" }
+        bonuses:
+          - { id: prime, name: Подписка СберПрайм, plus: "0.5", check: manual, terms: [{ from: 1, to: 12 }] }
+          - { id: salary, name: Стипендия или зарплата на карту Сбера, plus: "0.5", check: wages, group: income, terms: [{ from: 1, to: 12 }] }
+          - id: spend
+            name: Покупки по картам Сбера за прошлый месяц от 5 000 ₽
+            check: card_spend
+            group: income
+            next_month: true
+            levels: [{ from: 500000, plus: "0.5" }]
+            terms: [{ from: 1, to: 12 }]
+          - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц от 2 000 ₽, plus: "0.5", check: manual, next_month: true, terms: [{ from: 1, to: 12 }] }

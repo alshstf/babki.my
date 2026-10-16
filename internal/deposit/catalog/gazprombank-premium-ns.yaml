@@ -1,0 +1,44 @@
+id: gazprombank-premium-ns
+bank: gazprombank
+name: Накопительный счёт «Премиум»
+kind: savings
+watch:
+  - https://www.gazprombank.ru/premium/ns/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/premium/ns/
+    notes: >-
+      С 23.07.2026 новые счета не открываются — для открытых раньше. Дата редакции на странице не указана —
+      действует не позже дня сверки. Базовая 4 % на минимальный остаток месяца; надбавки — на сумму до 10 млн ₽ и
+      только при активном сервисе Газпром Бонус «Премиум» (+4,8). Одна из двух: за долю «новых денег» при открытии
+      (от 30 % — +3,7, от 50 % — +4,7; фиксируется на 3 календарных месяца) или за наименьший остаток на карте
+      Газпромбанка в прошлом месяце (от 50 000 ₽ — +2,7, от 100 000 ₽ — +3,2).
+    variants:
+      - id: minimum
+        name: «Премиум»
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        bonuses:
+          - { id: premium, name: Газпром Бонус «Премиум», plus: "4.8", check: manual, cap: 1000000000 }
+          - id: new_money
+            name: Новые деньги при открытии (от 30 %; от 50 %) — первые 3 месяца
+            check: manual
+            group: extra
+            cap: 1000000000
+            levels:
+              - { from: 1, plus: "3.7" }
+              - { from: 2, plus: "4.7" }
+          - id: card_balance
+            name: Наименьший остаток на карте Газпромбанка в прошлом месяце (от 50 000; от 100 000 ₽)
+            check: manual
+            group: extra
+            next_month: true
+            cap: 1000000000
+            levels:
+              - { from: 1, plus: "2.7" }
+              - { from: 2, plus: "3.2" }
