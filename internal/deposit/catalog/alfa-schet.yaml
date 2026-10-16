@@ -1,0 +1,63 @@
+id: alfa-schet
+bank: alfa
+name: Накопительный Альфа-Счёт
+kind: savings
+watch:
+  - https://alfabank.ru/make-money/savings-account/alfa/
+editions:
+  - from: 2026-10-01
+    checked_on: 2026-10-16
+    sources:
+      - https://alfabank.servicecdn.ru/site-upload/15/2e/2363/alfa_1102026_all.pdf
+    notes: >-
+      Ставки «всем клиентам»; у Alfa Only и А-Клуба — свои, у них ручная ставка. У банка ставки зависят от даты
+      открытия счёта: здесь — для счетов, открытых с 01.03.2026 (у них с 01.10.2026 одинаковые базовая ставка и
+      надбавки), у открытых раньше база ниже — ручная ставка. Способ начисления выбирается при открытии; проценты — в
+      последний день месяца. Приветственная ставка — с 1-го по 2-й календарный месяц, если 90 дней (с 01.11.2026 —
+      180) не было Альфа-Счетов с положительным остатком; у счетов на минимальный остаток, открытых и пополненных с
+      01.10 по 30.10.2026, — 3 месяца (акция). Повышенная ставка и надбавки — на сумму до 1 млн ₽. Надбавка за
+      покупки — по покупкам месяца; «Накопительный спринт» (пополнения от 500 ₽ в разные дни месяца) — только на
+      ежедневный остаток и не вместе с приветственной.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-03-01
+        grid:
+          - { percent: "7" }
+        schedule:
+          - { name: Приветственная, months: 3, grid: [{ percent: "14" }], cap: 100000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Альфа-Банка за месяц
+            check: card_spend
+            cap: 100000000
+            levels:
+              - { from: 2000000, plus: "4.5" }
+              - { from: 10000000, plus: "5" }
+      - id: daily
+        name: На ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-03-01
+        grid:
+          - { percent: "7" }
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "13" }], cap: 100000000, requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Альфа-Банка за месяц от 20 000 ₽
+            check: card_spend
+            levels: [{ from: 2000000, plus: "3.5" }]
+          - { id: smart, name: Подписка Альфа-Смарт, plus: "1", check: manual }
+          - id: sprint
+            name: Накопительный спринт — дней с пополнением от 500 ₽ за месяц
+            check: manual
+            levels:
+              - { from: 3, plus: "0.25" }
+              - { from: 6, plus: "0.5" }
+              - { from: 9, plus: "0.75" }
+              - { from: 12, plus: "1" }

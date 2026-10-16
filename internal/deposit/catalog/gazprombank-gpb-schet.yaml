@@ -1,0 +1,44 @@
+id: gazprombank-gpb-schet
+bank: gazprombank
+name: Накопительный ГПБ-счёт
+kind: savings
+watch:
+  - https://www.gazprombank.ru/accounts/nakopitelnyj-schet/
+editions:
+  - from: 2026-09-30
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/655/vg27r32nybu30irtxptsi5xv260lv13a/Pasport-GPB_schet-s-30.09.2026.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/24a/kqf3m10xx02j7wa7jvaioo6h24b1cgba/Usloviya-privlecheniya-scheta_GPB-schet-s-30.09.2026.pdf
+      - https://www.gazprombank.ru/download/8149685/
+      - https://www.gazprombank.ru/download/8149689/
+    notes: >-
+      Способ начисления выбирается при открытии и потом не меняется. Приветственная ставка — первые два расчётных
+      периода (месяц открытия со дня после открытия и следующий месяц), если 90 дней не было вкладов и накопительных
+      счетов в Газпромбанке с остатком от 100 ₽. Нулевой остаток в какой-то день: на минимальный — за месяц процентов
+      нет, на ежедневный — за этот день. Выплата — в первый рабочий день следующего месяца. Закрыл счёт до конца
+      месяца — за этот месяц процентов нет. Базовая ставка у банка зависит от даты открытия счёта: здесь — ставки
+      счетов, открытых с 30.09.2026; у открытых раньше она может отличаться — у них ручная ставка.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-09-30
+        grid:
+          - { percent: "12.75" }
+        mgs: "12.75"
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "14" }], requires: new_client }
+      - id: daily
+        name: На ежедневный остаток
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        opened_from: 2026-09-30
+        grid:
+          - { percent: "11.75" }
+        mgs: "11.75"
+        schedule:
+          - { name: Приветственная, months: 2, grid: [{ percent: "13" }], requires: new_client }

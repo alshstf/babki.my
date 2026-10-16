@@ -195,7 +195,7 @@ func (h *Handler) writeProgramme(ctx context.Context, out *apitypes.AccountRates
 		}
 		measure = m
 	}
-	out.Conditions = conditionsAPI(v, Tell(b, p, marks, measure, today), time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
+	out.Conditions = conditionsAPI(v, b.Term, Tell(b, p, marks, measure, today), time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
 	balance := int64(0)
 	if a.Balance != nil {
 		balance = a.Balance.AmountMinor

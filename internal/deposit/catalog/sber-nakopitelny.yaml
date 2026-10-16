@@ -1,0 +1,41 @@
+id: sber-nakopitelny
+bank: sber
+name: Накопительный счёт Сбера
+kind: savings
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/nakopi
+editions:
+  - from: 2026-04-30
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/nakopi
+      - https://www.sberbank.ru/proxy/services/deposit/dict/depositCalc/valQvbGroup/1333?terrBankCode=038&timeZone=0
+      - https://www.sberbank.ru/common/img/uploaded/pdf/usl_chet.pdf
+    notes: >-
+      Базовая 6,5 % — с 30.04.2026 (до 29.04.2026 было 7 %); размеры надбавок сверены в день сверки. Проценты — на
+      ежедневный минимальный остаток, выплата ежемесячно. Приветственная надбавка +6 п. п. — первые два месячных
+      периода от открытия, если раньше не было накопительного счёта Сбера; другие надбавки в это время не добавляются
+      (их сумма не больше приветственной). Потом надбавки: за покупки по картам Сбера в прошлом месяце (от 30 000 ₽
+      +1, от 50 000 ₽ +3,5; действует с 5-го числа по 4-е следующего), за покупки от 5 000 ₽ у партнёров Сбера в
+      прошлом месяце +1,5, за СберПрайм +1. Сверх 15 млн ₽ — 0,01 % (до 13.10.2026 у части счетов потолок был 1 млн ₽).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "6.5" }
+        cap: { amount: 1500000000, percent: "0.01" }
+        schedule:
+          - { name: Приветственная, days: 61, plus: "6", requires: new_client }
+        bonuses:
+          - id: spend
+            name: Покупки по картам Сбера за прошлый месяц
+            check: card_spend
+            next_month: true
+            levels:
+              - { from: 3000000, plus: "1" }
+              - { from: 5000000, plus: "3.5" }
+          - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц от 5 000 ₽, plus: "1.5", check: manual, next_month: true }
+          - { id: prime, name: Подписка СберПрайм, plus: "1", check: manual }

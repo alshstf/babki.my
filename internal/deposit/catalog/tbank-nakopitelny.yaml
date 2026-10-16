@@ -1,0 +1,33 @@
+id: tbank-nakopitelny
+bank: tbank
+name: Накопительный счёт Т-Банка
+kind: savings
+watch:
+  - https://www.tbank.ru/savings/saving-account/
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://cdn.tbank.ru/static/documents/debit-tariffs-savings-account.pdf
+    notes: >-
+      Тарифный план ТПН 8.0 (рубли). Дата редакции в тарифе не указана — действует не позже дня сверки. Ставка — по
+      подписке: без неё 6 %, Pro 8 %, Premium 9 %, Private 10 %. Проценты считаются каждый день на остаток и
+      капитализируются ежемесячно в дату выписки по карте. Акции банка могут поднимать ставку — тогда ручная ставка.
+      Открытие в офисе — 1 000 ₽ за счёт.
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "6" }
+        mgs: "6.168"
+        bonuses:
+          - id: subscription
+            name: Подписка Pro, Premium или Private
+            check: manual
+            levels:
+              - { from: 1, plus: "2" }
+              - { from: 2, plus: "3" }
+              - { from: 3, plus: "4" }

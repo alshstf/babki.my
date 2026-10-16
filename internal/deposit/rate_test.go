@@ -106,6 +106,8 @@ editions:
 		"no term":       replace(good, "from: 1, to: 30, ", ""),
 		"order":         order,
 		"unknown check": replace(good, "grid:", `bonuses: [{ id: b, plus: "1", check: guess }], grid:`),
+		"no plus":       replace(good, "grid:", `bonuses: [{ id: b, check: manual, terms: [{ from: 1, to: 30 }] }], grid:`),
+		"terms upside":  replace(good, "grid:", `bonuses: [{ id: b, plus: "1", check: manual, terms: [{ from: 30, to: 1 }] }], grid:`),
 	} {
 		if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(text)}}); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -244,4 +246,81 @@ func TestCapsAndGroups(t *testing.T) {
 	pct(t, q, err, "10.6") // (12 × 20 млн + 12 × 0,65 × 10 млн) / 30 млн: the group's greater bonus
 	q, err = p.Quote(h, day("2026-04-30"), 10_000_000_00, nil, nil)
 	pct(t, q, err, "11.5") // day 61 of the 62
+}
+
+// ВТБ's way: the wages' bonus is +1 for 61 days and +0,4 for three years;
+// the level's is one for every term; a bonus for terms up to a year only
+// gives a deposit of three years nothing.
+func TestABonusByTheTerm(t *testing.T) {
+	p := Programme{ID: "t", Kind: KindDeposit, Editions: []Edition{{From: "2026-01-01", Variants: []Variant{{
+		ID: "a", TermUnit: TermDays, Grid: []Cell{{From: 61, To: 61, Rate: Rate{Percent: "11"}}, {From: 1095, To: 1095, Rate: Rate{Percent: "9.8"}}},
+		Bonuses: []Bonus{
+			{ID: "wages", Terms: []TermPlus{{From: 61, To: 61, Plus: "1"}, {From: 1095, To: 1095, Plus: "0.4"}}},
+			{ID: "level", Levels: []Level{{From: 1, Plus: "0.25"}, {From: 2, Plus: "0.5"}}},
+			{ID: "short", Plus: "0.5", Terms: []TermPlus{{From: 1, To: 370}}},
+		},
+	}}}}}
+	met := marks(map[string]int{"wages": 0, "level": 0, "short": 0})
+	q, err := p.Quote(Holding{Variant: "a", OpenedOn: day("2026-03-01"), Term: 61, Amount: 1_000_000_00}, day("2026-03-10"), 1_000_000_00, nil, met)
+	pct(t, q, err, "12.75")
+	q, err = p.Quote(Holding{Variant: "a", OpenedOn: day("2026-03-01"), Term: 1095, Amount: 1_000_000_00}, day("2026-03-10"), 1_000_000_00, nil, met)
+	pct(t, q, err, "10.45")
+	if len(q.Bonuses) != 2 {
+		t.Errorf("bonuses of three years = %v", q.Bonuses)
+	}
+}
+
+// The catalog against the banks' own figures, 16.10.2026, key rate 14 %.
+func TestTheBanksOwnFigures(t *testing.T) {
+	key := keys("2026-07-24", "14")
+	cases := []struct {
+		name, programme string
+		h               Holding
+		day             string
+		balance         int64
+		met             map[string]int
+		want            string
+	}{
+		// ВТБ: «Уже получаете зарплату», ВТБ Онлайн, в конце срока, 370 дней, от 500 000 ₽ — 12,60 %.
+		{"ВТБ, зарплата", "vtb-vklad", Holding{Variant: "online-end", OpenedOn: day("2026-10-16"), Term: 370, Amount: 600_000_00}, "2026-10-20", 600_000_00, map[string]int{"salary": 0}, "12.6"},
+		// ВТБ: Серебряный уровень и подписка, 1095 дней, от 1,5 млн — 9,80 + 0,25 + 0,2.
+		{"ВТБ, уровень и подписка", "vtb-vklad", Holding{Variant: "online-end", OpenedOn: day("2026-10-16"), Term: 1095, Amount: 2_000_000_00}, "2026-11-20", 2_000_000_00, map[string]int{"subscription": 0, "level": 0}, "10.25"},
+		// ВТБ «Ключевой»: в конце срока, 1095 дней, от 500 000 ₽ — КС + 0,30 = 14,30 %.
+		{"ВТБ Ключевой", "vtb-klyuchevoy", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 1095, Amount: 600_000_00}, "2026-10-20", 600_000_00, nil, "14.3"},
+		// Сбер: «максимальные 13,5 %» — 3–7 месяцев, в конце срока, от 1 млн, все надбавки.
+		{"СберВклад, все надбавки", "sber-sbervklad", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 6, Amount: 1_200_000_00}, "2026-10-20", 1_200_000_00, map[string]int{"prime": 0, "salary": 0, "savings": 0}, "13.5"},
+		// Сбер: у вкладов от 1,5 лет надбавок нет.
+		{"СберВклад, 1,5 года", "sber-sbervklad", Holding{Variant: "end", OpenedOn: day("2026-10-16"), Term: 18, Amount: 1_200_000_00}, "2026-10-20", 1_200_000_00, map[string]int{"prime": 0, "salary": 0, "savings": 0}, "8.5"},
+		// Сбер «Ключевой»: ключевая − 2.
+		{"Сбер Ключевой", "sber-klyuchevoy", Holding{Variant: "monthly", OpenedOn: day("2026-10-16"), Term: 12, Amount: 500_000_00}, "2026-10-20", 500_000_00, nil, "12"},
+		// Сбер, накопительный: первые два месяца 6,5 + 6 = 12,5 %.
+		{"Сбер, приветственная", "sber-nakopitelny", Holding{Variant: "daily", OpenedOn: day("2026-10-01")}, "2026-10-20", 300_000_00, map[string]int{"new_client": 0}, "12.5"},
+		// Потом «до 12,5 % с надбавками»: покупки от 50 000 ₽ +3,5, партнёры +1,5, СберПрайм +1.
+		{"Сбер, надбавки", "sber-nakopitelny", Holding{Variant: "daily", OpenedOn: day("2026-01-10")}, "2026-10-20", 300_000_00, map[string]int{"spend": 1, "partners": 0, "prime": 0}, "12.5"},
+		// Т-Банк: с Premium — 9 %.
+		{"Т-Банк, Premium", "tbank-nakopitelny", Holding{Variant: "daily", OpenedOn: day("2026-01-10")}, "2026-10-20", 300_000_00, map[string]int{"subscription": 1}, "9"},
+		// Газпромбанк: на минимальный остаток, приветственная 14 %, потом 12,75 %.
+		{"ГПБ, приветственная", "gazprombank-gpb-schet", Holding{Variant: "minimum", OpenedOn: day("2026-10-02")}, "2026-11-20", 300_000_00, map[string]int{"new_client": 0}, "14"},
+		{"ГПБ, база", "gazprombank-gpb-schet", Holding{Variant: "minimum", OpenedOn: day("2026-10-02")}, "2026-12-01", 300_000_00, map[string]int{"new_client": 0}, "12.75"},
+		// «Копить», онлайн, 181 день, с надбавкой за зарплату — максимальные 12,8 %.
+		{"ГПБ Копить", "gazprombank-kopit", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 181, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"salary": 0, "pension": 0}, "12.8"},
+		// Альфа: покупки от 100 000 ₽ — 12 % на сумму до 1 млн, сверх — базовые 7 %.
+		{"Альфа, покупки", "alfa-schet", Holding{Variant: "minimum", OpenedOn: day("2026-07-10")}, "2026-10-20", 2_000_000_00, map[string]int{"spend": 1}, "9.5"},
+	}
+	for _, c := range cases {
+		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if !q.Percent.Equal(decimal.RequireFromString(c.want)) {
+			t.Errorf("%s: %s, want %s (parts %+v)", c.name, q.Percent, c.want, q.Parts)
+		}
+	}
+	// Альфа-Банк keeps its rates by the day of opening: an account of
+	// February 2026 is of another table.
+	_, err := programme(t, "alfa-schet").Quote(Holding{Variant: "minimum", OpenedOn: day("2026-02-10")}, day("2026-10-20"), 1, key, nil)
+	if !errors.Is(err, ErrOpened) {
+		t.Errorf("an account of February: %v", err)
+	}
 }

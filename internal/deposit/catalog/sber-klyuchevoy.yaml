@@ -1,0 +1,24 @@
+id: sber-klyuchevoy
+bank: sber
+name: Вклад «Ключевой» Сбера
+kind: deposit
+watch:
+  - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_kluchevoy
+editions:
+  - from: 2026-10-16
+    checked_on: 2026-10-16
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/deposits/vklad_kluchevoy
+    notes: >-
+      Дата редакции у банка не указана — действует не позже дня сверки. Ставка равна ключевой ставке Банка России
+      минус 2 п. п. и меняется вслед за ней; с какого дня банк применяет новую ключевую, на странице не сказано —
+      здесь с дня её начала. Срок — от 6 месяцев до 3 лет, сумма — от 100 000 ₽, проценты каждый месяц на карту или
+      на вклад.
+    variants:
+      - id: monthly
+        name: Проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 6, to: 36, amount_from: 10000000, key_plus: "-2" }

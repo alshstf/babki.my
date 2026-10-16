@@ -42,7 +42,7 @@ func variantAPI(v deposit.Variant) apitypes.DepositVariant {
 	out := apitypes.DepositVariant{
 		Id: v.ID, Name: v.Name, Ops: apitypes.DepositVariantOps(v.Ops), Terms: []apitypes.TermRange{},
 		Accrual: nullable.NewNullNullable[apitypes.DepositVariantAccrual](), TermUnit: nullable.NewNullNullable[apitypes.DepositVariantTermUnit](),
-		Welcome: nullable.NewNullNullable[string](), Conditions: conditionsAPI(v, nil, time.Time{}),
+		Welcome: nullable.NewNullNullable[string](), Conditions: conditionsAPI(v, nil, nil, time.Time{}),
 	}
 	if v.Accrual != "" {
 		out.Accrual = nullable.NewNullableWithValue(apitypes.DepositVariantAccrual(v.Accrual))
@@ -73,8 +73,9 @@ func variantAPI(v deposit.Variant) apitypes.DepositVariant {
 
 // conditionsAPI are the variant's conditions — its periods' requirements
 // and its bonuses — with how tell says they stand in month (nothing met
-// without tell).
-func conditionsAPI(v deposit.Variant, tell func(id string, month time.Time) Told, month time.Time) []apitypes.ProgrammeCondition {
+// without tell). With a deposit's term — only the bonuses of the term, at
+// its plus.
+func conditionsAPI(v deposit.Variant, term *int, tell func(id string, month time.Time) Told, month time.Time) []apitypes.ProgrammeCondition {
 	out := []apitypes.ProgrammeCondition{}
 	state := func(c *apitypes.ProgrammeCondition) {
 		c.Told, c.MeasuredMinor, c.MeasuredMonth = apitypes.ProgrammeConditionToldNone, nullable.NewNullNullable[int64](), nullable.NewNullNullable[string]()
@@ -104,6 +105,16 @@ func conditionsAPI(v deposit.Variant, tell func(id string, month time.Time) Told
 		out = append(out, c)
 	}
 	for _, b := range v.Bonuses {
+		plus := b.Plus
+		if term != nil {
+			given, ok := b.PlusFor(0, *term)
+			if !ok {
+				continue
+			}
+			if len(b.Levels) == 0 {
+				plus = given
+			}
+		}
 		c := apitypes.ProgrammeCondition{
 			Id: b.ID, Name: b.Name, Kind: apitypes.Bonus, Check: apitypes.ProgrammeConditionCheck(b.Check),
 			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{},
@@ -111,8 +122,8 @@ func conditionsAPI(v deposit.Variant, tell func(id string, month time.Time) Told
 		if b.Group != "" {
 			c.Group = nullable.NewNullableWithValue(b.Group)
 		}
-		if b.Plus != "" {
-			c.Plus = nullable.NewNullableWithValue(b.Plus)
+		if plus != "" {
+			c.Plus = nullable.NewNullableWithValue(plus)
 		}
 		for _, l := range b.Levels {
 			c.Levels = append(c.Levels, apitypes.BonusLevel{From: l.From, Plus: l.Plus})

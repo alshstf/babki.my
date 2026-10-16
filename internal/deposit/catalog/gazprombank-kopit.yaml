@@ -1,0 +1,53 @@
+id: gazprombank-kopit
+bank: gazprombank
+name: Вклад «Копить с выплатой процентов в конце срока»
+kind: deposit
+watch:
+  - https://www.gazprombank.ru/personal/increase/deposits/detail/2491/
+editions:
+  - from: 2026-10-03
+    checked_on: 2026-10-16
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/533/5s09ko7zs0scy01ldc4qvlwrib4q6d4y/Pasport-Kopit-s-vyplatoy-protsentov-v-kontse-sroka-s-03.10.2026.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/e13/lsjtxg71z9d2s12x41692c99pmjy386u/Usloviya-srochnogo-bankovskogo-vklada-Kopit-s-vyplatoy-protsentov-v-kontse-sroka-s-08.08.2026.pdf
+    notes: >-
+      Без пополнения и снятия, проценты в день окончания срока на счёт. Онлайн (мобильный и интернет-банк, банкомат,
+      контакт-центр) — от 15 000 ₽ и на 1 п. п. выше, в отделении — от 300 000 ₽. Надбавка 0,2 п. п. за одно из:
+      пенсия из Соцфонда или зарплата на карту Газпромбанка в месяц открытия (продления) или в предыдущий; 90 дней без
+      вкладов и накопительных счетов в банке — она фиксируется при открытии, поэтому отмечается вручную. Досрочно —
+      0,01 %. Продление — на тот же срок по ставкам дня продления. Вклады с ежемесячной выплатой и капитализацией —
+      по своим ставкам, ручная ставка.
+    variants:
+      - id: online
+        name: Онлайн
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 1500000, percent: "11.5" }
+          - { from: 91, to: 91, amount_from: 1500000, percent: "12.45" }
+          - { from: 120, to: 120, amount_from: 1500000, percent: "12.5" }
+          - { from: 150, to: 150, amount_from: 1500000, percent: "12.5" }
+          - { from: 181, to: 181, amount_from: 1500000, percent: "12.6" }
+          - { from: 367, to: 367, amount_from: 1500000, percent: "11.9" }
+          - { from: 731, to: 731, amount_from: 1500000, percent: "11.3" }
+          - { from: 1095, to: 1095, amount_from: 1500000, percent: "11.8" }
+        bonuses: &gpb-kopit-bonuses
+          - { id: pension, name: Пенсия на карту Газпромбанка при открытии, plus: "0.2", check: manual, group: segment }
+          - { id: salary, name: Зарплата на карту Газпромбанка при открытии, plus: "0.2", check: manual, group: segment }
+          - { id: new_depositor, name: Новый вкладчик (90 дней без вкладов и накопительных), plus: "0.2", check: manual, group: segment }
+      - id: office
+        name: В отделении
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 30000000, percent: "10.5" }
+          - { from: 91, to: 91, amount_from: 30000000, percent: "11.45" }
+          - { from: 120, to: 120, amount_from: 30000000, percent: "11.5" }
+          - { from: 150, to: 150, amount_from: 30000000, percent: "11.5" }
+          - { from: 181, to: 181, amount_from: 30000000, percent: "11.6" }
+          - { from: 367, to: 367, amount_from: 30000000, percent: "10.9" }
+          - { from: 731, to: 731, amount_from: 30000000, percent: "10.3" }
+          - { from: 1095, to: 1095, amount_from: 30000000, percent: "10.8" }
+        bonuses: *gpb-kopit-bonuses
