@@ -29,7 +29,8 @@ func runAPI(t *testing.T) func(method, path, body string, want int, out any) {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			_ = err // how the role ended is not this test's question, only that it did
 		case <-time.After(30 * time.Second):
 			t.Error("the api role did not return after its context was cancelled")
 		}
