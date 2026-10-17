@@ -122,7 +122,8 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 			balances[a.ID] = a.Balance.AmountMinor
 		}
 	}
-	rates, err := interest.Load(ctx, spaceID, s.accounts, s.keys, s.measures)
+	today := s.now().UTC()
+	rates, err := interest.Load(ctx, spaceID, today, s.accounts, s.keys, s.measures)
 	if err != nil {
 		return nil, "", err
 	}
@@ -134,7 +135,6 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 			}
 		}
 	}
-	today := s.now().UTC()
 	out := make([]Valued, 0, len(list))
 	for _, g := range list {
 		v := Valued{Goal: g, FundValues: map[uuid.UUID]int64{}}

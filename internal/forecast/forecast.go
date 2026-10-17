@@ -3,6 +3,7 @@
 // and savings accounts and in cash today, and ahead of it the regular payments
 // the journal shows (internal/recurring) and the loans' scheduled payments
 // (internal/loan), day by day; the bars' storages' fees (internal/valuables);
+// the savings accounts' interest by their rates (internal/interest);
 // when asked, the spending the budget's limits expect (internal/budget). From it: the lowest point, and how much can be
 // spent before the next salary without going below zero. It owns no table.
 package forecast
@@ -23,6 +24,7 @@ import (
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/goals"
+	"babki.my/babki/internal/interest"
 	"babki.my/babki/internal/loan"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
@@ -43,6 +45,9 @@ const (
 	KindBudget Kind = "budget"
 	// KindStorage is a safe box's or a bank custody's fee for the bars.
 	KindStorage Kind = "storage"
+	// KindInterest is a savings account's interest at a month's end, by its
+	// rate on today's balance.
+	KindInterest Kind = "interest"
 )
 
 // Event is one payment ahead. Amount is in Currency, signed as the journal
@@ -89,6 +94,9 @@ type Forecast struct {
 	// spent leaves it out (Р-44).
 	Reserved     int64
 	MissingRates []string
+	// Unearning are the savings accounts with money and no rate today:
+	// their interest is not in.
+	Unearning []string
 }
 
 // Horizon bounds, in days.
@@ -155,7 +163,11 @@ type Service struct {
 	storages  storages
 	goals     savings
 	rates     marketdata.RateSource
-	now       func() time.Time
+	// For the savings accounts' interest (WithInterest).
+	earning  interest.Store
+	keys     interest.KeyRates
+	measures interest.Measures
+	now      func() time.Time
 }
 
 func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c cards, b budgets, rates marketdata.RateSource) *Service {
@@ -165,6 +177,13 @@ func NewService(acc accounts, pos positions, sp spaces, reg regulars, l loans, c
 // WithStorages puts the bars' storages' fees in the forecast.
 func (s *Service) WithStorages(st storages) *Service {
 	s.storages = st
+	return s
+}
+
+// WithInterest puts the savings accounts' interest in the forecast, by their
+// rates.
+func (s *Service) WithInterest(st interest.Store, keys interest.KeyRates, ms interest.Measures) *Service {
+	s.earning, s.keys, s.measures = st, keys, ms
 	return s
 }
 
@@ -187,7 +206,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 	now := s.now().UTC()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	end := today.AddDate(0, 0, days)
-	out := Forecast{BaseCurrency: sp.BaseCurrency, Days: days, MissingRates: []string{}}
+	out := Forecast{BaseCurrency: sp.BaseCurrency, Days: days, MissingRates: []string{}, Unearning: []string{}}
 	conv := converter{memo: marketdata.NewRateMemo(s.rates), base: sp.BaseCurrency, on: today, missing: map[string]bool{}}
 
 	list, err := s.accounts.ListWithBalance(ctx, spaceID)
@@ -201,6 +220,8 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 		}
 	}
 	inScope := map[uuid.UUID]bool{}
+	// savingsHeld is what a savings account holds in its own currency.
+	savingsHeld := map[uuid.UUID]int64{}
 	// markedOn is the day of the balance an account is counted by: a payment
 	// due on or before it is in that balance already, if it came at all.
 	markedOn := map[uuid.UUID]time.Time{}
@@ -228,6 +249,9 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 			}
 		}
 		out.Start += worth
+		if a.Type == account.TypeSavings {
+			savingsHeld[a.ID] = held[a.Currency]
+		}
 		// A goal's sum out of an account is never more than it holds.
 		if r, ok := aside[a.ID]; ok && worth > 0 {
 			if r.Whole {
@@ -285,6 +309,12 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 		}
 	}
 
+	earning, earns, err := s.interest(ctx, spaceID, list, savingsHeld, today, end, &out)
+	if err != nil {
+		return Forecast{}, err
+	}
+	events = append(events, earning...)
+
 	payments, err := s.regulars.Find(ctx, spaceID)
 	if err != nil {
 		return Forecast{}, err
@@ -292,9 +322,10 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 	for _, p := range payments {
 		// Only what moves the money counted here; a loan's interest, written
 		// under the loan's name, is already in its schedule; a card's
-		// cashback, by its rules, above; and what the family said is not
-		// regular is not.
-		if !inScope[p.AccountID] || loanNames[fold(p.Name)] || p.Hidden || cashback[p.AccountID] && p.Amount > 0 {
+		// cashback, by its rules, above, and a savings account's interest by
+		// its rate — they stand for the account's regular incomes; and what
+		// the family said is not regular is not.
+		if !inScope[p.AccountID] || loanNames[fold(p.Name)] || p.Hidden || (cashback[p.AccountID] || earns[p.AccountID]) && p.Amount > 0 {
 			continue
 		}
 		mark, byBalance := markedOn[p.AccountID]
@@ -345,6 +376,56 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, days int, withBudge
 	}
 	slices.Sort(out.MissingRates)
 	return out, nil
+}
+
+// interest is the savings accounts' interest at each month's end of the
+// horizon, by each one's rate on today's balance, capitalized: a month's
+// days before today are taken at today's balance and rate too, as the bank
+// pays for the whole month. earns are the accounts with a rate today; those
+// with money and none are named in out.Unearning.
+func (s *Service) interest(
+	ctx context.Context, spaceID uuid.UUID, list []account.WithBalance, held map[uuid.UUID]int64, today, end time.Time, out *Forecast,
+) ([]Event, map[uuid.UUID]bool, error) {
+	earns := map[uuid.UUID]bool{}
+	if s.earning == nil || len(held) == 0 {
+		return nil, earns, nil
+	}
+	rates, err := interest.Load(ctx, spaceID, today, s.earning, s.keys, s.measures)
+	if err != nil {
+		return nil, nil, err
+	}
+	month := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
+	var events []Event
+	for _, a := range list {
+		balance, ok := held[a.ID]
+		if !ok || balance <= 0 {
+			continue
+		}
+		rate := rates.Of(a.ID)
+		fromToday := func(day time.Time, balance int64) (decimal.Decimal, bool, error) {
+			if day.Before(today) {
+				day = today
+			}
+			return rate(day, balance)
+		}
+		pays, _, _ := rates.Pays(a.Account)
+		paid, unrated, err := interest.Earned([]interest.Point{{On: month, Minor: balance}}, fromToday, pays, month, end.AddDate(0, 0, -1))
+		if err != nil {
+			return nil, nil, err
+		}
+		if unrated != nil {
+			out.Unearning = append(out.Unearning, a.Name)
+			continue
+		}
+		earns[a.ID] = true
+		for _, p := range paid {
+			if p.On.Before(today) {
+				continue
+			}
+			events = append(events, Event{On: p.On, Name: a.Name, Kind: KindInterest, AccountID: a.ID, Amount: p.Minor, Currency: a.Currency})
+		}
+	}
+	return events, earns, nil
 }
 
 // money is what an account holds by currency: its journal's money when the

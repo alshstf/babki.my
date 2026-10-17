@@ -752,6 +752,7 @@ func (e DepositVariantTermUnit) Valid() bool {
 const (
 	ForecastEventKindBudget   ForecastEventKind = "budget"
 	ForecastEventKindCashback ForecastEventKind = "cashback"
+	ForecastEventKindInterest ForecastEventKind = "interest"
 	ForecastEventKindLoan     ForecastEventKind = "loan"
 	ForecastEventKindRegular  ForecastEventKind = "regular"
 	ForecastEventKindStorage  ForecastEventKind = "storage"
@@ -763,6 +764,8 @@ func (e ForecastEventKind) Valid() bool {
 	case ForecastEventKindBudget:
 		return true
 	case ForecastEventKindCashback:
+		return true
+	case ForecastEventKindInterest:
 		return true
 	case ForecastEventKindLoan:
 		return true
@@ -4425,6 +4428,9 @@ type Forecast struct {
 
 	// StartMinor The money today
 	StartMinor int64 `json:"start_minor"`
+
+	// Unearning The savings accounts with money and no rate today, by name: their interest is not in
+	Unearning []string `json:"unearning"`
 }
 
 // ForecastDay defines model for ForecastDay.
@@ -4448,7 +4454,7 @@ type ForecastEvent struct {
 	// InBaseMinor The same in the base currency at today's rate
 	InBaseMinor int64 `json:"in_base_minor"`
 
-	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period
+	// Kind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period; interest: a savings account's interest on a month's last day by its rate on today's balance, capitalized — it stands for the account's regular incomes
 	Kind ForecastEventKind `json:"kind"`
 
 	// Name The payee, or the loan account's name; empty for the budget's
@@ -4461,7 +4467,7 @@ type ForecastEvent struct {
 	Overdue bool `json:"overdue"`
 }
 
-// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period
+// ForecastEventKind regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period; interest: a savings account's interest on a month's last day by its rate on today's balance, capitalized — it stands for the account's regular incomes
 type ForecastEventKind string
 
 // FullValuation Where the space's full valuation starts (decision Р-11). `liquid`: the full valuation equals the liquid one — a paper the market does not price now counts as nothing. `nav`: a fund is valued at its net asset value per unit where one is published. `nav_and_foreign` (the default): also a foreign share at its home exchange's close, converted at the official rate. Past those, a paper is valued at its latest price of any source, a price stated by hand included.

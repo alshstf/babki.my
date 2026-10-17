@@ -40,6 +40,7 @@ function forecast(over: Partial<Forecast> = {}): Forecast {
     free_until_income_minor: -40_956_90,
     reserved_minor: 0,
     missing_rates: [],
+    unearning: [],
     ...over,
   };
 }
@@ -67,6 +68,18 @@ afterEach(() => {
 });
 
 describe("ForecastCard", () => {
+  it("says a savings account's interest is by its rate and names the savings without one", async () => {
+    show(forecast({
+      events: [event("2026-10-31", "Накопительный", 10_701_37, { kind: "interest" })],
+      unearning: ["Копилка", "Сейф"],
+    }));
+    const events = await screen.findByTestId("forecast-events");
+    expect(norm(events.textContent ?? "")).toMatch(/31\.10\.2026 · Накопительный · проценты по ставке счёта/);
+    expect(norm(screen.getByTestId("forecast-unearning").textContent ?? "")).toBe(
+      "У накопительных без ставки проценты в прогноз не вошли: Копилка, Сейф. Ставку вписывают на странице счёта.",
+    );
+  });
+
   it("counts the budget when asked, once the family has a limit", async () => {
     localStorage.clear();
     show(forecast({ events: [event("2026-10-17", "", -3_500_00, { kind: "budget", account_id: null })] }), true);

@@ -33,11 +33,13 @@ type Measures interface {
 type Rates struct {
 	sources map[uuid.UUID]account.RateSource
 	keyOn   func(time.Time) (decimal.Decimal, bool, error)
+	today   time.Time
 }
 
-// Load reads the space's rates. Without keys a rate tied to the key rate is
-// not known; without measures a condition told by the program is not met.
-func Load(ctx context.Context, spaceID uuid.UUID, st Store, keys KeyRates, ms Measures) (Rates, error) {
+// Load reads the space's rates, their conditions told as of today. Without
+// keys a rate tied to the key rate is not known; without measures a
+// condition told by the program is not met.
+func Load(ctx context.Context, spaceID uuid.UUID, today time.Time, st Store, keys KeyRates, ms Measures) (Rates, error) {
 	rates, err := st.AllRates(ctx, spaceID)
 	if err != nil {
 		return Rates{}, err
@@ -67,7 +69,7 @@ func Load(ctx context.Context, spaceID uuid.UUID, st Store, keys KeyRates, ms Me
 		ok   bool
 	}
 	memo := map[string]known{}
-	out := Rates{sources: map[uuid.UUID]account.RateSource{}, keyOn: func(day time.Time) (decimal.Decimal, bool, error) {
+	out := Rates{sources: map[uuid.UUID]account.RateSource{}, today: today, keyOn: func(day time.Time) (decimal.Decimal, bool, error) {
 		if keys == nil {
 			return decimal.Zero, false, nil
 		}
@@ -103,7 +105,7 @@ func Load(ctx context.Context, spaceID uuid.UUID, st Store, keys KeyRates, ms Me
 
 // On is the account's rate on day with balance on it.
 func (r Rates) On(id uuid.UUID, day time.Time, balance int64) (account.Resolved, bool, error) {
-	return account.Resolve(r.sources[id], day, balance, r.keyOn)
+	return account.Resolve(r.sources[id], day, r.today, balance, r.keyOn)
 }
 
 // Of is the account's rate as Earned takes it.

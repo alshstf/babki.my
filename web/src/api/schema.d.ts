@@ -5070,10 +5070,10 @@ export interface components {
             /** @description The payee, or the loan account's name; empty for the budget's */
             name: string;
             /**
-             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period
+             * @description regular: a payment the journal repeats; loan: a loan's scheduled payment; cashback: a card's cashback for this period's purchases by its rules, on the day it comes (in money only); budget: what the budget's limits expect to be spent, a part every seven days; storage: a safe box's or bank custody's fee for the bars, from the term's end, then each period; interest: a savings account's interest on a month's last day by its rate on today's balance, capitalized — it stands for the account's regular incomes
              * @enum {string}
              */
-            kind: "regular" | "loan" | "cashback" | "budget" | "storage";
+            kind: "regular" | "loan" | "cashback" | "budget" | "storage" | "interest";
             /**
              * Format: uuid
              * @description The account it moves; null for the budget's, which is no account's
@@ -5121,6 +5121,8 @@ export interface components {
             reserved_minor: number;
             /** @description Currencies left out for want of today's rate */
             missing_rates: string[];
+            /** @description The savings accounts with money and no rate today, by name: their interest is not in */
+            unearning: string[];
         };
         Loan: {
             terms: components["schemas"]["LoanTerms"];

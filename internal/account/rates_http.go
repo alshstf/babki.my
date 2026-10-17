@@ -200,7 +200,7 @@ func (h *Handler) writeProgramme(ctx context.Context, out *apitypes.AccountRates
 	if a.Balance != nil {
 		balance = a.Balance.AmountMinor
 	}
-	res, ok, err := Resolve(RateSource{Binding: &b, Marks: marks, Measure: measure}, today, balance, keyOn)
+	res, ok, err := Resolve(RateSource{Binding: &b, Marks: marks, Measure: measure}, today, today, balance, keyOn)
 	if err != nil || !ok {
 		return err
 	}
