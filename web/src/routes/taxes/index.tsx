@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useAccounts, useUpdateAccount } from "@/api/accounts";
 import { useMembers } from "@/api/members";
 import { useSession } from "@/api/session";
-import { useTaxYear, useWageEntry, type TaxYear, type TaxYearPerson, type TaxYearWagePayment } from "@/api/tax-year";
+import { useTaxYear, useWageEntry, type TaxYear, type TaxYearAccount, type TaxYearPerson, type TaxYearWagePayment } from "@/api/tax-year";
 import { QueryGate } from "@/components/query-notice";
 import { queryState } from "@/lib/query-state";
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
@@ -60,9 +60,6 @@ export function TaxesPage() {
       {data && data.supported && data.people.map((p) => <PersonCard key={p.user_id} year={data} person={p} />)}
       {data && data.supported && <ForeignReturn year={data.year} />}
       {data && data.supported && <ForeignReport year={data.year} />}
-      {data && data.supported && data.by_balance > 0 && (
-        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="tax-by-balance">{t("taxes.byBalance", { count: data.by_balance })}</p>
-      )}
       {data && data.supported && (
         <div className="grid gap-1 text-xs text-muted-foreground">
           <p>{t("taxes.notYet")}</p>
@@ -71,6 +68,49 @@ export function TaxesPage() {
       )}
       {data && data.supported && <SharedAccounts />}
     </div>
+  );
+}
+
+// Deposits are the person's deposits and savings accounts with an estimate by
+// their rates: what each paid, what is to come, or why it is not known.
+function Deposits({ accounts, currency: c }: { accounts: TaxYearAccount[]; currency: string }) {
+  const { t } = useTranslation();
+  const list = accounts.filter((a) => a.bank && a.estimate !== null);
+  if (list.length === 0) return null;
+  const parts = (a: TaxYearAccount) => {
+    const e = a.estimate!;
+    const out: string[] = [];
+    switch (e.missing) {
+      case "currency":
+        return [t("taxes.deposit.missingCurrency")];
+      case "how_paid":
+        return [t("taxes.deposit.missingHowPaid")];
+      case "rate":
+        out.push(t("taxes.deposit.missingRate", { date: formatDate(e.missing_on!) }));
+        break;
+      default:
+        if (a.interest_minor > 0) out.push(t("taxes.deposit.journal", { amount: formatMinor(a.interest_minor, c) }));
+        if (e.paid_minor > 0) {
+          out.push(
+            e.from === null
+              ? t("taxes.deposit.paid", { amount: formatMinor(e.paid_minor, c) })
+              : t("taxes.deposit.paidFrom", { amount: formatMinor(e.paid_minor, c), date: formatDate(e.from) }),
+          );
+        } else if (e.from !== null) {
+          out.push(t("taxes.deposit.from", { date: formatDate(e.from) }));
+        }
+    }
+    if (e.ahead_minor > 0) out.push(t("taxes.deposit.ahead", { amount: formatMinor(e.ahead_minor, c) }));
+    if (e.pays_on !== null) out.push(t("taxes.deposit.paysOn", { date: formatDate(e.pays_on) }));
+    if (e.no_rate_ahead) out.push(t("taxes.deposit.noRateAhead"));
+    return out;
+  };
+  return (
+    <ul className="grid gap-0.5 text-xs text-muted-foreground" data-testid="tax-deposits">
+      {list.map((a) => (
+        <li key={a.account_id}>{t("taxes.deposit.line", { name: a.name, parts: parts(a).join("; ") })}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -152,18 +192,29 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
             {p.property_free > 0 && ` ${t("taxes.propertyFree", { count: p.property_free })}`}
           </p>
         )}
-        {p.interest_minor > 0 && (
+        {p.interest_counted_minor > 0 && (
           <p className="text-sm" data-testid="tax-interest">
             {p.interest_free_minor === null || year.key_rate === null
-              ? t("taxes.interestNoRate", { interest: formatMinor(p.interest_minor, c) })
+              ? t("taxes.interestNoRate", { interest: formatMinor(p.interest_counted_minor, c) })
               : t("taxes.interest", {
-                  interest: formatMinor(p.interest_minor, c),
+                  interest: formatMinor(p.interest_counted_minor, c),
                   free: formatMinor(p.interest_free_minor, c),
                   rate: Number(year.key_rate).toLocaleString("ru-RU", { maximumFractionDigits: 2 }),
                 })}{" "}
+            {p.interest_estimated_minor > 0 && `${t("taxes.interestEstimated", { amount: formatMinor(p.interest_estimated_minor, c) })} `}
             {p.by_notice_minor > 0 && t("taxes.byNotice", { amount: formatMinor(p.by_notice_minor, c), date: formatDate(year.notice_by) })}
           </p>
         )}
+        {p.interest_ahead_minor > 0 && p.by_notice_year_end_minor !== null && (
+          <p className="text-sm" data-testid="tax-interest-year-end">
+            {p.interest_free_minor === null
+              ? t("taxes.interestAhead", { ahead: formatMinor(p.interest_ahead_minor, c) })
+              : p.by_notice_year_end_minor > 0
+                ? t("taxes.interestYearEnd", { ahead: formatMinor(p.interest_ahead_minor, c), tax: formatMinor(p.by_notice_year_end_minor, c) })
+                : t("taxes.interestYearEndFree", { ahead: formatMinor(p.interest_ahead_minor, c), free: formatMinor(p.interest_free_minor, c) })}
+          </p>
+        )}
+        <Deposits accounts={p.accounts} currency={c} />
         {p.unvalued > 0 && <p className="text-xs text-amber-700 dark:text-amber-400">{t("taxes.unvalued", { count: p.unvalued })}</p>}
         <div className="overflow-x-auto">
           <Table>

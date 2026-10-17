@@ -1726,6 +1726,27 @@ func (e StructureValuation) Valid() bool {
 	}
 }
 
+// Defines values for TaxYearEstimateMissing.
+const (
+	TaxYearEstimateMissingCurrency TaxYearEstimateMissing = "currency"
+	TaxYearEstimateMissingHowPaid  TaxYearEstimateMissing = "how_paid"
+	TaxYearEstimateMissingRate     TaxYearEstimateMissing = "rate"
+)
+
+// Valid indicates whether the value is a known member of the TaxYearEstimateMissing enum.
+func (e TaxYearEstimateMissing) Valid() bool {
+	switch e {
+	case TaxYearEstimateMissingCurrency:
+		return true
+	case TaxYearEstimateMissingHowPaid:
+		return true
+	case TaxYearEstimateMissingRate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaxYearForeignPayoutTreaty.
 const (
 	TaxYearForeignPayoutTreatyApplies   TaxYearForeignPayoutTreaty = "applies"
@@ -6102,9 +6123,6 @@ type TableImport struct {
 
 // TaxYear defines model for TaxYear.
 type TaxYear struct {
-	// ByBalance Deposits and savings accounts kept by their balance: their interest is not in the journal, so not in the estimate
-	ByBalance int `json:"by_balance"`
-
 	// Currency What the tax is counted in; empty when not supported
 	Currency string `json:"currency"`
 
@@ -6145,7 +6163,10 @@ type TaxYearAccount struct {
 	Bank           bool  `json:"bank"`
 	CouponsMinor   int64 `json:"coupons_minor"`
 	DividendsMinor int64 `json:"dividends_minor"`
-	ForeignBroker  bool  `json:"foreign_broker"`
+
+	// Estimate A deposit's or savings account's interest by its rate; null for a broker's or an account without one
+	Estimate      nullable.Nullable[TaxYearEstimate] `json:"estimate,omitempty"`
+	ForeignBroker bool                               `json:"foreign_broker"`
 
 	// InterestMinor Interest paid on the account: a bank's counts toward the person's interest; a broker's is shown, not taxed here
 	InterestMinor int64  `json:"interest_minor"`
@@ -6177,6 +6198,33 @@ type TaxYearEmployer struct {
 	NetMinor      int64 `json:"net_minor"`
 	WithheldMinor int64 `json:"withheld_minor"`
 }
+
+// TaxYearEstimate defines model for TaxYearEstimate.
+type TaxYearEstimate struct {
+	// AheadMinor This year: what is still to come after today to 31 December
+	AheadMinor int64 `json:"ahead_minor"`
+
+	// From Date YYYY-MM-DD: the first balance mark, when it came after the stretch began — no money is known before it, so none is counted
+	From nullable.Nullable[string] `json:"from"`
+
+	// Missing Why what the year paid is not estimated: rate — money on a day without a rate (missing_on); how_paid — a deposit whose term or way of payment is not known (no programme of its bank, or a variant with more than one way); currency — not in the tax's currency
+	Missing nullable.Nullable[TaxYearEstimateMissing] `json:"missing"`
+
+	// MissingOn Date YYYY-MM-DD: with missing rate, the first day with money and no rate
+	MissingOn nullable.Nullable[string] `json:"missing_on"`
+
+	// NoRateAhead What is to come is not estimated: no rate today
+	NoRateAhead bool `json:"no_rate_ahead"`
+
+	// PaidMinor An account kept by its balance: what the year paid to today by its rate on the balance marks — each day its balance × the day's rate / the year's days, paid on each month's last day or the term's end; 0 for one kept by its journal, whose interest is in interest_minor
+	PaidMinor int64 `json:"paid_minor"`
+
+	// PaysOn Date YYYY-MM-DD: a deposit paying at its term's end after the year — the day it pays; its interest is a later year's
+	PaysOn nullable.Nullable[string] `json:"pays_on"`
+}
+
+// TaxYearEstimateMissing Why what the year paid is not estimated: rate — money on a day without a rate (missing_on); how_paid — a deposit whose term or way of payment is not known (no programme of its bank, or a variant with more than one way); currency — not in the tax's currency
+type TaxYearEstimateMissing string
 
 // TaxYearForeign defines model for TaxYearForeign.
 type TaxYearForeign struct {
@@ -6364,13 +6412,25 @@ type TaxYearPerson struct {
 	// ByNoticeMinor The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor
 	ByNoticeMinor int64 `json:"by_notice_minor"`
 
+	// ByNoticeYearEndMinor This year: the tax on the interest with interest_ahead_minor in, the other incomes as they stand today, the year's highest key rate so far; null for a past year
+	ByNoticeYearEndMinor nullable.Nullable[int64] `json:"by_notice_year_end_minor"`
+
 	// CreditMinor The tax withheld abroad on dividends that offsets the Russian one, at most the Russian tax on them
 	CreditMinor int64 `json:"credit_minor"`
 
 	// Employers In the order they first paid
 	Employers []TaxYearEmployer `json:"employers"`
 
-	// InterestFreeMinor What of it is free of tax: 1 млн × the year's highest key rate; null without the rate
+	// InterestAheadMinor This year: what the deposits' and savings accounts' rates bring after today to 31 December, on their money today; 0 for a past year
+	InterestAheadMinor int64 `json:"interest_ahead_minor"`
+
+	// InterestCountedMinor interest_minor and interest_estimated_minor together: the interest the tax counts
+	InterestCountedMinor int64 `json:"interest_counted_minor"`
+
+	// InterestEstimatedMinor Interest the deposits and savings accounts kept by their balance paid in the year to today, estimated by their rates on the balance marks (each account's in accounts[].estimate)
+	InterestEstimatedMinor int64 `json:"interest_estimated_minor"`
+
+	// InterestFreeMinor What of interest_counted_minor is free of tax: 1 млн × the year's highest key rate; null without the rate
 	InterestFreeMinor nullable.Nullable[int64] `json:"interest_free_minor"`
 
 	// InterestMinor Interest the banks' accounts kept by their operations paid in the year

@@ -18,23 +18,25 @@ if (!Element.prototype.scrollIntoView) {
 // Alex with two Russian brokers past the threshold and a broker abroad;
 // Maria whose broker took more than her year's tax.
 const year: TaxYear = {
-  year: 2026, supported: true, currency: "RUB", declare_by: "2027-04-30", pay_by: "2027-07-15", notice_by: "2027-12-01", key_rate: "21.00", by_balance: 1,
+  year: 2026, supported: true, currency: "RUB", declare_by: "2027-04-30", pay_by: "2027-07-15", notice_by: "2027-12-01", key_rate: "21.00",
   to_pay_minor: 32_000_00, refund_minor: 8_000_00,
   people: [
     {
       user_id: "u-alex", name: "Алекс", base_minor: 4_000_000_00, tax_minor: 552_000_00, by_agents_minor: 520_000_00, withheld_minor: 6_500_00,
       credit_minor: 0, to_pay_minor: 32_000_00, refund_minor: 0, unvalued: 2, interest_minor: 400_000_00, interest_free_minor: 210_000_00, by_notice_minor: 28_500_00,
+      interest_estimated_minor: 0, interest_counted_minor: 400_000_00, interest_ahead_minor: 0, by_notice_year_end_minor: 28_500_00,
       wages_net_minor: 0, wages_minor: 0, wages_tax_minor: 0, wages_withheld_minor: 0, wages_to_pay_minor: 0, employers: [], wage_payments: [],
       property_sold_minor: 0, property_gain_minor: 0, property_base_minor: 0, property_free: 0,
       accounts: [
-        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2 },
-        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 },
-        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 },
+        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2, estimate: null },
+        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, estimate: null },
+        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, estimate: null },
       ],
     },
     {
       user_id: "u-maria", name: "Мария", base_minor: 100_000_00, tax_minor: 13_000_00, by_agents_minor: 21_000_00, withheld_minor: 0,
       credit_minor: 0, to_pay_minor: 0, refund_minor: 8_000_00, unvalued: 0, accounts: [], interest_minor: 0, interest_free_minor: 210_000_00, by_notice_minor: 0,
+      interest_estimated_minor: 0, interest_counted_minor: 0, interest_ahead_minor: 0, by_notice_year_end_minor: 0,
       wages_net_minor: 87_000_00, wages_minor: 100_000_00, wages_tax_minor: 13_000_00, wages_withheld_minor: 13_000_00, wages_to_pay_minor: 0,
       employers: [{ name: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00 }],
       wage_payments: [{ operation_id: "op-1", on: "2026-03-05", employer: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00, entered: false }],
@@ -99,7 +101,6 @@ describe("TaxesPage", () => {
     );
     expect(rows).toHaveLength(2);
     expect(within(people[1]).queryByTestId("tax-interest")).toBeNull();
-    expect(norm(screen.getByTestId("tax-by-balance").textContent)).toMatch(/ведутся остатком: 1 —/);
     expect(screen.getByText(/НКД, уплаченный при покупке облигаций, здесь уменьшает налог при продаже или погашении/)).toBeTruthy();
     // Maria's wages, reckoned from what reached her account.
     expect(norm(within(people[1]).getByTestId("tax-wages").textContent)).toBe(
@@ -109,6 +110,46 @@ describe("TaxesPage", () => {
     expect(norm(within(people[1]).getByTestId("tax-property").textContent)).toBe(
       "Продажа слитков и монет: выручка 525 000,00 ₽, прибыль 115 000,00 ₽; к налогу 115 000,00 ₽ — меньшее из прибыли и выручки без вычета 250 000 ₽. Банк налог не удерживает — по декларации. Проданных после трёх лет владения — без налога: 1.",
     );
+  });
+
+  it("says what each deposit's rate brings, what is to come by the year's end, and why one is not known", async () => {
+    const est = { paid_minor: 0, from: null, ahead_minor: 0, missing: null, missing_on: null, no_rate_ahead: false, pays_on: null };
+    const bankRow = { bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 };
+    const maria = {
+      ...year.people[1],
+      interest_estimated_minor: 213_351_55, interest_counted_minor: 213_351_55, interest_ahead_minor: 98_175_97,
+      by_notice_minor: 436_00, by_notice_year_end_minor: 13_199_00,
+      accounts: [
+        { ...bankRow, account_id: "d-1", name: "Копилка", estimate: { ...est, paid_minor: 213_351_55, from: "2026-03-05", ahead_minor: 98_175_97 } },
+        { ...bankRow, account_id: "d-2", name: "Накопительный", interest_minor: 30_000_00, estimate: { ...est, ahead_minor: 25_417_81 } },
+        { ...bankRow, account_id: "d-3", name: "Сейф", estimate: { ...est, missing: "rate" as const, missing_on: "2026-02-01", ahead_minor: 5_083_57 } },
+        { ...bankRow, account_id: "d-4", name: "Вклад", estimate: { ...est, missing: "how_paid" as const } },
+        { ...bankRow, account_id: "d-5", name: "Долларовый", estimate: { ...est, missing: "currency" as const } },
+        { ...bankRow, account_id: "d-6", name: "Вклад на три года", estimate: { ...est, pays_on: "2029-10-05" } },
+        { ...bankRow, account_id: "d-7", name: "Новый", estimate: { ...est, from: "2026-10-10", ahead_minor: 30_151_70 } },
+      ],
+    };
+    answer({ ...year, people: [year.people[0], maria] });
+    show();
+    const people = await screen.findAllByTestId("tax-person");
+    expect(norm(within(people[1]).getByTestId("tax-interest").textContent)).toBe(
+      "Проценты по вкладам и счетам: 213 351,55 ₽, из них без налога 210 000,00 ₽ (1 млн × наибольшая ключевая ставка года, 21 %). Из них ≈ 213 351,55 ₽ — оценка по ставкам счетов, которые ведутся остатком. Налог с остального ≈ 436,00 ₽ — ФНС пришлёт уведомление, оплата до 01.12.2027; он уже в налоге за год, в «доплатить самим» не входит.",
+    );
+    expect(norm(within(people[1]).getByTestId("tax-interest-year-end").textContent)).toBe(
+      "К 31 декабря по сегодняшним ставкам вкладов и накопительных придёт ещё ≈ 98 175,97 ₽; налог на проценты за год тогда ≈ 13 199,00 ₽.",
+    );
+    const lines = within(within(people[1]).getByTestId("tax-deposits")).getAllByRole("listitem").map((li) => norm(li.textContent ?? ""));
+    expect(lines).toEqual([
+      "Копилка: ≈ 213 351,55 ₽ по ставке и отметкам остатка с 05.03.2026 — до первой отметки денег на счёте не видно; до конца года ещё ≈ 98 175,97 ₽.",
+      "Накопительный: по журналу 30 000,00 ₽; до конца года ещё ≈ 25 417,81 ₽.",
+      "Сейф: проценты за год не оценить: 01.02.2026 на счёте были деньги, а ставки на этот день нет; до конца года ещё ≈ 5 083,57 ₽.",
+      "Вклад: не известно, как банк платит проценты: у вклада нет программы банка или в программе несколько способов выплаты.",
+      "Долларовый: проценты в валюте пока не оцениваются.",
+      "Вклад на три года: проценты — в конце срока, 05.10.2029; в налог этого года не входят.",
+      "Новый: считается с 10.10.2026 — до первой отметки остатка денег на счёте не видно; до конца года ещё ≈ 30 151,70 ₽.",
+    ]);
+    // Alex's year-end adds nothing: no line for it.
+    expect(within(people[0]).queryByTestId("tax-interest-year-end")).toBeNull();
   });
 
   it("writes a wage payment's payslip, accepts the reckoning, or drops it", async () => {
@@ -165,7 +206,7 @@ describe("TaxesPage", () => {
   });
 
   it("says when the country has no estimate", async () => {
-    answer({ ...year, supported: false, currency: "", people: [], to_pay_minor: 0, refund_minor: 0, key_rate: null, by_balance: 0 });
+    answer({ ...year, supported: false, currency: "", people: [], to_pay_minor: 0, refund_minor: 0, key_rate: null });
     show();
     expect(await screen.findByText(/только для налоговых резидентов России/)).toBeTruthy();
     expect(screen.queryByTestId("tax-person")).toBeNull();

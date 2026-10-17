@@ -106,7 +106,7 @@ func YearAPI(y Year) apitypes.TaxYear {
 	out := apitypes.TaxYear{
 		Year: y.Year, Supported: true, Currency: y.Currency, People: make([]apitypes.TaxYearPerson, 0, len(y.People)),
 		DeclareBy: y.DeclareBy.Format(time.DateOnly), PayBy: y.PayBy.Format(time.DateOnly), NoticeBy: y.NoticeBy.Format(time.DateOnly),
-		KeyRate: nullable.NewNullNullable[string](), ByBalance: y.ByBalance,
+		KeyRate: nullable.NewNullNullable[string](),
 	}
 	if y.KeyRate != nil {
 		out.KeyRate = nullable.NewNullableWithValue(y.KeyRate.StringFixed(2))
@@ -120,15 +120,21 @@ func YearAPI(y Year) apitypes.TaxYear {
 			WagePayments:      make([]apitypes.TaxYearWagePayment, 0, len(p.WagePayments)),
 			PropertySoldMinor: p.PropertySold, PropertyGainMinor: p.PropertyGain, PropertyBaseMinor: p.PropertyBase, PropertyFree: p.PropertyFree,
 			InterestMinor: p.Interest, InterestFreeMinor: nullable.NewNullNullable[int64](), ByNoticeMinor: p.ByNotice,
+			InterestEstimatedMinor: p.InterestEstimated, InterestCountedMinor: p.Interest + p.InterestEstimated, InterestAheadMinor: p.InterestAhead, ByNoticeYearEndMinor: nullable.NewNullNullable[int64](),
 			Accounts: make([]apitypes.TaxYearAccount, 0, len(p.Accounts)),
 		}
 		for _, a := range p.Accounts {
-			person.Accounts = append(person.Accounts, apitypes.TaxYearAccount{
+			acc := apitypes.TaxYearAccount{
 				AccountId: a.ID, Name: a.Name, Bank: a.Bank, ForeignBroker: a.ForeignBroker,
 				SalesMinor: a.Facts.Sales, SalesLongMinor: a.Facts.SalesLong, CouponsMinor: a.Facts.Coupons,
 				DividendsMinor: a.Facts.Dividends, InterestMinor: a.Facts.Interest, WithheldMinor: a.Facts.Withheld,
 				SecuritiesMinor: a.Securities, AgentTaxMinor: a.AgentTax, Unvalued: a.Facts.Unvalued,
-			})
+				Estimate: nullable.NewNullNullable[apitypes.TaxYearEstimate](),
+			}
+			if e := a.Estimate; e != nil {
+				acc.Estimate = nullable.NewNullableWithValue(estimateAPI(*e))
+			}
+			person.Accounts = append(person.Accounts, acc)
 		}
 		for _, e := range p.Employers {
 			person.Employers = append(person.Employers, apitypes.TaxYearEmployer{Name: e.Name, NetMinor: e.Net, GrossMinor: e.Gross, WithheldMinor: e.Withheld})
@@ -142,9 +148,29 @@ func YearAPI(y Year) apitypes.TaxYear {
 		if p.InterestFree != nil {
 			person.InterestFreeMinor = nullable.NewNullableWithValue(*p.InterestFree)
 		}
+		if p.ByNoticeYearEnd != nil {
+			person.ByNoticeYearEndMinor = nullable.NewNullableWithValue(*p.ByNoticeYearEnd)
+		}
 		out.People = append(out.People, person)
 		out.ToPayMinor += p.ToPay + p.WagesToPay
 		out.RefundMinor += p.Refund
+	}
+	return out
+}
+
+func estimateAPI(e Estimate) apitypes.TaxYearEstimate {
+	date := func(t *time.Time) nullable.Nullable[string] {
+		if t == nil {
+			return nullable.NewNullNullable[string]()
+		}
+		return nullable.NewNullableWithValue(t.Format(time.DateOnly))
+	}
+	out := apitypes.TaxYearEstimate{
+		PaidMinor: e.Paid, From: date(e.From), AheadMinor: e.Ahead, NoRateAhead: e.NoRateAhead,
+		Missing: nullable.NewNullNullable[apitypes.TaxYearEstimateMissing](), MissingOn: date(e.MissingOn), PaysOn: date(e.PaysOn),
+	}
+	if e.Missing != "" {
+		out.Missing = nullable.NewNullableWithValue(apitypes.TaxYearEstimateMissing(e.Missing))
 	}
 	return out
 }
