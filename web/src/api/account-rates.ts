@@ -28,6 +28,8 @@ function useAfterChange(accountId: string) {
   return (data: AccountRates) => {
     queryClient.setQueryData(["account-rates", accountId], data);
     void queryClient.invalidateQueries({ queryKey: ["goals"] });
+    void queryClient.invalidateQueries({ queryKey: ["account-income"] });
+    void queryClient.invalidateQueries({ queryKey: ["tax-year"] });
   };
 }
 

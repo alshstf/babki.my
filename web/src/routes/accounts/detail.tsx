@@ -35,6 +35,7 @@ import { EverydayBalance } from "./everyday-balance";
 import { LoanPanel } from "./loan-panel";
 import { ValuablesPanel } from "./valuables-panel";
 import { CreditCardPanel } from "./credit-card-panel";
+import { IncomePanel } from "./income-panel";
 import { RatePanel } from "./rate-panel";
 import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
@@ -163,6 +164,12 @@ export function AccountDetailPage() {
         <div className="grid gap-2">
           <h2 className="text-lg font-semibold">{t("rates.title")}</h2>
           <RatePanel account={account} canEdit={!readOnly} />
+        </div>
+      )}
+      {(account.type === "savings" || account.type === "deposit") && (
+        <div className="grid gap-2">
+          <h2 className="text-lg font-semibold">{t("depositIncome.title")}</h2>
+          <IncomePanel account={account} />
         </div>
       )}
       {account.type === "credit_card" && (
