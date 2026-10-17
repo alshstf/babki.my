@@ -4,20 +4,24 @@ name: ВТБ-Вклад без пополнения и снятия
 kind: deposit
 watch:
   - https://www.vtb.ru/personal/vklady-i-scheta/vtb-vklad-r/
+  - https://www.vtb.ru/tarify/chastnim-licam/
 editions:
   - from: 2026-10-16
     checked_on: 2026-10-16
     sources:
       - https://www.vtb.ru/media-files/vtb.ru/sitepages/personal/vklady-i-scheta/vtb-vklad-r/vtb_vklad_bez_popolneniya_i_snyatiya.pdf
+      - https://www.vtb.ru/media-files/vtb.ru/sitepages/tarify/chastnim-licam/t_vklady.xlsx
     notes: >-
-      Ставки для пакета «Мультикарта»; у «Привилегии» и Private Banking — свои таблицы, у них ручная ставка. Ставка —
+      Ставки и надбавки — по «Тарифам по депозитам и накопительным счетам» ВТБ (Excel, с 16.10.2026). Ставка —
       сумма базовой и надбавок, действовавших каждый день срока: за зарплату или пенсию на карту ВТБ — пока они
       приходят, за подписку ВТБ Плюс — пока она есть, из этих трёх действует одна; за уровень «Расти с ВТБ» — в месяце
       после того, в котором он присвоен (для вкладов, открытых с 01.09.2026). Надбавки «Новый вкладчик» (180 дней без
       вкладов и накопительных в ВТБ) и «Новые деньги» (которых 90 дней не было на счетах ВТБ) фиксируются на весь срок;
-      «новые деньги» действуют только на новую часть суммы — отметка здесь значит, что новые все деньги вклада.
-      Ежемесячная выплата на вклад и на счёт — по одним ставкам. Досрочно — 0,01 %, надбавки не выплачиваются.
-      Автопродления нет. Вклады с пополнением — по своим таблицам, ручная ставка.
+      «новые деньги» действуют только на новую часть суммы — отметка здесь значит, что новые все деньги вклада. У
+      «Мультикарты» и «Привилегии» базовые ставки одни, надбавки разные: у «Привилегии» за зарплату больше, за
+      подписку — нет; её варианты — онлайн. В юанях — от 1 000 ¥ онлайн, до 0,9 %. Ежемесячная выплата на вклад и на
+      счёт — по одним ставкам. Досрочно — 0,01 %, надбавки не выплачиваются. Автопродления нет. Вклады с
+      пополнением — по своим таблицам, ручная ставка.
     variants:
       - id: online-end
         name: ВТБ Онлайн, проценты в конце срока
@@ -66,12 +70,14 @@ editions:
             group: status
             terms: [{ from: 61, to: 61, plus: "0.3" }, { from: 91, to: 91, plus: "0.3" }, { from: 120, to: 120, plus: "0.3" }, { from: 181, to: 181, plus: "0.3" }, { from: 370, to: 370, plus: "0.3" }, { from: 548, to: 548, plus: "0.3" }, { from: 730, to: 730, plus: "0.2" }, { from: 1095, to: 1095, plus: "0.2" }]
           - id: level
-            name: Уровень «Расти с ВТБ» (Серебряный, Золотой)
+            name: Уровень «Расти с ВТБ» (Серебряный; Золотой; Изумруд–Бриллиант; Private Banking)
             check: manual
             next_month: true
             levels:
               - { from: 1, plus: "0.25" }
               - { from: 2, plus: "0.5" }
+              - { from: 3, plus: "0.6" }
+              - { from: 4, plus: "1.2" }
           - id: new_depositor
             name: Новый вкладчик или новые деньги — на весь вклад
             check: manual
@@ -169,3 +175,103 @@ editions:
           - { from: 730, to: 730, amount_from: 150000000, percent: "8.5" }
           - { from: 1095, to: 1095, amount_from: 150000000, percent: "8.3" }
         bonuses: *vtb-vklad-bonuses
+      - id: privilege-online-end
+        name: «Привилегия», ВТБ Онлайн, проценты в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 1000000, percent: "11" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "11.8" }
+          - { from: 120, to: 120, amount_from: 1000000, percent: "11.8" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "11.8" }
+          - { from: 370, to: 370, amount_from: 1000000, percent: "12" }
+          - { from: 548, to: 548, amount_from: 1000000, percent: "11.5" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "10.2" }
+          - { from: 1095, to: 1095, amount_from: 1000000, percent: "9.8" }
+          - { from: 61, to: 61, amount_from: 50000000, percent: "11" }
+          - { from: 91, to: 91, amount_from: 50000000, percent: "11.9" }
+          - { from: 120, to: 120, amount_from: 50000000, percent: "11.9" }
+          - { from: 181, to: 181, amount_from: 50000000, percent: "11.9" }
+          - { from: 370, to: 370, amount_from: 50000000, percent: "12" }
+          - { from: 548, to: 548, amount_from: 50000000, percent: "11.5" }
+          - { from: 730, to: 730, amount_from: 50000000, percent: "10.2" }
+          - { from: 1095, to: 1095, amount_from: 50000000, percent: "9.8" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "11" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "12" }
+          - { from: 120, to: 120, amount_from: 150000000, percent: "12" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "12" }
+          - { from: 370, to: 370, amount_from: 150000000, percent: "12" }
+          - { from: 548, to: 548, amount_from: 150000000, percent: "11.5" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "10.2" }
+          - { from: 1095, to: 1095, amount_from: 150000000, percent: "9.8" }
+        bonuses: &vtb-vklad-privilege-bonuses
+          - id: salary
+            name: Зарплата в ВТБ
+            check: wages
+            group: status
+            terms: [{ from: 61, to: 61, plus: "1" }, { from: 91, to: 91, plus: "0.5" }, { from: 120, to: 120, plus: "0.5" }, { from: 181, to: 181, plus: "0.6" }, { from: 370, to: 370, plus: "0.9" }, { from: 548, to: 548, plus: "0.5" }, { from: 730, to: 730, plus: "0.5" }, { from: 1095, to: 1095, plus: "0.5" }]
+          - id: pension
+            name: Пенсия в ВТБ
+            check: manual
+            group: status
+            terms: [{ from: 61, to: 61, plus: "1" }, { from: 91, to: 91, plus: "0.5" }, { from: 120, to: 120, plus: "0.5" }, { from: 181, to: 181, plus: "0.6" }, { from: 370, to: 370, plus: "0.9" }, { from: 548, to: 548, plus: "0.5" }, { from: 730, to: 730, plus: "0.5" }, { from: 1095, to: 1095, plus: "0.5" }]
+          - id: level
+            name: Уровень «Расти с ВТБ» (Серебряный; Золотой; Изумруд–Бриллиант; Private Banking)
+            check: manual
+            next_month: true
+            levels:
+              - { from: 1, plus: "0.25" }
+              - { from: 2, plus: "0.5" }
+              - { from: 3, plus: "0.6" }
+              - { from: 4, plus: "1.2" }
+          - id: new_depositor
+            name: Новые деньги — на весь вклад
+            check: manual
+            terms: [{ from: 61, to: 61, plus: "3" }, { from: 91, to: 91, plus: "1.5" }, { from: 120, to: 120, plus: "1.5" }, { from: 181, to: 181, plus: "1.5" }, { from: 370, to: 370, plus: "1.6" }, { from: 548, to: 548, plus: "2.3" }, { from: 730, to: 730, plus: "3.4" }, { from: 1095, to: 1095, plus: "1.1" }]
+      - id: privilege-online-monthly
+        name: «Привилегия», ВТБ Онлайн, проценты ежемесячно
+        payouts: [monthly, capitalize]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 1000000, percent: "10.9" }
+          - { from: 91, to: 91, amount_from: 1000000, percent: "11.6" }
+          - { from: 120, to: 120, amount_from: 1000000, percent: "11.5" }
+          - { from: 181, to: 181, amount_from: 1000000, percent: "11.4" }
+          - { from: 370, to: 370, amount_from: 1000000, percent: "11.2" }
+          - { from: 548, to: 548, amount_from: 1000000, percent: "10.1" }
+          - { from: 730, to: 730, amount_from: 1000000, percent: "8.5" }
+          - { from: 1095, to: 1095, amount_from: 1000000, percent: "8.3" }
+          - { from: 61, to: 61, amount_from: 50000000, percent: "10.9" }
+          - { from: 91, to: 91, amount_from: 50000000, percent: "11.7" }
+          - { from: 120, to: 120, amount_from: 50000000, percent: "11.6" }
+          - { from: 181, to: 181, amount_from: 50000000, percent: "11.5" }
+          - { from: 370, to: 370, amount_from: 50000000, percent: "11.2" }
+          - { from: 548, to: 548, amount_from: 50000000, percent: "10.1" }
+          - { from: 730, to: 730, amount_from: 50000000, percent: "8.5" }
+          - { from: 1095, to: 1095, amount_from: 50000000, percent: "8.3" }
+          - { from: 61, to: 61, amount_from: 150000000, percent: "10.9" }
+          - { from: 91, to: 91, amount_from: 150000000, percent: "11.8" }
+          - { from: 120, to: 120, amount_from: 150000000, percent: "11.7" }
+          - { from: 181, to: 181, amount_from: 150000000, percent: "11.6" }
+          - { from: 370, to: 370, amount_from: 150000000, percent: "11.2" }
+          - { from: 548, to: 548, amount_from: 150000000, percent: "10.1" }
+          - { from: 730, to: 730, amount_from: 150000000, percent: "8.5" }
+          - { from: 1095, to: 1095, amount_from: 150000000, percent: "8.3" }
+        bonuses: *vtb-vklad-privilege-bonuses
+      - id: cny
+        name: В юанях, без пополнения и снятия
+        payouts: [end, monthly, capitalize]
+        ops: none
+        term_unit: days
+        currency: CNY
+        grid:
+          - { from: 61, to: 61, amount_from: 100000, percent: "0.01" }
+          - { from: 91, to: 91, amount_from: 100000, percent: "0.4" }
+          - { from: 120, to: 120, amount_from: 100000, percent: "0.57" }
+          - { from: 181, to: 181, amount_from: 100000, percent: "0.9" }
+          - { from: 370, to: 370, amount_from: 100000, percent: "0.01" }
+          - { from: 548, to: 548, amount_from: 100000, percent: "0.01" }
+          - { from: 730, to: 730, amount_from: 100000, percent: "0.01" }
+          - { from: 1095, to: 1095, amount_from: 100000, percent: "0.01" }

@@ -1,0 +1,180 @@
+id: rshb-dohodny-premium
+bank: rshb
+name: Вклад «Доходный» для пакетов «Премиум» и «Ультра»
+kind: deposit
+watch:
+  - https://www.rshb.ru/natural/packages
+editions:
+  - from: 2026-09-28
+    checked_on: 2026-10-17
+    sources:
+      - https://www.rshb.ru/api/v1/storage/c34619e0-85a6-47c8-9136-8a9ebdc54211/attachment
+      - https://www.rshb.ru/api/v1/storage/c54e9183-c528-411e-8b04-320660f53f3a/attachment
+    notes: >-
+      «Процентные ставки по вкладам ПУ «Премиум» и ПУ «Ультра»» (редакция с 28.09.2026). Для владельцев пакетов:
+      «Премиум» — от 500 000 ₽, «Ультра» — от 1,5 млн ₽; в валюте — от 7 000 (20 000 у «Ультра») долларов или евро,
+      от 20 000 (50 000) юаней, ставки в валюте у пакетов одни. Без пополнения и снятия; срок «1 год 1 месяц» — здесь
+      13 месяцев. Досрочно — 0,01 %.
+    variants:
+      - id: premium-online-end
+        name: «Премиум», дистанционно, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 50000000, percent: "12.9" }
+          - { from: 6, to: 6, amount_from: 50000000, percent: "13.1" }
+          - { from: 9, to: 9, amount_from: 50000000, percent: "12.1" }
+          - { from: 13, to: 13, amount_from: 50000000, percent: "11.1" }
+          - { from: 18, to: 18, amount_from: 50000000, percent: "8.2" }
+          - { from: 24, to: 24, amount_from: 50000000, percent: "8.2" }
+          - { from: 36, to: 36, amount_from: 50000000, percent: "8.2" }
+      - id: premium-online-monthly
+        name: «Премиум», дистанционно, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 50000000, percent: "12.7" }
+          - { from: 6, to: 6, amount_from: 50000000, percent: "12.7" }
+          - { from: 9, to: 9, amount_from: 50000000, percent: "11.5" }
+          - { from: 13, to: 13, amount_from: 50000000, percent: "10.4" }
+          - { from: 18, to: 18, amount_from: 50000000, percent: "7.75" }
+          - { from: 24, to: 24, amount_from: 50000000, percent: "7.6" }
+          - { from: 36, to: 36, amount_from: 50000000, percent: "7.35" }
+      - id: premium-office-end
+        name: «Премиум», в офисе, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 50000000, percent: "12.5" }
+          - { from: 6, to: 6, amount_from: 50000000, percent: "12.7" }
+          - { from: 9, to: 9, amount_from: 50000000, percent: "11.7" }
+          - { from: 13, to: 13, amount_from: 50000000, percent: "10.7" }
+          - { from: 18, to: 18, amount_from: 50000000, percent: "7.8" }
+          - { from: 24, to: 24, amount_from: 50000000, percent: "7.8" }
+          - { from: 36, to: 36, amount_from: 50000000, percent: "7.8" }
+      - id: premium-office-monthly
+        name: «Премиум», в офисе, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 50000000, percent: "12.3" }
+          - { from: 6, to: 6, amount_from: 50000000, percent: "12.3" }
+          - { from: 9, to: 9, amount_from: 50000000, percent: "11.15" }
+          - { from: 13, to: 13, amount_from: 50000000, percent: "10.05" }
+          - { from: 18, to: 18, amount_from: 50000000, percent: "7.4" }
+          - { from: 24, to: 24, amount_from: 50000000, percent: "7.25" }
+          - { from: 36, to: 36, amount_from: 50000000, percent: "7" }
+      - id: ultra-online-end
+        name: «Ультра», дистанционно, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 150000000, percent: "12.7" }
+          - { from: 3, to: 3, amount_from: 150000000, percent: "12.9" }
+          - { from: 4, to: 4, amount_from: 150000000, percent: "13.6" }
+          - { from: 6, to: 6, amount_from: 150000000, percent: "13.1" }
+          - { from: 9, to: 9, amount_from: 150000000, percent: "12.1" }
+          - { from: 13, to: 13, amount_from: 150000000, percent: "11.1" }
+          - { from: 18, to: 18, amount_from: 150000000, percent: "8.2" }
+          - { from: 24, to: 24, amount_from: 150000000, percent: "8.2" }
+          - { from: 36, to: 36, amount_from: 150000000, percent: "8.2" }
+      - id: ultra-online-monthly
+        name: «Ультра», дистанционно, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 150000000, percent: "12.6" }
+          - { from: 3, to: 3, amount_from: 150000000, percent: "12.7" }
+          - { from: 4, to: 4, amount_from: 150000000, percent: "13.2" }
+          - { from: 6, to: 6, amount_from: 150000000, percent: "12.7" }
+          - { from: 9, to: 9, amount_from: 150000000, percent: "11.5" }
+          - { from: 13, to: 13, amount_from: 150000000, percent: "10.4" }
+          - { from: 18, to: 18, amount_from: 150000000, percent: "7.75" }
+          - { from: 24, to: 24, amount_from: 150000000, percent: "7.6" }
+          - { from: 36, to: 36, amount_from: 150000000, percent: "7.35" }
+      - id: ultra-office-end
+        name: «Ультра», в офисе, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 150000000, percent: "12.3" }
+          - { from: 3, to: 3, amount_from: 150000000, percent: "12.5" }
+          - { from: 4, to: 4, amount_from: 150000000, percent: "13.2" }
+          - { from: 6, to: 6, amount_from: 150000000, percent: "12.7" }
+          - { from: 9, to: 9, amount_from: 150000000, percent: "11.7" }
+          - { from: 13, to: 13, amount_from: 150000000, percent: "10.7" }
+          - { from: 18, to: 18, amount_from: 150000000, percent: "7.8" }
+          - { from: 24, to: 24, amount_from: 150000000, percent: "7.8" }
+          - { from: 36, to: 36, amount_from: 150000000, percent: "7.8" }
+      - id: ultra-office-monthly
+        name: «Ультра», в офисе, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 2, to: 2, amount_from: 150000000, percent: "12.2" }
+          - { from: 3, to: 3, amount_from: 150000000, percent: "12.3" }
+          - { from: 4, to: 4, amount_from: 150000000, percent: "12.9" }
+          - { from: 6, to: 6, amount_from: 150000000, percent: "12.3" }
+          - { from: 9, to: 9, amount_from: 150000000, percent: "11.15" }
+          - { from: 13, to: 13, amount_from: 150000000, percent: "10.05" }
+          - { from: 18, to: 18, amount_from: 150000000, percent: "7.4" }
+          - { from: 24, to: 24, amount_from: 150000000, percent: "7.25" }
+          - { from: 36, to: 36, amount_from: 150000000, percent: "7" }
+      - id: usd
+        name: В долларах
+        payouts: [end, monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 700000, percent: "0.5" }
+          - { from: 6, to: 6, amount_from: 700000, percent: "0.75" }
+          - { from: 9, to: 9, amount_from: 700000, percent: "0.75" }
+          - { from: 13, to: 13, amount_from: 700000, percent: "1" }
+        currency: USD
+      - id: eur
+        name: В евро
+        payouts: [end, monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 700000, percent: "0.01" }
+          - { from: 6, to: 6, amount_from: 700000, percent: "0.01" }
+          - { from: 9, to: 9, amount_from: 700000, percent: "0.15" }
+          - { from: 13, to: 13, amount_from: 700000, percent: "0.5" }
+        currency: EUR
+      - id: cny-end
+        name: В юанях, в конце срока
+        payouts: [end]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 2000000, percent: "2.5" }
+          - { from: 6, to: 6, amount_from: 2000000, percent: "3" }
+          - { from: 9, to: 9, amount_from: 2000000, percent: "3.25" }
+          - { from: 13, to: 13, amount_from: 2000000, percent: "3.5" }
+          - { from: 18, to: 18, amount_from: 2000000, percent: "3" }
+          - { from: 24, to: 24, amount_from: 2000000, percent: "3" }
+          - { from: 36, to: 36, amount_from: 2000000, percent: "3" }
+        currency: CNY
+      - id: cny-monthly
+        name: В юанях, ежемесячно
+        payouts: [monthly]
+        ops: none
+        term_unit: months
+        grid:
+          - { from: 3, to: 3, amount_from: 2000000, percent: "2.45" }
+          - { from: 6, to: 6, amount_from: 2000000, percent: "2.95" }
+          - { from: 9, to: 9, amount_from: 2000000, percent: "3.2" }
+          - { from: 13, to: 13, amount_from: 2000000, percent: "3.4" }
+          - { from: 18, to: 18, amount_from: 2000000, percent: "2.9" }
+          - { from: 24, to: 24, amount_from: 2000000, percent: "2.9" }
+          - { from: 36, to: 36, amount_from: 2000000, percent: "2.85" }
+        currency: CNY

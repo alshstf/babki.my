@@ -8,6 +8,7 @@ editions:
   - from: 2026-10-03
     checked_on: 2026-10-16
     sources:
+      - https://www.gazprombank.ru/upload/files/iblock/4c3/z72dwz4ammlwykuv5p0n9vwgmnickwhf/Usloviya-Nadbavok-k-protsentnym-stavkam-po-vkladam-s-01.10.2026.pdf
       - https://www.gazprombank.ru/upload/files/iblock/533/5s09ko7zs0scy01ldc4qvlwrib4q6d4y/Pasport-Kopit-s-vyplatoy-protsentov-v-kontse-sroka-s-03.10.2026.pdf
       - https://www.gazprombank.ru/upload/files/iblock/e13/lsjtxg71z9d2s12x41692c99pmjy386u/Usloviya-srochnogo-bankovskogo-vklada-Kopit-s-vyplatoy-protsentov-v-kontse-sroka-s-08.08.2026.pdf
     notes: >-
@@ -15,7 +16,8 @@ editions:
       контакт-центр) — от 15 000 ₽ и на 1 п. п. выше, в отделении — от 300 000 ₽. Надбавка 0,2 п. п. за одно из:
       пенсия из Соцфонда или зарплата на карту Газпромбанка в месяц открытия (продления) или в предыдущий; 90 дней без
       вкладов и накопительных счетов в банке — она фиксируется при открытии, поэтому отмечается вручную. Досрочно —
-      0,01 %. Продление — на тот же срок по ставкам дня продления. Вклады с ежемесячной выплатой и капитализацией —
+      0,01 %. Продление — на тот же срок по ставкам дня продления; за продление — надбавка 0,8 п. п. («Условия
+      надбавок к процентным ставкам по вкладам» с 01.10.2026), отметьте её у продлённого вклада. Вклады с ежемесячной выплатой и капитализацией —
       по своим ставкам, ручная ставка.
     variants:
       - id: online
@@ -36,6 +38,7 @@ editions:
           - { id: pension, name: Пенсия на карту Газпромбанка при открытии, plus: "0.2", check: manual, group: segment }
           - { id: salary, name: Зарплата на карту Газпромбанка при открытии, plus: "0.2", check: manual, group: segment }
           - { id: new_depositor, name: Новый вкладчик (90 дней без вкладов и накопительных), plus: "0.2", check: manual, group: segment }
+          - { id: prolongation, name: Вклад продлён (за пролонгацию), plus: "0.8", check: manual }
       - id: office
         name: В отделении
         payouts: [end]
