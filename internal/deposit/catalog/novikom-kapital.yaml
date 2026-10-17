@@ -10,12 +10,17 @@ editions:
     sources:
       - https://novikom.ru/deposit/
       - https://novikom.ru/documents/minimalnye-garantirovannye-stavki-po-vkladam-06102026.pdf
+      - https://novikom.ru/documents/pasport-vklada-premium-kapital-12082026.pdf
     notes: >-
       Ставки страницы вклада и минимальные гарантированные ставки с 07.10.2026. Ступень — по первоначальному взносу:
       в рублях от 10 000 ₽ и от 1 млн ₽, в юанях от 10 000 и от 100 000 ¥. Без пополнения и снятия, проценты
       присоединяются в день окончания срока. Линейки «Капитал Социальный» (для получателей соцвыплат),
       «Капитал зарплатный онлайн» (для зарплатных клиентов) и премиальные — отдельными вариантами; у них здесь —
-      ставки минимального взноса (у бо́льших сумм банк может давать выше).
+      ставки минимального взноса (у бо́льших сумм банк может давать выше). Ступени больших сумм есть только в
+      «Сборнике условий» от 12.08.2026, а часть его клеток с 07.10 изменилась (181 день у зарплатного — 12,9 там и
+      12,6 с 07.10), поэтому их нет. «Premium Капитал» — от 3,5 млн ₽, 1 млн ¥ или 100 000 $ (паспорт вклада).
+      «Капитал премиум онлайн» — таблица страницы вклада, кроме 181 дня: на странице 13,3 % от 10 млн ₽, в
+      минимальных ставках с 07.10 — 13,1 %, поэтому 181 день — 13,1 % на любую сумму от 10 млн ₽.
     variants:
       - id: rub
         name: В рублях
@@ -78,11 +83,32 @@ editions:
         ops: none
         term_unit: days
         grid:
-          - { from: 91, to: 91, amount_from: 1000000, percent: "13.1" }
-          - { from: 181, to: 181, amount_from: 1000000, percent: "12.5" }
-          - { from: 367, to: 367, amount_from: 1000000, percent: "11.5" }
-          - { from: 730, to: 730, amount_from: 1000000, percent: "9.7" }
-          - { from: 1100, to: 1100, amount_from: 1000000, percent: "9.7" }
+          - { from: 91, to: 91, amount_from: 350000000, percent: "13.1" }
+          - { from: 181, to: 181, amount_from: 350000000, percent: "12.5" }
+          - { from: 367, to: 367, amount_from: 350000000, percent: "11.5" }
+          - { from: 730, to: 730, amount_from: 350000000, percent: "9.7" }
+          - { from: 1100, to: 1100, amount_from: 350000000, percent: "9.7" }
+      - id: premium-cny
+        name: «Премиум / Premium Капитал» в юанях
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 100000000, percent: "2.1" }
+          - { from: 181, to: 181, amount_from: 100000000, percent: "2.6" }
+          - { from: 367, to: 367, amount_from: 100000000, percent: "2.8" }
+          - { from: 730, to: 730, amount_from: 100000000, percent: "3.3" }
+          - { from: 1100, to: 1100, amount_from: 100000000, percent: "3.3" }
+        currency: CNY
+      - id: premium-usd
+        name: «Премиум / Premium Капитал» в долларах
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 181, to: 181, amount_from: 10000000, percent: "0.15" }
+          - { from: 367, to: 367, amount_from: 10000000, percent: "2" }
+        currency: USD
       - id: premium-online
         name: «Капитал премиум онлайн»
         payouts: [end]
@@ -90,17 +116,15 @@ editions:
         term_unit: days
         grid:
           - { from: 91, to: 91, amount_from: 1000000000, percent: "13.4" }
-          - { from: 181, to: 181, amount_from: 1000000000, percent: "13.3" }
+          - { from: 181, to: 181, amount_from: 1000000000, percent: "13.1" }
           - { from: 367, to: 367, amount_from: 1000000000, percent: "12.1" }
           - { from: 730, to: 730, amount_from: 1000000000, percent: "10" }
           - { from: 1110, to: 1110, amount_from: 1000000000, percent: "10" }
           - { from: 91, to: 91, amount_from: 5000000000, percent: "13.8" }
-          - { from: 181, to: 181, amount_from: 5000000000, percent: "13.7" }
           - { from: 367, to: 367, amount_from: 5000000000, percent: "12.4" }
           - { from: 730, to: 730, amount_from: 5000000000, percent: "10" }
           - { from: 1110, to: 1110, amount_from: 5000000000, percent: "10" }
           - { from: 91, to: 91, amount_from: 10000000000, percent: "13.9" }
-          - { from: 181, to: 181, amount_from: 10000000000, percent: "13.8" }
           - { from: 367, to: 367, amount_from: 10000000000, percent: "12.5" }
           - { from: 730, to: 730, amount_from: 10000000000, percent: "10" }
           - { from: 1110, to: 1110, amount_from: 10000000000, percent: "10" }
