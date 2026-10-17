@@ -4633,12 +4633,11 @@ components:
         currency: { type: string, description: "RUB: the central bank prices metals in roubles" }
     TaxYear:
       type: object
-      required: [year, supported, currency, declare_by, pay_by, notice_by, key_rate, by_balance, to_pay_minor, refund_minor, people]
+      required: [year, supported, currency, declare_by, pay_by, notice_by, key_rate, to_pay_minor, refund_minor, people]
       properties:
         year: { type: integer }
         notice_by: { type: string, description: "Date YYYY-MM-DD: the last day to pay the tax on deposits' interest, which the tax office asks for by notice" }
         key_rate: { type: string, nullable: true, description: "Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown" }
-        by_balance: { type: integer, description: "Deposits and savings accounts kept by their balance: their interest is not in the journal, so not in the estimate" }
         to_pay_minor: { type: integer, format: int64, description: "The people's to_pay_minor summed" }
         refund_minor: { type: integer, format: int64, description: "The people's refund_minor summed" }
         supported: { type: boolean, description: "False when the space's tax residency has no rules for the year's tax; people is then empty" }
@@ -4648,7 +4647,7 @@ components:
         people: { type: array, items: { $ref: "#/components/schemas/TaxYearPerson" }, description: "The space's owner first; a person with no counted account is absent" }
     TaxYearPerson:
       type: object
-      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, wages_net_minor, wages_minor, wages_tax_minor, wages_withheld_minor, wages_to_pay_minor, employers, wage_payments, property_sold_minor, property_gain_minor, property_base_minor, property_free, unvalued, accounts]
+      required: [user_id, name, base_minor, tax_minor, by_agents_minor, withheld_minor, credit_minor, to_pay_minor, refund_minor, interest_minor, interest_free_minor, by_notice_minor, wages_net_minor, wages_minor, wages_tax_minor, wages_withheld_minor, wages_to_pay_minor, employers, wage_payments, property_sold_minor, property_gain_minor, property_base_minor, property_free, unvalued, accounts, interest_estimated_minor, interest_counted_minor, interest_ahead_minor, by_notice_year_end_minor]
       properties:
         user_id: { type: string, format: uuid }
         name: { type: string }
@@ -4660,8 +4659,12 @@ components:
         to_pay_minor: { type: integer, format: int64, description: "Left to pay by return: on the investment incomes tax_minor less by_notice_minor, credit_minor and by_agents_minor, not below zero, plus wages_to_pay_minor" }
         refund_minor: { type: integer, format: int64, description: "What the agents withhold past the tax due after the credit — a loss on one broker the others did not see — that a return gets back; 0 otherwise" }
         interest_minor: { type: integer, format: int64, description: "Interest the banks' accounts kept by their operations paid in the year" }
-        interest_free_minor: { type: integer, format: int64, nullable: true, description: "What of it is free of tax: 1 млн × the year's highest key rate; null without the rate" }
+        interest_estimated_minor: { type: integer, format: int64, description: "Interest the deposits and savings accounts kept by their balance paid in the year to today, estimated by their rates on the balance marks (each account's in accounts[].estimate)" }
+        interest_counted_minor: { type: integer, format: int64, description: "interest_minor and interest_estimated_minor together: the interest the tax counts" }
+        interest_free_minor: { type: integer, format: int64, nullable: true, description: "What of interest_counted_minor is free of tax: 1 млн × the year's highest key rate; null without the rate" }
         by_notice_minor: { type: integer, format: int64, description: "The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor" }
+        interest_ahead_minor: { type: integer, format: int64, description: "This year: what the deposits' and savings accounts' rates bring after today to 31 December, on their money today; 0 for a past year" }
+        by_notice_year_end_minor: { type: integer, format: int64, nullable: true, description: "This year: the tax on the interest with interest_ahead_minor in, the other incomes as they stand today, the year's highest key rate so far; null for a past year" }
         wages_net_minor: { type: integer, format: int64, description: "Wages as they reached the accounts" }
         wages_minor: { type: integer, format: int64, description: "Wages before tax: earnings under categories marked wages, a payment's as its payslip says where written, else reckoned from what reached the account by the wages' scale over the employer's year" }
         wages_tax_minor: { type: integer, format: int64, description: "The tax on wages_minor by the wages' scale (13, 15, 18, 20, 22 %)" }
@@ -4857,6 +4860,21 @@ components:
         securities_minor: { type: integer, format: int64, description: "The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons" }
         agent_tax_minor: { type: integer, format: int64, description: "What the broker withholds for the year as a tax agent; 0 for a broker abroad" }
         unvalued: { type: integer }
+        estimate:
+          nullable: true
+          description: "A deposit's or savings account's interest by its rate; null for a broker's or an account without one"
+          allOf:
+            - $ref: "#/components/schemas/TaxYearEstimate"
+    TaxYearEstimate:
+      type: object
+      required: [paid_minor, from, ahead_minor, missing, missing_on, no_rate_ahead]
+      properties:
+        paid_minor: { type: integer, format: int64, description: "An account kept by its balance: what the year paid to today by its rate on the balance marks — each day its balance × the day's rate / the year's days, paid on each month's last day or the term's end; 0 for one kept by its journal, whose interest is in interest_minor" }
+        from: { type: string, nullable: true, description: "Date YYYY-MM-DD: the first balance mark, when it came after the stretch began — no money is known before it, so none is counted" }
+        ahead_minor: { type: integer, format: int64, description: "This year: what is still to come after today to 31 December" }
+        missing: { type: string, nullable: true, enum: [rate, how_paid, currency], description: "Why what the year paid is not estimated: rate — money on a day without a rate (missing_on); how_paid — a deposit whose term or way of payment is not known (no programme of its bank, or a variant with more than one way); currency — not in the tax's currency" }
+        missing_on: { type: string, nullable: true, description: "Date YYYY-MM-DD: with missing rate, the first day with money and no rate" }
+        no_rate_ahead: { type: boolean, description: "What is to come is not estimated: no rate today" }
     AllocationTarget:
       type: object
       required: [key, percent]

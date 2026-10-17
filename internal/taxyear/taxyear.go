@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/interest"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
@@ -57,6 +58,12 @@ type Service struct {
 	categories categories
 	// For the bars and coins sold (WithProperty).
 	property soldPieces
+	// For the deposits' and savings accounts' interest by their rates
+	// (WithInterest).
+	earning      earningStore
+	earnKeys     interest.KeyRates
+	earnMeasures interest.Measures
+	cash         cash
 	// For the wages written by hand (WithEntries).
 	db  db.Executor
 	ops operations
@@ -105,6 +112,9 @@ type Account struct {
 	// withholds on them for the year, nothing for a broker abroad.
 	Securities, Dividends int64
 	AgentTax              int64
+	// Estimate is a deposit's or savings account's interest by its rate:
+	// what the year paid when it is kept by its balance, what is to come.
+	Estimate *Estimate
 }
 
 // Person is one person's year.
@@ -123,13 +133,19 @@ type Person struct {
 	// agents took past the tax — a loss on one broker they did not see —
 	// that a return gets back.
 	Tax, ByAgents, Withheld, Credit, ToPay, Refund int64
-	// Interest is what the banks paid; InterestFree what of it is free of
-	// tax (1 млн × the year's highest key rate), nil without the rate;
-	// ByNotice the tax on the rest, which the tax office asks for by notice —
-	// part of Tax, not of ToPay.
-	Interest     int64
-	InterestFree *int64
-	ByNotice     int64
+	// Interest is what the banks paid by the journals; InterestEstimated
+	// what the accounts kept by their balance paid, by their rates;
+	// InterestFree what of the two is free of tax (1 млн × the year's
+	// highest key rate), nil without the rate; ByNotice the tax on the rest,
+	// which the tax office asks for by notice — part of Tax, not of ToPay.
+	// InterestAhead is what the rates bring after today to the year's end,
+	// and ByNoticeYearEnd the tax on the interest with it; nil but this year.
+	Interest          int64
+	InterestEstimated int64
+	InterestFree      *int64
+	ByNotice          int64
+	InterestAhead     int64
+	ByNoticeYearEnd   *int64
 	// Employers are the wages by employer, as reckoned from what reached the
 	// accounts; Wages their gross, WagesTax the tax on it by the wages'
 	// scale, WagesWithheld what the employers withheld, each on its own;
@@ -158,10 +174,8 @@ type Year struct {
 	// DeclareBy and PayBy are the return's and the payment's last days;
 	// NoticeBy the last day to pay the tax on deposits' interest.
 	DeclareBy, PayBy, NoticeBy time.Time
-	// KeyRate is the year's highest so far, nil when unknown; ByBalance the
-	// deposits and savings kept by their balance, whose interest is not in.
-	KeyRate   *decimal.Decimal
-	ByBalance int
+	// KeyRate is the year's highest so far, nil when unknown.
+	KeyRate *decimal.Decimal
 }
 
 // Of estimates year for the space.
@@ -206,14 +220,25 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	for _, a := range list {
 		byID[a.ID] = a.Account
 	}
-	byBalance := 0
+	est, err := s.estimates(ctx, spaceID, list, year, rules.TaxCurrency)
+	if err != nil {
+		return Year{}, err
+	}
 	for _, a := range list {
 		if a.Status != account.StatusActive {
 			continue
 		}
 		bank := a.Type == account.TypeChecking || a.Type == account.TypeSavings || a.Type == account.TypeDeposit
-		if bank && !account.CountedByJournal(a.Account) && (a.Type == account.TypeSavings || a.Type == account.TypeDeposit) {
-			byBalance++
+		e, estimated := est[a.ID]
+		said := estimated && (e.Paid != 0 || e.Ahead != 0 || e.Missing != "" || e.NoRateAhead)
+		if bank && !account.CountedByJournal(a.Account) {
+			if said {
+				p := personOf(a.Account)
+				p.Accounts = append(p.Accounts, Account{ID: a.ID, Name: a.Name, Bank: true, Estimate: &e})
+				p.InterestEstimated += e.Paid
+				p.InterestAhead += e.Ahead
+			}
+			continue
 		}
 		if !account.CountedByJournal(a.Account) || (a.Type != account.TypeBrokerage && !bank) {
 			continue
@@ -223,11 +248,16 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			return Year{}, fmt.Errorf("taxyear: account %s: %w", a.ID, err)
 		}
 		if bank {
-			if f.Interest == 0 && f.Unvalued == 0 {
+			if f.Interest == 0 && f.Unvalued == 0 && !said {
 				continue
 			}
 			p := personOf(a.Account)
-			p.Accounts = append(p.Accounts, Account{ID: a.ID, Name: a.Name, Bank: true, Facts: f})
+			acc := Account{ID: a.ID, Name: a.Name, Bank: true, Facts: f}
+			if said {
+				acc.Estimate = &e
+				p.InterestAhead += e.Ahead
+			}
+			p.Accounts = append(p.Accounts, acc)
 			p.Interest += f.Interest
 			p.Unvalued += f.Unvalued
 			continue
@@ -299,15 +329,16 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		}
 	}
 	out := Year{
-		Year: year, Currency: rules.TaxCurrency, People: []Person{}, ByBalance: byBalance,
+		Year: year, Currency: rules.TaxCurrency, People: []Person{},
 		DeclareBy: time.Date(year+1, time.April, 30, 0, 0, 0, 0, time.UTC),
 		PayBy:     time.Date(year+1, time.July, 15, 0, 0, 0, 0, time.UTC),
 		NoticeBy:  time.Date(year+1, time.December, 1, 0, 0, 0, 0, time.UTC),
 	}
 	// The year's highest key rate so far: for this year it may still rise.
 	end := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	thisYear := false
 	if today := s.now().UTC(); today.Before(end) {
-		end = today
+		end, thisYear = today, true
 	}
 	rate, known, err := s.keys.HighestKeyRate(ctx, time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC), end)
 	if err != nil {
@@ -324,11 +355,12 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			dividends += a.Dividends
 		}
 		invested := max(securities, 0) + dividends
-		var taxable int64
+		var taxable, taxableYearEnd int64
 		if known {
 			free := rate.Mul(decimal.NewFromInt(interestFreeBase)).Div(decimal.NewFromInt(100)).Round(0).IntPart()
 			p.InterestFree = &free
-			taxable = max(p.Interest-free, 0)
+			taxable = max(p.Interest+p.InterestEstimated-free, 0)
+			taxableYearEnd = max(p.Interest+p.InterestEstimated+p.InterestAhead-free, 0)
 		}
 		p.PropertyBase = max(min(p.PropertyGain, p.PropertySold-rules.PropertyDeductionMinor), 0)
 		invested += p.PropertyBase
@@ -336,6 +368,13 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		p.Tax = family.Banded(rules.InvestmentBands[:], p.Base, rules.TaxUnitMinor)
 		// The interest's tax is what it adds on top of the rest.
 		p.ByNotice = p.Tax - family.Banded(rules.InvestmentBands[:], invested, rules.TaxUnitMinor)
+		if thisYear {
+			// What the rest of the year's interest adds, the other incomes as
+			// they stand today.
+			v := family.Banded(rules.InvestmentBands[:], invested+taxableYearEnd, rules.TaxUnitMinor) -
+				family.Banded(rules.InvestmentBands[:], invested, rules.TaxUnitMinor)
+			p.ByNoticeYearEnd = &v
+		}
 		due := max(p.Tax-p.ByNotice-p.Credit, 0)
 		p.ToPay, p.Refund = max(due-p.ByAgents, 0), max(p.ByAgents-due, 0)
 		p.Employers, p.WagePayments = wagesOf(rules.MainBands[:], rules.TaxUnitMinor, wages[who], entered)

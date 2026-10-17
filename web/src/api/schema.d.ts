@@ -3911,8 +3911,6 @@ export interface components {
             notice_by: string;
             /** @description Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown */
             key_rate: string | null;
-            /** @description Deposits and savings accounts kept by their balance: their interest is not in the journal, so not in the estimate */
-            by_balance: number;
             /**
              * Format: int64
              * @description The people's to_pay_minor summed
@@ -3980,7 +3978,17 @@ export interface components {
             interest_minor: number;
             /**
              * Format: int64
-             * @description What of it is free of tax: 1 млн × the year's highest key rate; null without the rate
+             * @description Interest the deposits and savings accounts kept by their balance paid in the year to today, estimated by their rates on the balance marks (each account's in accounts[].estimate)
+             */
+            interest_estimated_minor: number;
+            /**
+             * Format: int64
+             * @description interest_minor and interest_estimated_minor together: the interest the tax counts
+             */
+            interest_counted_minor: number;
+            /**
+             * Format: int64
+             * @description What of interest_counted_minor is free of tax: 1 млн × the year's highest key rate; null without the rate
              */
             interest_free_minor: number | null;
             /**
@@ -3988,6 +3996,16 @@ export interface components {
              * @description The tax on the interest past the free part, which the tax office asks for by notice by notice_by; part of tax_minor, not of to_pay_minor
              */
             by_notice_minor: number;
+            /**
+             * Format: int64
+             * @description This year: what the deposits' and savings accounts' rates bring after today to 31 December, on their money today; 0 for a past year
+             */
+            interest_ahead_minor: number;
+            /**
+             * Format: int64
+             * @description This year: the tax on the interest with interest_ahead_minor in, the other incomes as they stand today, the year's highest key rate so far; null for a past year
+             */
+            by_notice_year_end_minor: number | null;
             /**
              * Format: int64
              * @description Wages as they reached the accounts
@@ -4355,6 +4373,31 @@ export interface components {
              */
             agent_tax_minor: number;
             unvalued: number;
+            /** @description A deposit's or savings account's interest by its rate; null for a broker's or an account without one */
+            estimate?: components["schemas"]["TaxYearEstimate"] | null;
+        };
+        TaxYearEstimate: {
+            /**
+             * Format: int64
+             * @description An account kept by its balance: what the year paid to today by its rate on the balance marks — each day its balance × the day's rate / the year's days, paid on each month's last day or the term's end; 0 for one kept by its journal, whose interest is in interest_minor
+             */
+            paid_minor: number;
+            /** @description Date YYYY-MM-DD: the first balance mark, when it came after the stretch began — no money is known before it, so none is counted */
+            from: string | null;
+            /**
+             * Format: int64
+             * @description This year: what is still to come after today to 31 December
+             */
+            ahead_minor: number;
+            /**
+             * @description Why what the year paid is not estimated: rate — money on a day without a rate (missing_on); how_paid — a deposit whose term or way of payment is not known (no programme of its bank, or a variant with more than one way); currency — not in the tax's currency
+             * @enum {string|null}
+             */
+            missing: "rate" | "how_paid" | "currency" | null;
+            /** @description Date YYYY-MM-DD: with missing rate, the first day with money and no rate */
+            missing_on: string | null;
+            /** @description What is to come is not estimated: no rate today */
+            no_rate_ahead: boolean;
         };
         AllocationTarget: {
             key: string;

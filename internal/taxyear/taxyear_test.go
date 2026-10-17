@@ -166,8 +166,8 @@ func bank(name string, typ account.Type, owner *uuid.UUID, kept bool) account.Wi
 // Deposits' interest: free up to 1 млн × the year's highest key rate (21 % —
 // 210 000); Maria's 400 000 leaves 190 000, 13 % by notice. Alex's interest
 // sits above his 2,4 млн on papers, so its tax is at 15 %, all by notice,
-// none of it his to pay by return. A deposit kept by its balance is counted
-// apart: its interest is not known.
+// none of it his to pay by return. A deposit kept by its balance has no
+// interest in a journal: without rates it is not in.
 func TestDepositsInterest(t *testing.T) {
 	alex, maria := member("Алекс", family.RoleOwner), member("Мария", family.RoleEditor)
 	t1 := broker("Т-Банк", &alex.ID, false)
@@ -183,7 +183,7 @@ func TestDepositsInterest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if y.KeyRate == nil || !y.KeyRate.Equal(decimal.NewFromInt(21)) || y.ByBalance != 1 || y.NoticeBy.Format("2006-01-02") != "2026-12-01" {
+	if y.KeyRate == nil || !y.KeyRate.Equal(decimal.NewFromInt(21)) || y.NoticeBy.Format("2006-01-02") != "2026-12-01" {
 		t.Fatalf("year = %+v", y)
 	}
 	a, m := y.People[0], y.People[1]

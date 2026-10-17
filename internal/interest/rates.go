@@ -163,3 +163,13 @@ func (r Rates) Pays(a account.Account) (pays Pays, opened time.Time, ok bool) {
 	}
 	return pays, b.OpenedOn.AddDate(0, 0, 1), true
 }
+
+// Opening is a deposit's day of opening and the sum it was opened with, by
+// its programme; ok is false without them.
+func (r Rates) Opening(id uuid.UUID) (on time.Time, amount int64, ok bool) {
+	b := r.sources[id].Binding
+	if b == nil || b.Amount == nil {
+		return time.Time{}, 0, false
+	}
+	return b.OpenedOn, *b.Amount, true
+}
