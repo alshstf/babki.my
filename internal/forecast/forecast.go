@@ -390,7 +390,7 @@ func (s *Service) interest(
 	if s.earning == nil || len(held) == 0 {
 		return nil, earns, nil
 	}
-	rates, err := interest.Load(ctx, spaceID, s.earning, s.keys, s.measures)
+	rates, err := interest.Load(ctx, spaceID, today, s.earning, s.keys, s.measures)
 	if err != nil {
 		return nil, nil, err
 	}

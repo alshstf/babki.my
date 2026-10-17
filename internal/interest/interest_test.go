@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/deposit"
 	"babki.my/babki/internal/interest"
 )
 
@@ -154,7 +155,7 @@ func (s store) AllMarks(context.Context, uuid.UUID) (map[uuid.UUID][]account.Mar
 func TestHowTheAccountsInterestIsPaid(t *testing.T) {
 	term := func(n int) *int { return &n }
 	byDays, byMonths, twoWays, none := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	rates, err := interest.Load(context.Background(), uuid.New(), store{bindings: map[uuid.UUID]account.Binding{
+	rates, err := interest.Load(context.Background(), uuid.New(), day("2026-10-17"), store{bindings: map[uuid.UUID]account.Binding{
 		byDays:   {Programme: "novikom-kapital", Variant: "rub", OpenedOn: day("2026-10-16"), Term: term(91)},
 		byMonths: {Programme: "sber-sbervklad", Variant: "end", OpenedOn: day("2026-10-16"), Term: term(6)},
 		// «СберВклад» monthly: paid onto a card or added to the sum — the
@@ -200,7 +201,7 @@ func TestTheKeyRateOfADayIsReadOnce(t *testing.T) {
 	// Key rate 16 % less 1,5: 1 000 000 ₽ × 0,145 × 31 / 365 for October.
 	id := uuid.New()
 	k := &keys{}
-	rates, err := interest.Load(context.Background(), uuid.New(), store{rates: map[uuid.UUID][]account.Rate{
+	rates, err := interest.Load(context.Background(), uuid.New(), day("2026-10-17"), store{rates: map[uuid.UUID][]account.Rate{
 		id: {{From: day("2026-01-01"), Kind: account.RateKey, Percent: decimal.RequireFromString("-1.5"), ByHand: true}},
 	}}, k, nil)
 	if err != nil {
@@ -215,5 +216,54 @@ func TestTheKeyRateOfADayIsReadOnce(t *testing.T) {
 	}
 	if k.asked != 31 {
 		t.Errorf("the key rate was read %d times for 31 days", k.asked)
+	}
+}
+
+type measures map[string]int64
+
+func (m measures) MeasuresFor(context.Context, uuid.UUID) (account.Measure, error) {
+	return func(_ string, check deposit.Check, month time.Time) (int64, bool) {
+		v, ok := m[string(check)+" "+month.Format("2006-01")]
+		return v, ok
+	}, nil
+}
+
+// A day ahead keeps the conditions as they stand today: ВТБ-Счёт on the daily
+// balance, 5 % + 2 for the wages + 4 for 55 500 ₽ spent in September, the
+// last month finished on 17 October. November is not told by October, half
+// gone, nor December by November, with no data yet.
+func TestADayAheadKeepsTodaysConditions(t *testing.T) {
+	id := uuid.New()
+	rates, err := interest.Load(context.Background(), uuid.New(), day("2026-10-17"), store{bindings: map[uuid.UUID]account.Binding{
+		id: {Programme: "vtb-schet", Variant: "daily", OpenedOn: day("2026-01-10"), Conditions: account.ConditionsAuto},
+	}}, nil, measures{
+		"card_spend 2026-09": 55_500_00, "wages 2026-09": 150_000_00,
+		"card_spend 2026-10": 10_000_00,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, on := range []string{"2026-10-17", "2026-11-15", "2026-12-20"} {
+		res, ok, err := rates.On(id, day(on), 1_000_000_00)
+		if err != nil || !ok || !res.Percent.Equal(decimal.NewFromInt(11)) {
+			t.Errorf("%s: %s %v %v, want 11", on, res.Percent, ok, err)
+		}
+	}
+	// Seen from 10 November, October is the last month finished — 10 000 ₽
+	// spent, no wages known: 5 % ahead; a September day is still told by
+	// September.
+	rates, err = interest.Load(context.Background(), uuid.New(), day("2026-11-10"), store{bindings: map[uuid.UUID]account.Binding{
+		id: {Programme: "vtb-schet", Variant: "daily", OpenedOn: day("2026-01-10"), Conditions: account.ConditionsAuto},
+	}}, nil, measures{
+		"card_spend 2026-09": 55_500_00, "wages 2026-09": 150_000_00,
+		"card_spend 2026-10": 10_000_00,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for on, want := range map[string]int64{"2026-09-20": 11, "2026-11-15": 5, "2026-12-20": 5} {
+		if res, _, _ := rates.On(id, day(on), 1_000_000_00); !res.Percent.Equal(decimal.NewFromInt(want)) {
+			t.Errorf("seen from 10 November, %s: %s, want %d", on, res.Percent, want)
+		}
 	}
 }

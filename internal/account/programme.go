@@ -330,8 +330,10 @@ func (r Resolved) ByHand() bool { return r.Rate != nil && r.Rate.ByHand }
 // in by hand if one is in force, else the programme's; ok is false without
 // either. A programme whose terms the catalog cannot reckon for the day (a
 // term it has no rate for, an edition not yet known, no key rate) gives
-// none, its error aside.
-func Resolve(src RateSource, day time.Time, balance int64, keyOn func(time.Time) (decimal.Decimal, bool, error)) (Resolved, bool, error) {
+// none, its error aside. Its conditions are told as of today: a month past by
+// its own data, this month and those ahead by the last one finished — a day
+// ahead is not told by a month with no data yet.
+func Resolve(src RateSource, day, today time.Time, balance int64, keyOn func(time.Time) (decimal.Decimal, bool, error)) (Resolved, bool, error) {
 	pct, row, ok, err := RateOn(src.Rates, day, keyOn)
 	if err != nil {
 		return Resolved{}, false, err
@@ -353,7 +355,7 @@ func Resolve(src RateSource, day time.Time, balance int64, keyOn func(time.Time)
 	if src.Binding.Amount != nil {
 		h.Amount = *src.Binding.Amount
 	}
-	tell := Tell(*src.Binding, p, src.Marks, src.Measure, day)
+	tell := Tell(*src.Binding, p, src.Marks, src.Measure, today)
 	q, err := p.Quote(h, day, balance, keyOn, func(id string, month time.Time) (int, bool) {
 		t := tell(id, month)
 		return t.Level, t.Met
