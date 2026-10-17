@@ -37,6 +37,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleForeign)))))
 	srv.Mount("GET /api/v1/tax-year/foreign-report", h.sm.LoadAndSave(h.auth.RequireAuth(
 		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleReport)))))
+	srv.Mount("GET /api/v1/accounts/{id}/income", h.sm.LoadAndSave(h.auth.RequireAuth(
+		family.RequireRole(family.RoleViewer, http.HandlerFunc(h.handleIncome)))))
 	edit := func(fn http.HandlerFunc) http.Handler {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
 	}
@@ -154,6 +156,67 @@ func YearAPI(y Year) apitypes.TaxYear {
 		out.People = append(out.People, person)
 		out.ToPayMinor += p.ToPay + p.WagesToPay
 		out.RefundMinor += p.Refund
+	}
+	return out
+}
+
+func (h *Handler) handleIncome(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "id must be a uuid")
+		return
+	}
+	in, err := h.svc.IncomeOf(r.Context(), p.SpaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, incomeAPI(in))
+}
+
+func incomeAPI(in Income) apitypes.AccountIncome {
+	minor := func(v *int64) nullable.Nullable[int64] {
+		if v == nil {
+			return nullable.NewNullNullable[int64]()
+		}
+		return nullable.NewNullableWithValue(*v)
+	}
+	date := func(t *time.Time) nullable.Nullable[string] {
+		if t == nil {
+			return nullable.NewNullNullable[string]()
+		}
+		return nullable.NewNullableWithValue(t.Format(time.DateOnly))
+	}
+	out := apitypes.AccountIncome{
+		Currency: in.Currency, TaxCurrency: in.TaxCurrency, Year: in.YearNo, Rated: in.Rated,
+		EndsOn: date(in.Ends), Payout: nullable.NewNullNullable[apitypes.AccountIncomePayout](),
+		TermMinor: minor(in.Term), AccruedMinor: minor(in.Accrued), AtEndMinor: minor(in.AtEnd),
+		MonthMinor: minor(in.Month), MonthOn: date(in.MonthOn), TwelveMinor: minor(in.Twelve),
+		YearEndMinor: minor(in.YearEnd), YearMinor: minor(in.Year),
+		Estimate: nullable.NewNullNullable[apitypes.TaxYearEstimate](), Tax: nullable.NewNullNullable[apitypes.AccountIncomeTax](),
+	}
+	if pays := in.Pays; pays != nil {
+		way := apitypes.AccountIncomePayoutEnd
+		switch {
+		case pays.Monthly && pays.Capitalize:
+			way = apitypes.AccountIncomePayoutCapitalize
+		case pays.Monthly:
+			way = apitypes.AccountIncomePayoutMonthly
+		}
+		out.Payout = nullable.NewNullableWithValue(way)
+	}
+	if in.Estimate != nil {
+		out.Estimate = nullable.NewNullableWithValue(estimateAPI(*in.Estimate))
+	}
+	if t := in.Tax; t != nil {
+		names := t.Unestimated
+		if names == nil {
+			names = []string{}
+		}
+		out.Tax = nullable.NewNullableWithValue(apitypes.AccountIncomeTax{
+			Person: t.Person, InterestMinor: t.Interest, FreeMinor: minor(t.Free), TaxMinor: t.Tax, ShareMinor: t.Share, Unestimated: names,
+		})
 	}
 	return out
 }

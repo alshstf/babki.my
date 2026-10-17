@@ -228,6 +228,23 @@ paths:
         "200": { description: The year, content: { application/json: { schema: { $ref: "#/components/schemas/TaxYear" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{id}/income:
+    get:
+      tags: [taxyear]
+      operationId: getAccountIncome
+      description: >-
+        A deposit's or savings account's income by its rate (decision Р-56 Б): on its money today at today's rate,
+        the whole term's interest, what it earned to today and what will be on it at the end (a deposit), or this
+        month's and the next twelve months' interest (a savings account); its interest of this year as the year's
+        tax estimate counts it; and its share of its person's tax on interest at the year's end — the tax split
+        between the person's accounts by their interest of the year, the shares adding up to the tax. 404 for an
+        account that is not a deposit or savings account of the space.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The income, content: { application/json: { schema: { $ref: "#/components/schemas/AccountIncome" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/tax-year/foreign:
     get:
       tags: [taxyear]
@@ -4867,6 +4884,36 @@ components:
           description: "A deposit's or savings account's interest by its rate; null for a broker's or an account without one"
           allOf:
             - $ref: "#/components/schemas/TaxYearEstimate"
+    AccountIncome:
+      type: object
+      required: [currency, tax_currency, year, rated, ends_on, payout, term_minor, accrued_minor, at_end_minor, month_minor, month_on, twelve_minor, year_end_minor, year_minor, estimate, tax]
+      properties:
+        currency: { type: string, description: "The account's currency, of the income's lines" }
+        tax_currency: { type: string, description: "The currency of year_minor and tax; empty when the space's country has no year's estimate" }
+        year: { type: integer, description: "This year" }
+        rated: { type: boolean, description: "The lines are reckoned: a rate for every day they need, and a known way of payment" }
+        ends_on: { type: string, nullable: true, description: "Date YYYY-MM-DD: a deposit's last day by its programme" }
+        payout: { type: string, nullable: true, enum: [end, monthly, capitalize], description: "A deposit's way of payment: at the end, monthly onto a card, added to the sum monthly" }
+        term_minor: { type: integer, format: int64, nullable: true, description: "A deposit: the whole term's interest, from the sum it was opened with (else its balance marks, or its money today when kept by its journal)" }
+        accrued_minor: { type: integer, format: int64, nullable: true, description: "A deposit paying at the end: what it earned to today" }
+        at_end_minor: { type: integer, format: int64, nullable: true, description: "A deposit whose interest stays on it: what will be on it at the end" }
+        month_minor: { type: integer, format: int64, nullable: true, description: "A savings account: this month's interest, at today's balance and rate for the whole month" }
+        month_on: { type: string, nullable: true, description: "Date YYYY-MM-DD: the day month_minor comes" }
+        twelve_minor: { type: integer, format: int64, nullable: true, description: "A savings account: the next twelve month-ends' interest, this month's in, capitalized" }
+        year_end_minor: { type: integer, format: int64, nullable: true, description: "What is still to come to 31 December — the account's estimate.ahead_minor on «Налоги»; null without a rate today, a known way of payment, or the tax's currency" }
+        year_minor: { type: integer, format: int64, nullable: true, description: "The account's interest of this year in tax_currency: by its journal, filed under a category marked interest, by its rate — paid and to come; null when the year's estimate leaves it out" }
+        estimate: { nullable: true, allOf: [{ $ref: "#/components/schemas/TaxYearEstimate" }], description: "The account's estimate as on «Налоги»: why it is left out, the first balance mark" }
+        tax: { nullable: true, allOf: [{ $ref: "#/components/schemas/AccountIncomeTax" }], description: "Its person's tax on interest at the year's end and the account's share; null without the year's estimate" }
+    AccountIncomeTax:
+      type: object
+      required: [person, interest_minor, free_minor, tax_minor, share_minor, unestimated]
+      properties:
+        person: { type: string, description: "Whose income the account's is for tax" }
+        interest_minor: { type: integer, format: int64, description: "The person's interest of the year with what is still to come (interest_counted_minor + interest_ahead_minor on «Налоги»)" }
+        free_minor: { type: integer, format: int64, nullable: true, description: "What of it is free of tax: 1 млн × the year's highest key rate so far; null without the rate" }
+        tax_minor: { type: integer, format: int64, description: "The person's tax on it: by_notice_year_end_minor on «Налоги»" }
+        share_minor: { type: integer, format: int64, description: "The account's part of tax_minor: by its year_minor against interest_minor; the parts of all the person's accounts add up to tax_minor" }
+        unestimated: { type: array, items: { type: string }, description: "The person's accounts whose interest of the year is not estimated, by name: not in interest_minor" }
     TaxYearEstimate:
       type: object
       required: [paid_minor, from, ahead_minor, missing, missing_on, no_rate_ahead, pays_on]

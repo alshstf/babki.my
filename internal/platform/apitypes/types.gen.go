@@ -10,6 +10,27 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AccountIncomePayout.
+const (
+	AccountIncomePayoutCapitalize AccountIncomePayout = "capitalize"
+	AccountIncomePayoutEnd        AccountIncomePayout = "end"
+	AccountIncomePayoutMonthly    AccountIncomePayout = "monthly"
+)
+
+// Valid indicates whether the value is a known member of the AccountIncomePayout enum.
+func (e AccountIncomePayout) Valid() bool {
+	switch e {
+	case AccountIncomePayoutCapitalize:
+		return true
+	case AccountIncomePayoutEnd:
+		return true
+	case AccountIncomePayoutMonthly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AccountProgrammeConditions.
 const (
 	AccountProgrammeConditionsAuto   AccountProgrammeConditions = "auto"
@@ -2433,6 +2454,81 @@ type AccountCurrencyTotal struct {
 	// AmountMinor The account's result in this currency, or null when one of its terms has no figure in this currency at all — a position that realized into another currency, or one paid in another, has no own-currency total to add (see Position.total_minor). A bucket short one term is published as null rather than as the sum of the rest: a total quietly missing a term reads as a smaller result, not as a gap, and is indistinguishable from a real figure on screen.
 	AmountMinor nullable.Nullable[int64] `json:"amount_minor"`
 	Currency    string                   `json:"currency"`
+}
+
+// AccountIncome defines model for AccountIncome.
+type AccountIncome struct {
+	// AccruedMinor A deposit paying at the end: what it earned to today
+	AccruedMinor nullable.Nullable[int64] `json:"accrued_minor"`
+
+	// AtEndMinor A deposit whose interest stays on it: what will be on it at the end
+	AtEndMinor nullable.Nullable[int64] `json:"at_end_minor"`
+
+	// Currency The account's currency, of the income's lines
+	Currency string `json:"currency"`
+
+	// EndsOn Date YYYY-MM-DD: a deposit's last day by its programme
+	EndsOn nullable.Nullable[string] `json:"ends_on"`
+
+	// Estimate The account's estimate as on «Налоги»: why it is left out, the first balance mark
+	Estimate nullable.Nullable[TaxYearEstimate] `json:"estimate"`
+
+	// MonthMinor A savings account: this month's interest, at today's balance and rate for the whole month
+	MonthMinor nullable.Nullable[int64] `json:"month_minor"`
+
+	// MonthOn Date YYYY-MM-DD: the day month_minor comes
+	MonthOn nullable.Nullable[string] `json:"month_on"`
+
+	// Payout A deposit's way of payment: at the end, monthly onto a card, added to the sum monthly
+	Payout nullable.Nullable[AccountIncomePayout] `json:"payout"`
+
+	// Rated The lines are reckoned: a rate for every day they need, and a known way of payment
+	Rated bool `json:"rated"`
+
+	// Tax Its person's tax on interest at the year's end and the account's share; null without the year's estimate
+	Tax nullable.Nullable[AccountIncomeTax] `json:"tax"`
+
+	// TaxCurrency The currency of year_minor and tax; empty when the space's country has no year's estimate
+	TaxCurrency string `json:"tax_currency"`
+
+	// TermMinor A deposit: the whole term's interest, from the sum it was opened with (else its balance marks, or its money today when kept by its journal)
+	TermMinor nullable.Nullable[int64] `json:"term_minor"`
+
+	// TwelveMinor A savings account: the next twelve month-ends' interest, this month's in, capitalized
+	TwelveMinor nullable.Nullable[int64] `json:"twelve_minor"`
+
+	// Year This year
+	Year int `json:"year"`
+
+	// YearEndMinor What is still to come to 31 December — the account's estimate.ahead_minor on «Налоги»; null without a rate today, a known way of payment, or the tax's currency
+	YearEndMinor nullable.Nullable[int64] `json:"year_end_minor"`
+
+	// YearMinor The account's interest of this year in tax_currency: by its journal, filed under a category marked interest, by its rate — paid and to come; null when the year's estimate leaves it out
+	YearMinor nullable.Nullable[int64] `json:"year_minor"`
+}
+
+// AccountIncomePayout A deposit's way of payment: at the end, monthly onto a card, added to the sum monthly
+type AccountIncomePayout string
+
+// AccountIncomeTax defines model for AccountIncomeTax.
+type AccountIncomeTax struct {
+	// FreeMinor What of it is free of tax: 1 млн × the year's highest key rate so far; null without the rate
+	FreeMinor nullable.Nullable[int64] `json:"free_minor"`
+
+	// InterestMinor The person's interest of the year with what is still to come (interest_counted_minor + interest_ahead_minor on «Налоги»)
+	InterestMinor int64 `json:"interest_minor"`
+
+	// Person Whose income the account's is for tax
+	Person string `json:"person"`
+
+	// ShareMinor The account's part of tax_minor: by its year_minor against interest_minor; the parts of all the person's accounts add up to tax_minor
+	ShareMinor int64 `json:"share_minor"`
+
+	// TaxMinor The person's tax on it: by_notice_year_end_minor on «Налоги»
+	TaxMinor int64 `json:"tax_minor"`
+
+	// Unestimated The person's accounts whose interest of the year is not estimated, by name: not in interest_minor
+	Unestimated []string `json:"unestimated"`
 }
 
 // AccountJournal defines model for AccountJournal.
