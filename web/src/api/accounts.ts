@@ -35,6 +35,8 @@ function useInvalidateAccounts() {
   return () => {
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     void queryClient.invalidateQueries({ queryKey: ["summary"] });
+    // A balance mark moves the income a deposit's rate brings.
+    void queryClient.invalidateQueries({ queryKey: ["account-income"] });
   };
 }
 
