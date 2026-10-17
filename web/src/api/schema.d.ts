@@ -4398,6 +4398,8 @@ export interface components {
             missing_on: string | null;
             /** @description What is to come is not estimated: no rate today */
             no_rate_ahead: boolean;
+            /** @description Date YYYY-MM-DD: a deposit paying at its term's end after the year — the day it pays; its interest is a later year's */
+            pays_on: string | null;
         };
         AllocationTarget: {
             key: string;

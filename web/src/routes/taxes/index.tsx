@@ -99,6 +99,7 @@ function Deposits({ accounts, currency: c }: { accounts: TaxYearAccount[]; curre
         }
     }
     if (e.ahead_minor > 0) out.push(t("taxes.deposit.ahead", { amount: formatMinor(e.ahead_minor, c) }));
+    if (e.pays_on !== null) out.push(t("taxes.deposit.paysOn", { date: formatDate(e.pays_on) }));
     if (e.no_rate_ahead) out.push(t("taxes.deposit.noRateAhead"));
     return out;
   };

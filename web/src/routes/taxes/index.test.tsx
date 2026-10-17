@@ -113,7 +113,7 @@ describe("TaxesPage", () => {
   });
 
   it("says what each deposit's rate brings, what is to come by the year's end, and why one is not known", async () => {
-    const est = { paid_minor: 0, from: null, ahead_minor: 0, missing: null, missing_on: null, no_rate_ahead: false };
+    const est = { paid_minor: 0, from: null, ahead_minor: 0, missing: null, missing_on: null, no_rate_ahead: false, pays_on: null };
     const bankRow = { bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 };
     const maria = {
       ...year.people[1],
@@ -125,6 +125,7 @@ describe("TaxesPage", () => {
         { ...bankRow, account_id: "d-3", name: "Сейф", estimate: { ...est, missing: "rate" as const, missing_on: "2026-02-01", ahead_minor: 5_083_57 } },
         { ...bankRow, account_id: "d-4", name: "Вклад", estimate: { ...est, missing: "how_paid" as const } },
         { ...bankRow, account_id: "d-5", name: "Долларовый", estimate: { ...est, missing: "currency" as const } },
+        { ...bankRow, account_id: "d-6", name: "Вклад на три года", estimate: { ...est, pays_on: "2029-10-05" } },
       ],
     };
     answer({ ...year, people: [year.people[0], maria] });
@@ -143,6 +144,7 @@ describe("TaxesPage", () => {
       "Сейф: проценты за год не оценить: 01.02.2026 на счёте были деньги, а ставки нет — впишите ставку с этого дня на странице счёта; до конца года ещё ≈ 5 083,57 ₽.",
       "Вклад: не известно, как банк платит проценты: у вклада нет программы банка или в программе несколько способов выплаты.",
       "Долларовый: проценты в валюте пока не оцениваются.",
+      "Вклад на три года: проценты — в конце срока, 05.10.2029; в налог этого года не входят.",
     ]);
     // Alex's year-end adds nothing: no line for it.
     expect(within(people[0]).queryByTestId("tax-interest-year-end")).toBeNull();

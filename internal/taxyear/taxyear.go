@@ -230,7 +230,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		}
 		bank := a.Type == account.TypeChecking || a.Type == account.TypeSavings || a.Type == account.TypeDeposit
 		e, estimated := est[a.ID]
-		said := estimated && (e.Paid != 0 || e.Ahead != 0 || e.Missing != "" || e.NoRateAhead)
+		said := estimated && (e.Paid != 0 || e.Ahead != 0 || e.Missing != "" || e.NoRateAhead || e.PaysOn != nil)
 		if bank && !account.CountedByJournal(a.Account) {
 			if said {
 				p := personOf(a.Account)

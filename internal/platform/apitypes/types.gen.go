@@ -6218,6 +6218,9 @@ type TaxYearEstimate struct {
 
 	// PaidMinor An account kept by its balance: what the year paid to today by its rate on the balance marks — each day its balance × the day's rate / the year's days, paid on each month's last day or the term's end; 0 for one kept by its journal, whose interest is in interest_minor
 	PaidMinor int64 `json:"paid_minor"`
+
+	// PaysOn Date YYYY-MM-DD: a deposit paying at its term's end after the year — the day it pays; its interest is a later year's
+	PaysOn nullable.Nullable[string] `json:"pays_on"`
 }
 
 // TaxYearEstimateMissing Why what the year paid is not estimated: rate — money on a day without a rate (missing_on); how_paid — a deposit whose term or way of payment is not known (no programme of its bank, or a variant with more than one way); currency — not in the tax's currency

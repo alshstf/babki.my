@@ -167,7 +167,7 @@ func estimateAPI(e Estimate) apitypes.TaxYearEstimate {
 	}
 	out := apitypes.TaxYearEstimate{
 		PaidMinor: e.Paid, From: date(e.From), AheadMinor: e.Ahead, NoRateAhead: e.NoRateAhead,
-		Missing: nullable.NewNullNullable[apitypes.TaxYearEstimateMissing](), MissingOn: date(e.MissingOn),
+		Missing: nullable.NewNullNullable[apitypes.TaxYearEstimateMissing](), MissingOn: date(e.MissingOn), PaysOn: date(e.PaysOn),
 	}
 	if e.Missing != "" {
 		out.Missing = nullable.NewNullableWithValue(apitypes.TaxYearEstimateMissing(e.Missing))

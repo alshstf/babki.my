@@ -4867,7 +4867,7 @@ components:
             - $ref: "#/components/schemas/TaxYearEstimate"
     TaxYearEstimate:
       type: object
-      required: [paid_minor, from, ahead_minor, missing, missing_on, no_rate_ahead]
+      required: [paid_minor, from, ahead_minor, missing, missing_on, no_rate_ahead, pays_on]
       properties:
         paid_minor: { type: integer, format: int64, description: "An account kept by its balance: what the year paid to today by its rate on the balance marks — each day its balance × the day's rate / the year's days, paid on each month's last day or the term's end; 0 for one kept by its journal, whose interest is in interest_minor" }
         from: { type: string, nullable: true, description: "Date YYYY-MM-DD: the first balance mark, when it came after the stretch began — no money is known before it, so none is counted" }
@@ -4875,6 +4875,7 @@ components:
         missing: { type: string, nullable: true, enum: [rate, how_paid, currency], description: "Why what the year paid is not estimated: rate — money on a day without a rate (missing_on); how_paid — a deposit whose term or way of payment is not known (no programme of its bank, or a variant with more than one way); currency — not in the tax's currency" }
         missing_on: { type: string, nullable: true, description: "Date YYYY-MM-DD: with missing rate, the first day with money and no rate" }
         no_rate_ahead: { type: boolean, description: "What is to come is not estimated: no rate today" }
+        pays_on: { type: string, nullable: true, description: "Date YYYY-MM-DD: a deposit paying at its term's end after the year — the day it pays; its interest is a later year's" }
     AllocationTarget:
       type: object
       required: [key, percent]

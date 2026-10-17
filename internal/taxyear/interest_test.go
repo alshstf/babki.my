@@ -166,4 +166,13 @@ func TestADepositEarnsFromItsOpening(t *testing.T) {
 	if len(y.People) != 1 || y.People[0].InterestAhead != 48_616_44 || y.People[0].InterestEstimated != 0 {
 		t.Errorf("people = %+v", y.People)
 	}
+	// For 367 days it pays on 3 August 2027: a later year's, said so.
+	term = 367
+	y, err = svc.Of(t.Context(), uuid.New(), 2026)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := y.People[0].Accounts[0].Estimate; y.People[0].InterestAhead != 0 || e == nil || e.PaysOn == nil || !e.PaysOn.Equal(day("2027-08-03")) {
+		t.Errorf("for 367 days: %+v", y.People[0])
+	}
 }

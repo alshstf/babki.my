@@ -50,7 +50,8 @@ const (
 // when it came after the stretch began — no money is known before it. Ahead
 // is what is still to come after today to the year's end. Missing says why
 // what the year paid is not estimated; NoRateAhead that what is to come is
-// not, for want of today's rate.
+// not, for want of today's rate. PaysOn is the term's end of a deposit that
+// pays at it after the year: its interest is a later year's.
 type Estimate struct {
 	Paid        int64
 	From        *time.Time
@@ -58,6 +59,7 @@ type Estimate struct {
 	Missing     Missing
 	MissingOn   *time.Time
 	NoRateAhead bool
+	PaysOn      *time.Time
 }
 
 // estimates are the year's estimates of the space's active deposits and
@@ -132,6 +134,10 @@ func (s *Service) estimates(ctx context.Context, spaceID uuid.UUID, list []accou
 					e.From = &first
 				}
 			}
+		}
+		if !pays.Monthly && pays.Ends.After(end) {
+			ends := pays.Ends
+			e.PaysOn = &ends
 		}
 		if current && (byJournal || e.Missing == MissingRate) {
 			ahead, ok, err := s.ahead(ctx, spaceID, a, rates, pays, from, today, end)
