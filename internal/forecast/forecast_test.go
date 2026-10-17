@@ -3,6 +3,7 @@ package forecast
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -369,5 +370,63 @@ func TestAStoragesFeeComesOnItsRenewal(t *testing.T) {
 	journal := []recurring.Payment{{Name: "ВТБ", Cadence: recurring.Yearly, Amount: -23_000_00, Currency: "RUB", Next: d("2026-11-19")}}
 	if got := fees(at("2026-11-20", 24_000_00, valuables.FeeYear), journal, today, end); got != nil {
 		t.Errorf("in the journal = %+v", got)
+	}
+}
+
+type fakeEarning map[uuid.UUID][]account.Rate
+
+func (f fakeEarning) AllRates(context.Context, uuid.UUID) (map[uuid.UUID][]account.Rate, error) {
+	return f, nil
+}
+
+func (fakeEarning) AllBindings(context.Context, uuid.UUID) (map[uuid.UUID]account.Binding, error) {
+	return nil, nil
+}
+
+func (fakeEarning) AllMarks(context.Context, uuid.UUID) (map[uuid.UUID][]account.Mark, error) {
+	return nil, nil
+}
+
+// A savings account's interest comes on each month's last day by its rate on
+// today's balance, capitalized, and stands for the account's regular incomes:
+// 900 000 ₽ at 14 % — 900 000 × 0,14 × 31 / 365 = 10 701,37 ₽ on 31 October
+// (the rate written in from the 5th counts for the whole month, as the bank
+// pays for it), then 10 479,30 ₽ on 30 November on the balance with October's
+// in. A savings account with money and no rate is named; a deposit is not
+// money to live on.
+func TestASavingsAccountsInterestComesAtTheMonthsEnd(t *testing.T) {
+	acc := func(name string, typ account.Type, minor int64) account.WithBalance {
+		return account.WithBalance{
+			Account: account.Account{ID: uuid.New(), Name: name, Type: typ, Currency: "RUB", Status: account.StatusActive},
+			Balance: &account.BalancePoint{AsOf: d("2026-10-09"), AmountMinor: minor},
+		}
+	}
+	savings, bare := acc("Накопительный", account.TypeSavings, 900_000_00), acc("Без ставки", account.TypeSavings, 50_000_00)
+	deposit := acc("Вклад", account.TypeDeposit, 300_000_00)
+	rate := func(pct string) []account.Rate {
+		return []account.Rate{{From: d("2026-10-05"), Kind: account.RateFixed, Percent: decimal.RequireFromString(pct), ByHand: true}}
+	}
+	svc := NewService(fakeAccounts{savings, bare, deposit}, fakePositions{}, fakeSpaces{},
+		fakeRegulars{{Name: "Проценты", Cadence: recurring.Monthly, Amount: 10_000_00, Currency: "RUB", AccountID: savings.ID, Next: d("2026-10-31")}},
+		fakeLoans{}, fakeCards{}, fakeBudgets{}, fakeRates{}).WithInterest(fakeEarning{savings.ID: rate("14"), deposit.ID: rate("16")}, nil, nil)
+	svc.now = func() time.Time { return d("2026-10-10") }
+	f, err := svc.Of(context.Background(), uuid.New(), 60, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range f.Events {
+		got = append(got, fmt.Sprintf("%s %s %s %d", e.On.Format(time.DateOnly), e.Kind, e.Name, e.InBase))
+	}
+	want := []string{"2026-10-31 interest Накопительный 1070137", "2026-11-30 interest Накопительный 1047930"}
+	if !slices.Equal(got, want) {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+	if !slices.Equal(f.Unearning, []string{"Без ставки"}) {
+		t.Errorf("unearning = %q", f.Unearning)
+	}
+	// Interest is no salary: without a regular income nothing is in sight.
+	if f.NextIncome != nil {
+		t.Errorf("next income = %+v", f.NextIncome)
 	}
 }
