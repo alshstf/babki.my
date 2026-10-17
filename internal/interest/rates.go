@@ -59,11 +59,28 @@ func Load(ctx context.Context, spaceID uuid.UUID, st Store, keys KeyRates, ms Me
 			break
 		}
 	}
+	// Earned asks the rate of every day: the key rate of each is read once.
+	// The day is kept as text — a date read back from the base is midnight
+	// UTC, not the day asked.
+	type known struct {
+		rate decimal.Decimal
+		ok   bool
+	}
+	memo := map[string]known{}
 	out := Rates{sources: map[uuid.UUID]account.RateSource{}, keyOn: func(day time.Time) (decimal.Decimal, bool, error) {
 		if keys == nil {
 			return decimal.Zero, false, nil
 		}
-		return keys.KeyRateOn(ctx, day)
+		k := day.Format(time.DateOnly)
+		if v, ok := memo[k]; ok {
+			return v.rate, v.ok, nil
+		}
+		rate, ok, err := keys.KeyRateOn(ctx, day)
+		if err != nil {
+			return decimal.Zero, false, err
+		}
+		memo[k] = known{rate, ok}
+		return rate, ok, nil
 	}}
 	add := func(id uuid.UUID) {
 		if _, ok := out.sources[id]; ok {

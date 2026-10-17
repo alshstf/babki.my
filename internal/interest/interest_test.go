@@ -135,11 +135,12 @@ func TestANewMarkOfTheBalanceHoldsTheInterestBeforeIt(t *testing.T) {
 }
 
 type store struct {
+	rates    map[uuid.UUID][]account.Rate
 	bindings map[uuid.UUID]account.Binding
 }
 
 func (s store) AllRates(context.Context, uuid.UUID) (map[uuid.UUID][]account.Rate, error) {
-	return nil, nil
+	return s.rates, nil
 }
 
 func (s store) AllBindings(context.Context, uuid.UUID) (map[uuid.UUID]account.Binding, error) {
@@ -185,5 +186,34 @@ func TestHowTheAccountsInterestIsPaid(t *testing.T) {
 		if c.opened != "" && !opened.Equal(day(c.opened)) {
 			t.Errorf("%s: earns from %s, want %s", c.name, opened, c.opened)
 		}
+	}
+}
+
+type keys struct{ asked int }
+
+func (k *keys) KeyRateOn(context.Context, time.Time) (decimal.Decimal, bool, error) {
+	k.asked++
+	return decimal.NewFromInt(16), true, nil
+}
+
+func TestTheKeyRateOfADayIsReadOnce(t *testing.T) {
+	// Key rate 16 % less 1,5: 1 000 000 ₽ × 0,145 × 31 / 365 for October.
+	id := uuid.New()
+	k := &keys{}
+	rates, err := interest.Load(context.Background(), uuid.New(), store{rates: map[uuid.UUID][]account.Rate{
+		id: {{From: day("2026-01-01"), Kind: account.RateKey, Percent: decimal.RequireFromString("-1.5"), ByHand: true}},
+	}}, k, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	points := []interest.Point{{On: day("2026-10-01"), Minor: 1_000_000_00}}
+	for range 2 {
+		got, unrated, err := interest.Earned(points, rates.Of(id), interest.Pays{Monthly: true}, day("2026-10-01"), day("2026-10-31"))
+		if err != nil || unrated != nil || !equal(minors(got), []int64{1_231_507}) {
+			t.Fatalf("got %v, unrated %v, err %v", minors(got), unrated, err)
+		}
+	}
+	if k.asked != 31 {
+		t.Errorf("the key rate was read %d times for 31 days", k.asked)
 	}
 }
