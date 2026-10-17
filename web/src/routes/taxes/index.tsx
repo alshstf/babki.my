@@ -75,9 +75,10 @@ export function TaxesPage() {
 // their rates: what each paid, what is to come, or why it is not known.
 function Deposits({ accounts, currency: c }: { accounts: TaxYearAccount[]; currency: string }) {
   const { t } = useTranslation();
-  const list = accounts.filter((a) => a.bank && a.estimate !== null);
+  const list = accounts.filter((a) => a.bank && (a.estimate !== null || a.low_rate));
   if (list.length === 0) return null;
   const parts = (a: TaxYearAccount) => {
+    if (a.low_rate) return [t("taxes.deposit.lowRate")];
     const e = a.estimate!;
     const out: string[] = [];
     switch (e.missing) {
@@ -203,6 +204,14 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
                 })}{" "}
             {p.interest_estimated_minor > 0 && `${t("taxes.interestEstimated", { amount: formatMinor(p.interest_estimated_minor, c) })} `}
             {p.by_notice_minor > 0 && t("taxes.byNotice", { amount: formatMinor(p.by_notice_minor, c), date: formatDate(year.notice_by) })}
+          </p>
+        )}
+        {p.interest_checking_minor > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="tax-interest-checking">
+            {t("taxes.interestChecking", {
+              amount: formatMinor(p.interest_checking_minor, c),
+              names: p.accounts.filter((a) => a.bank && a.checking && !a.low_rate).map((a) => a.name).join(", "),
+            })}
           </p>
         )}
         {p.interest_ahead_minor > 0 && p.by_notice_year_end_minor !== null && (

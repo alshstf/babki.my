@@ -20,7 +20,7 @@ const account: AccountWithBalance = {
 
 const none: AccountIncome = {
   currency: "RUB", tax_currency: "RUB", year: 2026, rated: false, ends_on: null, payout: null, term_minor: null, accrued_minor: null, at_end_minor: null,
-  month_minor: null, month_on: null, twelve_minor: null, year_end_minor: null, year_minor: null, estimate: null, tax: null,
+  month_minor: null, month_on: null, twelve_minor: null, year_end_minor: null, year_minor: null, estimate: null, tax: null, low_rate: false,
 };
 
 const estimate = { paid_minor: 0, from: null, ahead_minor: 0, missing: null, missing_on: null, no_rate_ahead: false, pays_on: null };
@@ -90,6 +90,13 @@ describe("IncomePanel", () => {
       /^Налога на проценты за 2026 год не будет \(Мария\): ≈ 120 000,00 ₽ процентов по всем вкладам и счетам — в пределах 160 000,00 ₽ без налога\./,
     );
     expect(screen.queryByText(/Доля этого счёта/)).toBeNull();
+  });
+
+  it("says a rouble account at no more than 1 % all the year is not in the tax", async () => {
+    show({ ...none, rated: true, month_minor: 400_00, month_on: "2026-10-31", twelve_minor: 4_800_00, low_rate: true,
+      tax: { person: "Мария", interest_minor: 0, free_minor: 160_000_00, tax_minor: 0, share_minor: 0, unestimated: [] } });
+    expect(norm((await screen.findByTestId("account-income-notes")).textContent)).toMatch(/Ставка весь год не выше 1 % — проценты в налог не входят \(ст\. 214\.2 НК\)\./);
+    expect(screen.queryByTestId("account-income-tax")).toBeNull();
   });
 
   it("says when there is no rate to reckon by", async () => {

@@ -183,3 +183,13 @@ func (r Rates) Opening(id uuid.UUID) (on time.Time, amount int64, ok bool) {
 	}
 	return b.OpenedOn, *b.Amount, true
 }
+
+// OpenedOn is the day an account's programme says it was opened or last
+// prolonged; ok is false without a programme.
+func (r Rates) OpenedOn(id uuid.UUID) (time.Time, bool) {
+	b := r.sources[id].Binding
+	if b == nil {
+		return time.Time{}, false
+	}
+	return b.OpenedOn, true
+}

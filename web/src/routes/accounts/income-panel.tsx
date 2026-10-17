@@ -72,6 +72,7 @@ function Notes({ income: d }: { income: AccountIncome }) {
   } else {
     notes.push(t("depositIncome.notRated"));
   }
+  if (d.low_rate) notes.push(t("taxes.deposit.lowRate"));
   const e = d.estimate;
   if (e !== null) {
     if (e.from !== null) notes.push(t("taxes.deposit.from", { date: formatDate(e.from) }));

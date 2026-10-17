@@ -122,7 +122,8 @@ func YearAPI(y Year) apitypes.TaxYear {
 			WagePayments:      make([]apitypes.TaxYearWagePayment, 0, len(p.WagePayments)),
 			PropertySoldMinor: p.PropertySold, PropertyGainMinor: p.PropertyGain, PropertyBaseMinor: p.PropertyBase, PropertyFree: p.PropertyFree,
 			InterestMinor: p.Interest, InterestFreeMinor: nullable.NewNullNullable[int64](), ByNoticeMinor: p.ByNotice,
-			InterestEstimatedMinor: p.InterestEstimated, InterestCountedMinor: p.Interest + p.InterestEstimated, InterestAheadMinor: p.InterestAhead, ByNoticeYearEndMinor: nullable.NewNullNullable[int64](),
+			InterestEstimatedMinor: p.InterestEstimated, InterestCountedMinor: p.Interest + p.InterestEstimated, InterestAheadMinor: p.InterestAhead,
+			InterestCheckingMinor: p.InterestChecking, ByNoticeYearEndMinor: nullable.NewNullNullable[int64](),
 			Accounts: make([]apitypes.TaxYearAccount, 0, len(p.Accounts)),
 		}
 		for _, a := range p.Accounts {
@@ -130,7 +131,7 @@ func YearAPI(y Year) apitypes.TaxYear {
 				AccountId: a.ID, Name: a.Name, Bank: a.Bank, ForeignBroker: a.ForeignBroker,
 				SalesMinor: a.Facts.Sales, SalesLongMinor: a.Facts.SalesLong, CouponsMinor: a.Facts.Coupons,
 				DividendsMinor: a.Facts.Dividends, InterestMinor: a.Facts.Interest, WithheldMinor: a.Facts.Withheld,
-				SecuritiesMinor: a.Securities, AgentTaxMinor: a.AgentTax, Unvalued: a.Facts.Unvalued,
+				SecuritiesMinor: a.Securities, AgentTaxMinor: a.AgentTax, Unvalued: a.Facts.Unvalued, LowRate: a.LowRate, Checking: a.Checking,
 				Estimate: nullable.NewNullNullable[apitypes.TaxYearEstimate](),
 			}
 			if e := a.Estimate; e != nil {
@@ -189,7 +190,7 @@ func incomeAPI(in Income) apitypes.AccountIncome {
 		return nullable.NewNullableWithValue(t.Format(time.DateOnly))
 	}
 	out := apitypes.AccountIncome{
-		Currency: in.Currency, TaxCurrency: in.TaxCurrency, Year: in.YearNo, Rated: in.Rated,
+		Currency: in.Currency, TaxCurrency: in.TaxCurrency, Year: in.YearNo, Rated: in.Rated, LowRate: in.LowRate,
 		EndsOn: date(in.Ends), Payout: nullable.NewNullNullable[apitypes.AccountIncomePayout](),
 		TermMinor: minor(in.Term), AccruedMinor: minor(in.Accrued), AtEndMinor: minor(in.AtEnd),
 		MonthMinor: minor(in.Month), MonthOn: date(in.MonthOn), TwelveMinor: minor(in.Twelve),

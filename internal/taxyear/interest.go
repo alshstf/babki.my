@@ -225,3 +225,49 @@ func pointsOf(marks []account.BalancePoint) []interest.Point {
 	}
 	return out
 }
+
+// lowRate are the active savings accounts and deposits in the tax's currency
+// whose rate is known for every day of the year and never above 1 % a year:
+// their interest is not in the base (НК РФ ст. 214.2 п. 1). Known from the
+// year's first day — or a programme's day of opening, when later — so that a
+// stretch with no rate written in never counts as low.
+func (s *Service) lowRate(ctx context.Context, spaceID uuid.UUID, list []account.WithBalance, year int, currency string) (map[uuid.UUID]bool, error) {
+	out := map[uuid.UUID]bool{}
+	if s.earning == nil {
+		return out, nil
+	}
+	now := s.now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	rates, err := interest.Load(ctx, spaceID, today, s.earning, s.earnKeys, s.earnMeasures)
+	if err != nil {
+		return nil, err
+	}
+	one := decimal.NewFromInt(1)
+	start := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	for _, a := range list {
+		if a.Status != account.StatusActive || !account.Earns(a.Type) || a.Currency != currency {
+			continue
+		}
+		from := start
+		if on, ok := rates.OpenedOn(a.ID); ok && on.After(from) {
+			from = on
+		}
+		balance, err := s.balanceOf(ctx, spaceID, a)
+		if err != nil {
+			return nil, err
+		}
+		low := !from.After(end)
+		for day := from; low && !day.After(end); day = day.AddDate(0, 0, 1) {
+			r, ok, err := rates.On(a.ID, day, max(balance, 1))
+			if err != nil {
+				return nil, err
+			}
+			low = ok && !r.Percent.GreaterThan(one)
+		}
+		if low {
+			out[a.ID] = true
+		}
+	}
+	return out, nil
+}

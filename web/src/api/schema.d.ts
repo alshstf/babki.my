@@ -4030,6 +4030,11 @@ export interface components {
             interest_ahead_minor: number;
             /**
              * Format: int64
+             * @description What of interest_minor current accounts and cards paid: in for want of their rates; the tax office leaves out a rouble account at no more than 1 % all the year
+             */
+            interest_checking_minor: number;
+            /**
+             * Format: int64
              * @description This year: the tax on the interest with interest_ahead_minor in, the other incomes as they stand today, the year's highest key rate so far; null for a past year
              */
             by_notice_year_end_minor: number | null;
@@ -4400,6 +4405,10 @@ export interface components {
              */
             agent_tax_minor: number;
             unvalued: number;
+            /** @description A rouble savings account or deposit at no more than 1 % a year all the year: its interest is not in the base (НК РФ ст. 214.2); its rate known for every day of the year */
+            low_rate: boolean;
+            /** @description A current account or card: its rate is not known to the program, so its interest is in */
+            checking: boolean;
             /** @description A deposit's or savings account's interest by its rate; null for a broker's or an account without one */
             estimate?: components["schemas"]["TaxYearEstimate"] | null;
         };
@@ -4460,6 +4469,8 @@ export interface components {
             estimate: components["schemas"]["TaxYearEstimate"] | null;
             /** @description Its person's tax on interest at the year's end and the account's share; null without the year's estimate */
             tax: components["schemas"]["AccountIncomeTax"] | null;
+            /** @description A rouble account at no more than 1 % a year all the year: its interest is not in the base (НК РФ ст. 214.2), year_minor is null and its share 0 */
+            low_rate: boolean;
         };
         AccountIncomeTax: {
             /** @description Whose income the account's is for tax */

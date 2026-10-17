@@ -24,19 +24,19 @@ const year: TaxYear = {
     {
       user_id: "u-alex", name: "Алекс", base_minor: 4_000_000_00, tax_minor: 552_000_00, by_agents_minor: 520_000_00, withheld_minor: 6_500_00,
       credit_minor: 0, to_pay_minor: 32_000_00, refund_minor: 0, unvalued: 2, interest_minor: 400_000_00, interest_free_minor: 210_000_00, by_notice_minor: 28_500_00,
-      interest_estimated_minor: 0, interest_counted_minor: 400_000_00, interest_ahead_minor: 0, by_notice_year_end_minor: 28_500_00,
+      interest_estimated_minor: 0, interest_counted_minor: 400_000_00, interest_ahead_minor: 0, by_notice_year_end_minor: 28_500_00, interest_checking_minor: 0,
       wages_net_minor: 0, wages_minor: 0, wages_tax_minor: 0, wages_withheld_minor: 0, wages_to_pay_minor: 0, employers: [], wage_payments: [],
       property_sold_minor: 0, property_gain_minor: 0, property_base_minor: 0, property_free: 0,
       accounts: [
-        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2, estimate: null },
-        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, estimate: null },
-        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, estimate: null },
+        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2, low_rate: false, checking: false, estimate: null },
+        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, low_rate: false, checking: false, estimate: null },
+        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, low_rate: false, checking: false, estimate: null },
       ],
     },
     {
       user_id: "u-maria", name: "Мария", base_minor: 100_000_00, tax_minor: 13_000_00, by_agents_minor: 21_000_00, withheld_minor: 0,
       credit_minor: 0, to_pay_minor: 0, refund_minor: 8_000_00, unvalued: 0, accounts: [], interest_minor: 0, interest_free_minor: 210_000_00, by_notice_minor: 0,
-      interest_estimated_minor: 0, interest_counted_minor: 0, interest_ahead_minor: 0, by_notice_year_end_minor: 0,
+      interest_estimated_minor: 0, interest_counted_minor: 0, interest_ahead_minor: 0, by_notice_year_end_minor: 0, interest_checking_minor: 0,
       wages_net_minor: 87_000_00, wages_minor: 100_000_00, wages_tax_minor: 13_000_00, wages_withheld_minor: 13_000_00, wages_to_pay_minor: 0,
       employers: [{ name: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00 }],
       wage_payments: [{ operation_id: "op-1", on: "2026-03-05", employer: "ООО «Ромашка»", net_minor: 87_000_00, gross_minor: 100_000_00, withheld_minor: 13_000_00, entered: false }],
@@ -114,11 +114,11 @@ describe("TaxesPage", () => {
 
   it("says what each deposit's rate brings, what is to come by the year's end, and why one is not known", async () => {
     const est = { paid_minor: 0, from: null, ahead_minor: 0, missing: null, missing_on: null, no_rate_ahead: false, pays_on: null };
-    const bankRow = { bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0 };
+    const bankRow = { bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, low_rate: false, checking: false };
     const maria = {
       ...year.people[1],
       interest_estimated_minor: 213_351_55, interest_counted_minor: 213_351_55, interest_ahead_minor: 98_175_97,
-      by_notice_minor: 436_00, by_notice_year_end_minor: 13_199_00,
+      by_notice_minor: 436_00, by_notice_year_end_minor: 13_199_00, interest_checking_minor: 3_000_00,
       accounts: [
         { ...bankRow, account_id: "d-1", name: "Копилка", estimate: { ...est, paid_minor: 213_351_55, from: "2026-03-05", ahead_minor: 98_175_97 } },
         { ...bankRow, account_id: "d-2", name: "Накопительный", interest_minor: 30_000_00, estimate: { ...est, ahead_minor: 25_417_81 } },
@@ -127,6 +127,8 @@ describe("TaxesPage", () => {
         { ...bankRow, account_id: "d-5", name: "Долларовый", estimate: { ...est, missing: "currency" as const } },
         { ...bankRow, account_id: "d-6", name: "Вклад на три года", estimate: { ...est, pays_on: "2029-10-05" } },
         { ...bankRow, account_id: "d-7", name: "Новый", estimate: { ...est, from: "2026-10-10", ahead_minor: 30_151_70 } },
+        { ...bankRow, account_id: "d-8", name: "Копейка", low_rate: true, interest_minor: 4_000_00, estimate: null },
+        { ...bankRow, account_id: "d-9", name: "Карта", checking: true, interest_minor: 3_000_00, estimate: null },
       ],
     };
     answer({ ...year, people: [year.people[0], maria] });
@@ -147,7 +149,11 @@ describe("TaxesPage", () => {
       "Долларовый: проценты в валюте пока не оцениваются.",
       "Вклад на три года: проценты — в конце срока, 05.10.2029; в налог этого года не входят.",
       "Новый: считается с 10.10.2026 — до первой отметки остатка денег на счёте не видно; до конца года ещё ≈ 30 151,70 ₽.",
+      "Копейка: ставка весь год не выше 1 % — проценты в налог не входят (ст. 214.2 НК).",
     ]);
+    expect(norm(within(people[1]).getByTestId("tax-interest-checking").textContent)).toBe(
+      "Из них 3 000,00 ₽ — проценты текущих счетов и карт (Карта): их ставок программа не знает, поэтому они в расчёте. Если ставка по счёту весь год не выше 1 %, ФНС эти проценты не учтёт.",
+    );
     // Alex's year-end adds nothing: no line for it.
     expect(within(people[0]).queryByTestId("tax-interest-year-end")).toBeNull();
   });
