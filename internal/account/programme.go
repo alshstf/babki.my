@@ -25,7 +25,9 @@ const (
 
 // Binding is an account's programme of its bank in the catalog: the variant
 // chosen at opening, the day it was opened or last prolonged, a deposit's
-// term in the bank's unit and the sum it was opened with.
+// term in the bank's unit and the sum it was opened with, and how its
+// interest is paid where the variant allows more than one way (nil: its only
+// way, or not said).
 type Binding struct {
 	Programme  string
 	Variant    string
@@ -33,6 +35,7 @@ type Binding struct {
 	Term       *int
 	Amount     *int64
 	Conditions ConditionsMode
+	Payout     *deposit.Payout
 }
 
 // Mark is the family's word on a condition: from From on it holds at Level
@@ -44,7 +47,7 @@ type Mark struct {
 	Met       bool
 }
 
-var errBinding = fmt.Errorf("%w: the programme, its variant, the day of opening and — for a deposit — a term and a sum the bank has a rate for", family.ErrValidation)
+var errBinding = fmt.Errorf("%w: the programme, its variant, the day of opening and — for a deposit — a term and a sum the bank has a rate for and a way of payment the variant has", family.ErrValidation)
 
 // Binding is the account's programme, nil without one.
 func (s *Store) Binding(ctx context.Context, spaceID, accountID uuid.UUID) (*Binding, error) {
@@ -65,7 +68,7 @@ func (s *Store) AllBindings(ctx context.Context, spaceID uuid.UUID) (map[uuid.UU
 }
 
 func (s *Store) bindings(ctx context.Context, where string, args ...any) (map[uuid.UUID]Binding, error) {
-	rows, err := s.db.Query(ctx, `SELECT account_id, programme, variant, opened_on, term, amount_minor, conditions FROM account_programmes `+where, args...)
+	rows, err := s.db.Query(ctx, `SELECT account_id, programme, variant, opened_on, term, amount_minor, conditions, payout FROM account_programmes `+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("account: programmes: %w", err)
 	}
@@ -74,7 +77,7 @@ func (s *Store) bindings(ctx context.Context, where string, args ...any) (map[uu
 	for rows.Next() {
 		var id uuid.UUID
 		var b Binding
-		if err := rows.Scan(&id, &b.Programme, &b.Variant, &b.OpenedOn, &b.Term, &b.Amount, &b.Conditions); err != nil {
+		if err := rows.Scan(&id, &b.Programme, &b.Variant, &b.OpenedOn, &b.Term, &b.Amount, &b.Conditions, &b.Payout); err != nil {
 			return nil, fmt.Errorf("account: programmes: %w", err)
 		}
 		out[id] = b
@@ -105,7 +108,7 @@ func (s *Store) SetBinding(ctx context.Context, spaceID, accountID uuid.UUID, b 
 		return errBinding
 	}
 	if p.Kind == deposit.KindDeposit {
-		if b.Term == nil || b.Amount == nil {
+		if b.Term == nil || b.Amount == nil || b.Payout != nil && !p.Pays(b.Variant, b.OpenedOn, *b.Payout) {
 			return errBinding
 		}
 		// A deposit takes the edition of its day of opening: there must be
@@ -119,15 +122,15 @@ func (s *Store) SetBinding(ctx context.Context, spaceID, accountID uuid.UUID, b 
 		return errBinding
 	}
 	if p.Kind == deposit.KindSavings {
-		b.Term, b.Amount = nil, nil
+		b.Term, b.Amount, b.Payout = nil, nil, nil
 	}
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO account_programmes (account_id, space_id, programme, variant, opened_on, term, amount_minor, conditions)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO account_programmes (account_id, space_id, programme, variant, opened_on, term, amount_minor, conditions, payout)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (account_id) DO UPDATE SET programme = EXCLUDED.programme, variant = EXCLUDED.variant,
 			opened_on = EXCLUDED.opened_on, term = EXCLUDED.term, amount_minor = EXCLUDED.amount_minor,
-			conditions = EXCLUDED.conditions, updated_at = now()`,
-		accountID, spaceID, b.Programme, b.Variant, b.OpenedOn, b.Term, b.Amount, b.Conditions)
+			conditions = EXCLUDED.conditions, payout = EXCLUDED.payout, updated_at = now()`,
+		accountID, spaceID, b.Programme, b.Variant, b.OpenedOn, b.Term, b.Amount, b.Conditions, b.Payout)
 	if err != nil {
 		return fmt.Errorf("account: set programme: %w", err)
 	}

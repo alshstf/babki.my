@@ -46,6 +46,33 @@ func (e AccountProgrammeKind) Valid() bool {
 	}
 }
 
+// Defines values for AccountProgrammePayout.
+const (
+	AccountProgrammePayoutCapitalize AccountProgrammePayout = "capitalize"
+	AccountProgrammePayoutDaily      AccountProgrammePayout = "daily"
+	AccountProgrammePayoutEnd        AccountProgrammePayout = "end"
+	AccountProgrammePayoutMonthly    AccountProgrammePayout = "monthly"
+	AccountProgrammePayoutQuarterly  AccountProgrammePayout = "quarterly"
+)
+
+// Valid indicates whether the value is a known member of the AccountProgrammePayout enum.
+func (e AccountProgrammePayout) Valid() bool {
+	switch e {
+	case AccountProgrammePayoutCapitalize:
+		return true
+	case AccountProgrammePayoutDaily:
+		return true
+	case AccountProgrammePayoutEnd:
+		return true
+	case AccountProgrammePayoutMonthly:
+		return true
+	case AccountProgrammePayoutQuarterly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AccountProgrammeTermUnit.
 const (
 	AccountProgrammeTermUnitDays   AccountProgrammeTermUnit = "days"
@@ -76,6 +103,33 @@ func (e AccountProgrammeInputConditions) Valid() bool {
 	case AccountProgrammeInputConditionsAuto:
 		return true
 	case AccountProgrammeInputConditionsManual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountProgrammeInputPayout.
+const (
+	AccountProgrammeInputPayoutCapitalize AccountProgrammeInputPayout = "capitalize"
+	AccountProgrammeInputPayoutDaily      AccountProgrammeInputPayout = "daily"
+	AccountProgrammeInputPayoutEnd        AccountProgrammeInputPayout = "end"
+	AccountProgrammeInputPayoutMonthly    AccountProgrammeInputPayout = "monthly"
+	AccountProgrammeInputPayoutQuarterly  AccountProgrammeInputPayout = "quarterly"
+)
+
+// Valid indicates whether the value is a known member of the AccountProgrammeInputPayout enum.
+func (e AccountProgrammeInputPayout) Valid() bool {
+	switch e {
+	case AccountProgrammeInputPayoutCapitalize:
+		return true
+	case AccountProgrammeInputPayoutDaily:
+		return true
+	case AccountProgrammeInputPayoutEnd:
+		return true
+	case AccountProgrammeInputPayoutMonthly:
+		return true
+	case AccountProgrammeInputPayoutQuarterly:
 		return true
 	default:
 		return false
@@ -2410,12 +2464,15 @@ type AccountJournal struct {
 
 // AccountProgramme defines model for AccountProgramme.
 type AccountProgramme struct {
-	AmountMinor   nullable.Nullable[int64]                    `json:"amount_minor"`
-	BankId        string                                      `json:"bank_id"`
-	BankName      string                                      `json:"bank_name"`
-	Conditions    AccountProgrammeConditions                  `json:"conditions"`
-	Kind          AccountProgrammeKind                        `json:"kind"`
-	OpenedOn      string                                      `json:"opened_on"`
+	AmountMinor nullable.Nullable[int64]   `json:"amount_minor"`
+	BankId      string                     `json:"bank_id"`
+	BankName    string                     `json:"bank_name"`
+	Conditions  AccountProgrammeConditions `json:"conditions"`
+	Kind        AccountProgrammeKind       `json:"kind"`
+	OpenedOn    string                     `json:"opened_on"`
+
+	// Payout The way of payment chosen at opening; null when not chosen
+	Payout        nullable.Nullable[AccountProgrammePayout]   `json:"payout"`
 	ProgrammeId   string                                      `json:"programme_id"`
 	ProgrammeName string                                      `json:"programme_name"`
 	Term          nullable.Nullable[int]                      `json:"term"`
@@ -2430,6 +2487,9 @@ type AccountProgrammeConditions string
 // AccountProgrammeKind defines model for AccountProgramme.Kind.
 type AccountProgrammeKind string
 
+// AccountProgrammePayout The way of payment chosen at opening; null when not chosen
+type AccountProgrammePayout string
+
 // AccountProgrammeTermUnit defines model for AccountProgramme.TermUnit.
 type AccountProgrammeTermUnit string
 
@@ -2442,8 +2502,11 @@ type AccountProgrammeInput struct {
 	Conditions AccountProgrammeInputConditions `json:"conditions"`
 
 	// OpenedOn Date YYYY-MM-DD the account was opened or last prolonged
-	OpenedOn    string `json:"opened_on"`
-	ProgrammeId string `json:"programme_id"`
+	OpenedOn string `json:"opened_on"`
+
+	// Payout A deposit's way of payment chosen at opening, one of its variant's payouts; null for the variant's only way, or not said — then a variant with more than one way leaves the year's tax unestimated. Ignored for a savings account
+	Payout      nullable.Nullable[AccountProgrammeInputPayout] `json:"payout,omitempty"`
+	ProgrammeId string                                         `json:"programme_id"`
 
 	// Term A deposit's term in the variant's unit; null for a savings account
 	Term      nullable.Nullable[int] `json:"term"`
@@ -2452,6 +2515,9 @@ type AccountProgrammeInput struct {
 
 // AccountProgrammeInputConditions How the conditions are told: by the family's marks, or by the program from its data where it can (Р-53)
 type AccountProgrammeInputConditions string
+
+// AccountProgrammeInputPayout A deposit's way of payment chosen at opening, one of its variant's payouts; null for the variant's only way, or not said — then a variant with more than one way leaves the year's tax unestimated. Ignored for a savings account
+type AccountProgrammeInputPayout string
 
 // AccountRate defines model for AccountRate.
 type AccountRate struct {

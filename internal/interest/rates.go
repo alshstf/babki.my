@@ -2,6 +2,7 @@ package interest
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,9 +120,9 @@ func (r Rates) Of(id uuid.UUID) RateOn {
 // Pays is how the account's interest is paid, and the first day it earns: a
 // savings account at each month's end onto itself; a deposit by its
 // programme — from the day after its opening to its term's end, at the end
-// or monthly as its variant pays. ok is false for a deposit whose term or
-// way of payment is not known: without a programme, or a variant with more
-// than one way.
+// or monthly, the way chosen at opening or its variant's only one. ok is
+// false for a deposit whose term or way of payment is not known: without a
+// programme, or a variant with more than one way and none chosen.
 func (r Rates) Pays(a account.Account) (pays Pays, opened time.Time, ok bool) {
 	switch a.Type {
 	case account.TypeSavings:
@@ -143,7 +144,16 @@ func (r Rates) Pays(a account.Account) (pays Pays, opened time.Time, ok bool) {
 		return Pays{}, time.Time{}, false
 	}
 	v, found := e.Variant(b.Variant)
-	if !found || len(v.Payouts) != 1 {
+	if !found {
+		return Pays{}, time.Time{}, false
+	}
+	way, chosen := deposit.Payout(""), b.Payout != nil && slices.Contains(v.Payouts, *b.Payout)
+	switch {
+	case chosen:
+		way = *b.Payout
+	case len(v.Payouts) == 1:
+		way = v.Payouts[0]
+	default:
 		return Pays{}, time.Time{}, false
 	}
 	ends := b.OpenedOn.AddDate(0, 0, *b.Term)
@@ -151,7 +161,7 @@ func (r Rates) Pays(a account.Account) (pays Pays, opened time.Time, ok bool) {
 		ends = b.OpenedOn.AddDate(0, *b.Term, 0)
 	}
 	pays = Pays{Ends: ends}
-	switch v.Payouts[0] {
+	switch way {
 	case deposit.PayoutEnd:
 	case deposit.PayoutCapitalize:
 		pays.Monthly, pays.Capitalize = true, true

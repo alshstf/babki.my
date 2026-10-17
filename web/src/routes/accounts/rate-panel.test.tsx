@@ -58,6 +58,14 @@ const catalog = {
       }],
     },
     {
+      id: "sber-sv", bank_id: "sber", bank_name: "Сбербанк", name: "СберВклад", kind: "deposit", edition_from: "2026-10-16",
+      checked_on: "2026-10-16", sources: [], notes: "",
+      variants: [{
+        id: "monthly", name: "Онлайн, проценты ежемесячно", currency: "RUB", accrual: null, payouts: ["monthly", "capitalize"], ops: "none", term_unit: "months",
+        terms: [{ from: 6, to: 6 }], amount_from_minor: 100_000_00, conditions: [], welcome: null,
+      }],
+    },
+    {
       id: "vtb-schet", bank_id: "vtb", bank_name: "ВТБ", name: "Накопительный ВТБ-Счёт", kind: "savings", edition_from: "2026-10-16",
       checked_on: "2026-10-16", sources: [], notes: "", variants: [],
     },
@@ -86,7 +94,7 @@ const tied: AccountRates = {
   current: null,
   programme: {
     programme_id: "vtb-schet", programme_name: "Накопительный ВТБ-Счёт", bank_id: "vtb", bank_name: "ВТБ", kind: "savings",
-    variant_id: "minimum", variant_name: "На минимальный остаток", opened_on: "2026-04-01", term: null, term_unit: null, amount_minor: null, conditions: "manual",
+    variant_id: "minimum", variant_name: "На минимальный остаток", opened_on: "2026-04-01", term: null, term_unit: null, amount_minor: null, conditions: "manual", payout: null,
   },
   quote: {
     percent: "11.000", edition_from: "2026-10-16", checked_on: "2026-10-16", sources: [], notes: "", period: null, bonuses: ["salary", "spend"], mgs: "6",
@@ -186,7 +194,28 @@ describe("RatePanel", () => {
     fireEvent.click(save);
     const put = await sent("PUT", "/api/v1/accounts/dep-1/programme");
     expect(await put.json()).toEqual({
-      programme_id: "gpb-km", variant_id: "end", opened_on: "2026-10-05", term: 367, amount_minor: 50_000_000, conditions: "auto",
+      programme_id: "gpb-km", variant_id: "end", opened_on: "2026-10-05", term: 367, amount_minor: 50_000_000, conditions: "auto", payout: null,
+    });
+    // One way of payment: nothing asked.
+    expect(within(dialog).queryByLabelText("Как платятся проценты")).toBeNull();
+  });
+
+  it("asks how a deposit pays its interest where its variant has more than one way", async () => {
+    answer({ ...bare, rates: [], current: null, key_rate: "14" });
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Выбрать программу банка" }));
+    const dialog = await screen.findByTestId("account-programme-dialog");
+    fireEvent.click(await within(dialog).findByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: "Сбербанк · СберВклад" }));
+    fireEvent.change(within(dialog).getByLabelText("Когда открыт или продлён вклад"), { target: { value: "2026-10-16" } });
+    fireEvent.change(within(dialog).getByLabelText("Срок, мес."), { target: { value: "6" } });
+    fireEvent.change(within(dialog).getByLabelText("Сумма при открытии, RUB"), { target: { value: "500 000" } });
+    fireEvent.click(within(dialog).getByLabelText("Как платятся проценты"));
+    fireEvent.click(await screen.findByRole("option", { name: "каждый месяц в сумму вклада" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+    const put = await sent("PUT", "/api/v1/accounts/dep-1/programme");
+    expect(await put.json()).toEqual({
+      programme_id: "sber-sv", variant_id: "monthly", opened_on: "2026-10-16", term: 6, amount_minor: 50_000_000, conditions: "auto", payout: "capitalize",
     });
   });
 

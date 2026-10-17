@@ -155,12 +155,16 @@ func (s store) AllMarks(context.Context, uuid.UUID) (map[uuid.UUID][]account.Mar
 func TestHowTheAccountsInterestIsPaid(t *testing.T) {
 	term := func(n int) *int { return &n }
 	byDays, byMonths, twoWays, none := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	chosen, foreign := uuid.New(), uuid.New()
+	capitalize, end := deposit.PayoutCapitalize, deposit.PayoutEnd
 	rates, err := interest.Load(context.Background(), uuid.New(), day("2026-10-17"), store{bindings: map[uuid.UUID]account.Binding{
 		byDays:   {Programme: "novikom-kapital", Variant: "rub", OpenedOn: day("2026-10-16"), Term: term(91)},
 		byMonths: {Programme: "sber-sbervklad", Variant: "end", OpenedOn: day("2026-10-16"), Term: term(6)},
 		// «СберВклад» monthly: paid onto a card or added to the sum — the
 		// family's choice, not known here.
 		twoWays: {Programme: "sber-sbervklad", Variant: "monthly", OpenedOn: day("2026-10-16"), Term: term(6)},
+		chosen:  {Programme: "sber-sbervklad", Variant: "monthly", OpenedOn: day("2026-10-16"), Term: term(6), Payout: &capitalize},
+		foreign: {Programme: "sber-sbervklad", Variant: "monthly", OpenedOn: day("2026-10-16"), Term: term(6), Payout: &end},
 	}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +180,8 @@ func TestHowTheAccountsInterestIsPaid(t *testing.T) {
 		{"91 days", account.Account{ID: byDays, Type: account.TypeDeposit}, true, interest.Pays{Ends: day("2027-01-15")}, "2026-10-17"},
 		{"6 months", account.Account{ID: byMonths, Type: account.TypeDeposit}, true, interest.Pays{Ends: day("2027-04-16")}, "2026-10-17"},
 		{"two ways", account.Account{ID: twoWays, Type: account.TypeDeposit}, false, interest.Pays{}, ""},
+		{"two ways, one chosen", account.Account{ID: chosen, Type: account.TypeDeposit}, true, interest.Pays{Monthly: true, Capitalize: true, Ends: day("2027-04-16")}, "2026-10-17"},
+		{"a way the variant has not", account.Account{ID: foreign, Type: account.TypeDeposit}, false, interest.Pays{}, ""},
 		{"no programme", account.Account{ID: none, Type: account.TypeDeposit}, false, interest.Pays{}, ""},
 		{"a current account", account.Account{ID: none, Type: account.TypeChecking}, false, interest.Pays{}, ""},
 	}
