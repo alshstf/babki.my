@@ -126,6 +126,7 @@ describe("TaxesPage", () => {
         { ...bankRow, account_id: "d-4", name: "Вклад", estimate: { ...est, missing: "how_paid" as const } },
         { ...bankRow, account_id: "d-5", name: "Долларовый", estimate: { ...est, missing: "currency" as const } },
         { ...bankRow, account_id: "d-6", name: "Вклад на три года", estimate: { ...est, pays_on: "2029-10-05" } },
+        { ...bankRow, account_id: "d-7", name: "Новый", estimate: { ...est, from: "2026-10-10", ahead_minor: 30_151_70 } },
       ],
     };
     answer({ ...year, people: [year.people[0], maria] });
@@ -145,6 +146,7 @@ describe("TaxesPage", () => {
       "Вклад: не известно, как банк платит проценты: у вклада нет программы банка или в программе несколько способов выплаты.",
       "Долларовый: проценты в валюте пока не оцениваются.",
       "Вклад на три года: проценты — в конце срока, 05.10.2029; в налог этого года не входят.",
+      "Новый: считается с 10.10.2026 — до первой отметки остатка денег на счёте не видно; до конца года ещё ≈ 30 151,70 ₽.",
     ]);
     // Alex's year-end adds nothing: no line for it.
     expect(within(people[0]).queryByTestId("tax-interest-year-end")).toBeNull();

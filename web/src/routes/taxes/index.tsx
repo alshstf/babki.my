@@ -96,6 +96,8 @@ function Deposits({ accounts, currency: c }: { accounts: TaxYearAccount[]; curre
               ? t("taxes.deposit.paid", { amount: formatMinor(e.paid_minor, c) })
               : t("taxes.deposit.paidFrom", { amount: formatMinor(e.paid_minor, c), date: formatDate(e.from) }),
           );
+        } else if (e.from !== null) {
+          out.push(t("taxes.deposit.from", { date: formatDate(e.from) }));
         }
     }
     if (e.ahead_minor > 0) out.push(t("taxes.deposit.ahead", { amount: formatMinor(e.ahead_minor, c) }));
