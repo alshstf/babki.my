@@ -1,0 +1,44 @@
+id: gazprombank-perspektivnye
+bank: gazprombank
+name: Вклад «Перспективные сбережения»
+kind: deposit
+watch:
+  - https://www.gazprombank.ru/personal/increase/deposits/detail/7628113/
+editions:
+  - from: 2026-10-01
+    checked_on: 2026-10-17
+    sources:
+      - https://www.gazprombank.ru/upload/files/iblock/a15/a6w5y0v9ekp6iim8ykq0y5ze74jsnxpq/Pasport-Perspektivnye-sberezheniya-s-25.06.2026.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/682/a5eu3m2tf8hp5jig1mthk9gxttqzb5sn/Pasport-Perspektivnye-sberezheniya-onlayn-s-25.06.2026.pdf
+      - https://www.gazprombank.ru/upload/files/iblock/4c3/z72dwz4ammlwykuv5p0n9vwgmnickwhf/Usloviya-Nadbavok-k-protsentnym-stavkam-po-vkladam-s-01.10.2026.pdf
+    notes: >-
+      Базовая ставка 10 % (паспорта продукта с 25.06.2026); надбавка за договор долгосрочных сбережений с НПФ
+      ГАЗФОНД пенсионные накопления — по «Условиям надбавок к процентным ставкам по вкладам» с 01.10.2026: 91 день
+      +5,5, 181 день +4, 367 дней +3,5; фиксируется на весь срок. Договор оформлен в 10 дней после вклада, первый
+      взнос от 30 000 ₽ — в 13 дней, вклад не больше взноса. Нет действующего договора — надбавка аннулируется с
+      начала вклада (отметьте). Без пополнения и снятия, проценты в конце срока.
+    variants:
+      - id: office
+        name: В офисе
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 3000000, percent: "10" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "10" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "10" }
+        bonuses: &gpb-pds
+          - id: pds
+            name: Договор долгосрочных сбережений с НПФ ГАЗФОНД действует
+            check: manual
+            terms: [{ from: 91, to: 91, plus: "5.5" }, { from: 181, to: 181, plus: "4" }, { from: 367, to: 367, plus: "3.5" }]
+      - id: online
+        name: Онлайн
+        payouts: [end]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 91, to: 91, amount_from: 3000000, percent: "10" }
+          - { from: 181, to: 181, amount_from: 3000000, percent: "10" }
+          - { from: 367, to: 367, amount_from: 3000000, percent: "10" }
+        bonuses: *gpb-pds

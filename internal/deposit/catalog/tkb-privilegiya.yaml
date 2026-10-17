@@ -1,0 +1,73 @@
+id: tkb-privilegiya
+bank: tkb
+name: Вклады «Привилегия» для клиентов Privilege
+kind: deposit
+watch:
+  - https://www.tkbbank.ru/documents/premium/
+editions:
+  - from: 2026-10-17
+    checked_on: 2026-10-17
+    sources:
+      - https://www.tkbbank.ru/documents/premium/
+    notes: >-
+      Для клиентов Privilege, от 2,5 млн ₽ (ступени — от 15, 30 и 100 млн ₽); дата редакции в документе не указана
+      — действует не позже дня сверки. Проценты ежемесячно на счёт. «Привилегия» — без пополнения и снятия;
+      «Привилегия (Управляемый)» — пополнение и снятие до неснижаемого остатка 2,5 млн ₽. При продлении держателям
+      карт Мир Supreme — надбавка 0,10–0,15 п. п. Досрочно — 0,01 %.
+    variants:
+      - id: main
+        name: «Привилегия»
+        payouts: [monthly]
+        ops: none
+        term_unit: days
+        grid:
+          - { from: 31, to: 31, amount_from: 250000000, percent: "12.6" }
+          - { from: 61, to: 61, amount_from: 250000000, percent: "13.03" }
+          - { from: 91, to: 91, amount_from: 250000000, percent: "13.4" }
+          - { from: 120, to: 120, amount_from: 250000000, percent: "13.76" }
+          - { from: 150, to: 150, amount_from: 250000000, percent: "13.73" }
+          - { from: 181, to: 181, amount_from: 250000000, percent: "13.7" }
+          - { from: 370, to: 370, amount_from: 250000000, percent: "12.82" }
+          - { from: 1110, to: 1110, amount_from: 250000000, percent: "11.53" }
+          - { from: 31, to: 31, amount_from: 1500000000, percent: "12.65" }
+          - { from: 61, to: 61, amount_from: 1500000000, percent: "13.08" }
+          - { from: 91, to: 91, amount_from: 1500000000, percent: "13.45" }
+          - { from: 120, to: 120, amount_from: 1500000000, percent: "13.81" }
+          - { from: 150, to: 150, amount_from: 1500000000, percent: "13.78" }
+          - { from: 181, to: 181, amount_from: 1500000000, percent: "13.75" }
+          - { from: 370, to: 370, amount_from: 1500000000, percent: "12.86" }
+          - { from: 1110, to: 1110, amount_from: 1500000000, percent: "11.57" }
+          - { from: 31, to: 31, amount_from: 3000000000, percent: "12.7" }
+          - { from: 61, to: 61, amount_from: 3000000000, percent: "13.13" }
+          - { from: 91, to: 91, amount_from: 3000000000, percent: "13.5" }
+          - { from: 120, to: 120, amount_from: 3000000000, percent: "13.86" }
+          - { from: 150, to: 150, amount_from: 3000000000, percent: "13.83" }
+          - { from: 181, to: 181, amount_from: 3000000000, percent: "13.8" }
+          - { from: 370, to: 370, amount_from: 3000000000, percent: "12.91" }
+          - { from: 1110, to: 1110, amount_from: 3000000000, percent: "11.6" }
+          - { from: 31, to: 31, amount_from: 10000000000, percent: "12.75" }
+          - { from: 61, to: 61, amount_from: 10000000000, percent: "13.18" }
+          - { from: 91, to: 91, amount_from: 10000000000, percent: "13.55" }
+          - { from: 120, to: 120, amount_from: 10000000000, percent: "13.91" }
+          - { from: 150, to: 150, amount_from: 10000000000, percent: "13.88" }
+          - { from: 181, to: 181, amount_from: 10000000000, percent: "13.84" }
+          - { from: 370, to: 370, amount_from: 10000000000, percent: "12.95" }
+          - { from: 1110, to: 1110, amount_from: 10000000000, percent: "11.64" }
+      - id: managed
+        name: «Привилегия (Управляемый)»
+        payouts: [monthly]
+        ops: topup_withdraw
+        term_unit: days
+        grid:
+          - { from: 61, to: 61, amount_from: 250000000, percent: "12.04" }
+          - { from: 181, to: 181, amount_from: 250000000, percent: "11.52" }
+          - { from: 370, to: 370, amount_from: 250000000, percent: "10.16" }
+          - { from: 61, to: 61, amount_from: 1500000000, percent: "12.09" }
+          - { from: 181, to: 181, amount_from: 1500000000, percent: "11.57" }
+          - { from: 370, to: 370, amount_from: 1500000000, percent: "10.21" }
+          - { from: 61, to: 61, amount_from: 3000000000, percent: "12.14" }
+          - { from: 181, to: 181, amount_from: 3000000000, percent: "11.62" }
+          - { from: 370, to: 370, amount_from: 3000000000, percent: "10.25" }
+          - { from: 61, to: 61, amount_from: 10000000000, percent: "12.19" }
+          - { from: 181, to: 181, amount_from: 10000000000, percent: "11.66" }
+          - { from: 370, to: 370, amount_from: 10000000000, percent: "10.3" }

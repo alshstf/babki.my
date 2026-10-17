@@ -383,6 +383,12 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		{"Кубань, детский", "kubankredit-detsky", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 365, Amount: 3_000_000_00}, "2026-10-20", 3_000_000_00, nil, "12.6"},
 		{"Новиком, Капитал", "novikom-kapital", Holding{Variant: "rub", OpenedOn: day("2026-10-16"), Term: 91, Amount: 1_000_000_00}, "2026-10-20", 1_000_000_00, nil, "11"},
 		{"Новиком, премиум онлайн", "novikom-kapital", Holding{Variant: "premium-online", OpenedOn: day("2026-10-16"), Term: 91, Amount: 60_000_000_00}, "2026-10-20", 60_000_000_00, nil, "13.8"},
+		// Сводные документы банков: ГПБ «Условия надбавок» — +5,5 за ПДС на 91 день; ВТБ «Тарифы по депозитам» —
+		// «Привилегия» с зарплатой на 370 дней: 12 + 0,9; Россельхозбанк «Ультра» — 13,6 % на 4 месяца.
+		{"ГПБ, Перспективные сбережения", "gazprombank-perspektivnye", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"pds": 0}, "15.5"},
+		{"ВТБ-Вклад, Привилегия", "vtb-vklad", Holding{Variant: "privilege-online-end", OpenedOn: day("2026-10-16"), Term: 370, Amount: 2_000_000_00}, "2026-10-20", 2_000_000_00, map[string]int{"salary": 0}, "12.9"},
+		{"РСХБ, Ультра", "rshb-dohodny-premium", Holding{Variant: "ultra-online-end", OpenedOn: day("2026-10-16"), Term: 4, Amount: 2_000_000_00}, "2026-10-20", 2_000_000_00, nil, "13.6"},
+		{"ТКБ, Привилегия", "tkb-privilegiya", Holding{Variant: "main", OpenedOn: day("2026-10-17"), Term: 120, Amount: 3_000_000_00}, "2026-10-20", 3_000_000_00, nil, "13.76"},
 	}
 	for _, c := range cases {
 		q, err := programme(t, c.programme).Quote(c.h, day(c.day), c.balance, key, marks(c.met))
