@@ -13,6 +13,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/interest"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/structure"
 )
@@ -121,32 +122,9 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 			balances[a.ID] = a.Balance.AmountMinor
 		}
 	}
-	rates, err := s.accounts.AllRates(ctx, spaceID)
+	rates, err := interest.Load(ctx, spaceID, s.accounts, s.keys, s.measures)
 	if err != nil {
 		return nil, "", err
-	}
-	bindings, err := s.accounts.AllBindings(ctx, spaceID)
-	if err != nil {
-		return nil, "", err
-	}
-	marks, err := s.accounts.AllMarks(ctx, spaceID)
-	if err != nil {
-		return nil, "", err
-	}
-	var measure account.Measure
-	for _, b := range bindings {
-		if b.Conditions == account.ConditionsAuto && s.measures != nil {
-			if measure, err = s.measures.MeasuresFor(ctx, spaceID); err != nil {
-				return nil, "", err
-			}
-			break
-		}
-	}
-	keyOn := func(day time.Time) (decimal.Decimal, bool, error) {
-		if s.keys == nil {
-			return decimal.Zero, false, nil
-		}
-		return s.keys.KeyRateOn(ctx, day)
 	}
 	parts := map[uuid.UUID]int64{}
 	for _, g := range list {
@@ -177,11 +155,7 @@ func (s *Service) List(ctx context.Context, spaceID uuid.UUID) ([]Valued, string
 		weighed, weight := decimal.Zero, decimal.Zero
 		for _, f := range g.Funds {
 			r := g.Yield
-			src := account.RateSource{Rates: rates[f.Account], Marks: marks[f.Account], Measure: measure}
-			if b, ok := bindings[f.Account]; ok {
-				src.Binding = &b
-			}
-			res, ok, err := account.Resolve(src, today, balances[f.Account], keyOn)
+			res, ok, err := rates.On(f.Account, today, balances[f.Account])
 			if err != nil {
 				return nil, "", err
 			}
