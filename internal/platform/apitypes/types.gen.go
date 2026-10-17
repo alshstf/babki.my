@@ -2473,6 +2473,9 @@ type AccountIncome struct {
 	// Estimate The account's estimate as on «Налоги»: why it is left out, the first balance mark
 	Estimate nullable.Nullable[TaxYearEstimate] `json:"estimate"`
 
+	// LowRate A rouble account at no more than 1 % a year all the year: its interest is not in the base (НК РФ ст. 214.2), year_minor is null and its share 0
+	LowRate bool `json:"low_rate"`
+
 	// MonthMinor A savings account: this month's interest, at today's balance and rate for the whole month
 	MonthMinor nullable.Nullable[int64] `json:"month_minor"`
 
@@ -6322,7 +6325,10 @@ type TaxYearAccount struct {
 	AgentTaxMinor int64 `json:"agent_tax_minor"`
 
 	// Bank A bank's account (current, savings, deposit) kept by its operations: only its interest counts
-	Bank           bool  `json:"bank"`
+	Bank bool `json:"bank"`
+
+	// Checking A current account or card: its rate is not known to the program, so its interest is in
+	Checking       bool  `json:"checking"`
 	CouponsMinor   int64 `json:"coupons_minor"`
 	DividendsMinor int64 `json:"dividends_minor"`
 
@@ -6331,8 +6337,11 @@ type TaxYearAccount struct {
 	ForeignBroker bool                               `json:"foreign_broker"`
 
 	// InterestMinor Interest paid on the account: a bank's counts toward the person's interest; a broker's is shown, not taxed here
-	InterestMinor int64  `json:"interest_minor"`
-	Name          string `json:"name"`
+	InterestMinor int64 `json:"interest_minor"`
+
+	// LowRate A rouble savings account or deposit at no more than 1 % a year all the year: its interest is not in the base (НК РФ ст. 214.2); its rate known for every day of the year
+	LowRate bool   `json:"low_rate"`
+	Name    string `json:"name"`
 
 	// SalesLongMinor Of it, the result on pieces held longer than the long-holding years
 	SalesLongMinor int64 `json:"sales_long_minor"`
@@ -6585,6 +6594,9 @@ type TaxYearPerson struct {
 
 	// InterestAheadMinor This year: what the deposits' and savings accounts' rates bring after today to 31 December, on their money today; 0 for a past year
 	InterestAheadMinor int64 `json:"interest_ahead_minor"`
+
+	// InterestCheckingMinor What of interest_minor current accounts and cards paid: in for want of their rates; the tax office leaves out a rouble account at no more than 1 % all the year
+	InterestCheckingMinor int64 `json:"interest_checking_minor"`
 
 	// InterestCountedMinor interest_minor and interest_estimated_minor together: the interest the tax counts
 	InterestCountedMinor int64 `json:"interest_counted_minor"`

@@ -115,8 +115,13 @@ type Account struct {
 	// Estimate is a deposit's or savings account's interest by its rate:
 	// what the year paid when it is kept by its balance, what is to come.
 	// Marked is the interest filed on it under a category marked interest.
+	// LowRate: a rouble account at no more than 1 % a year all the year —
+	// its interest is not in the base (НК РФ ст. 214.2). Checking: a current
+	// account or card, whose rate the program does not know.
 	Estimate *Estimate
 	Marked   int64
+	LowRate  bool
+	Checking bool
 }
 
 // Person is one person's year.
@@ -148,6 +153,10 @@ type Person struct {
 	ByNotice          int64
 	InterestAhead     int64
 	ByNoticeYearEnd   *int64
+	// InterestChecking is what of Interest current accounts and cards paid:
+	// in, for want of their rates — the tax office leaves out an account at
+	// no more than 1 % all the year.
+	InterestChecking int64
 	// Employers are the wages by employer, as reckoned from what reached the
 	// accounts; Wages their gross, WagesTax the tax on it by the wages'
 	// scale, WagesWithheld what the employers withheld, each on its own;
@@ -238,6 +247,10 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			interestOn[r.account] = true
 		}
 	}
+	low, err := s.lowRate(ctx, spaceID, list, year, rules.TaxCurrency)
+	if err != nil {
+		return Year{}, err
+	}
 	for _, a := range list {
 		if a.Status != account.StatusActive {
 			continue
@@ -248,9 +261,11 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		if bank && !account.CountedByJournal(a.Account) {
 			if said {
 				p := personOf(a.Account)
-				p.Accounts = append(p.Accounts, Account{ID: a.ID, Name: a.Name, Bank: true, Estimate: &e})
-				p.InterestEstimated += e.Paid
-				p.InterestAhead += e.Ahead
+				p.Accounts = append(p.Accounts, Account{ID: a.ID, Name: a.Name, Bank: true, Estimate: &e, LowRate: low[a.ID]})
+				if !low[a.ID] {
+					p.InterestEstimated += e.Paid
+					p.InterestAhead += e.Ahead
+				}
 			}
 			continue
 		}
@@ -266,14 +281,22 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 				continue
 			}
 			p := personOf(a.Account)
-			acc := Account{ID: a.ID, Name: a.Name, Bank: true, Facts: f}
+			acc := Account{ID: a.ID, Name: a.Name, Bank: true, Facts: f, LowRate: low[a.ID], Checking: a.Type == account.TypeChecking}
 			if said {
 				acc.Estimate = &e
-				p.InterestAhead += e.Ahead
 			}
 			p.Accounts = append(p.Accounts, acc)
-			p.Interest += f.Interest
 			p.Unvalued += f.Unvalued
+			if low[a.ID] {
+				continue
+			}
+			if said {
+				p.InterestAhead += e.Ahead
+			}
+			p.Interest += f.Interest
+			if acc.Checking {
+				p.InterestChecking += f.Interest
+			}
 			continue
 		}
 		if f == (portfolio.YearFacts{}) {
@@ -334,9 +357,14 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		switch {
 		case r.unvalued:
 			p.Unvalued++
+		case r.mark == category.TaxInterest && low[r.account]:
+			// A rouble account at no more than 1 % all the year: not in.
 		case r.mark == category.TaxInterest:
 			p.Interest += r.minor
 			marked[[2]uuid.UUID{r.person, r.account}] += r.minor
+			if a, ok := byID[r.account]; ok && a.Type == account.TypeChecking {
+				p.InterestChecking += r.minor
+			}
 		case r.mark == category.TaxWages:
 			wages[r.person] = append(wages[r.person], r)
 		}

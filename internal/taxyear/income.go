@@ -44,6 +44,9 @@ type Income struct {
 	Year     *int64
 	Estimate *Estimate
 	Tax      *Share
+	// LowRate: a rouble account at no more than 1 % all the year — its
+	// interest is not in the base (НК РФ ст. 214.2).
+	LowRate bool
 }
 
 // Share is the person's tax on the interest of the year, with what is still
@@ -99,10 +102,11 @@ func (s *Service) IncomeOf(ctx context.Context, spaceID, accountID uuid.UUID) (I
 			}
 			out.Estimate = acc.Estimate
 			e := acc.Estimate
-			if e == nil || e.Missing == "" {
+			if (e == nil || e.Missing == "") && !acc.LowRate {
 				v := yearOf(acc)
 				out.Year = &v
 			}
+			out.LowRate = acc.LowRate
 			if e != nil && (e.Missing == "" || e.Missing == MissingRate) && !e.NoRateAhead {
 				ahead := e.Ahead
 				out.YearEnd = &ahead
@@ -116,6 +120,9 @@ func (s *Service) IncomeOf(ctx context.Context, spaceID, accountID uuid.UUID) (I
 // yearOf is an account's interest of the year: by its journal, filed under
 // the mark, by the rate — paid and to come.
 func yearOf(a Account) int64 {
+	if a.LowRate {
+		return 0
+	}
 	v := a.Facts.Interest + a.Marked
 	if e := a.Estimate; e != nil && e.Missing == "" {
 		v += e.Paid + e.Ahead
