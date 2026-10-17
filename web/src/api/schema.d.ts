@@ -176,6 +176,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{id}/income": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A deposit's or savings account's income by its rate (decision Р-56 Б): on its money today at today's rate, the whole term's interest, what it earned to today and what will be on it at the end (a deposit), or this month's and the next twelve months' interest (a savings account); its interest of this year as the year's tax estimate counts it; and its share of its person's tax on interest at the year's end — the tax split between the person's accounts by their interest of the year, the shares adding up to the tax. 404 for an account that is not a deposit or savings account of the space. */
+        get: operations["getAccountIncome"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tax-year/foreign": {
         parameters: {
             query?: never;
@@ -4386,6 +4403,90 @@ export interface components {
             /** @description A deposit's or savings account's interest by its rate; null for a broker's or an account without one */
             estimate?: components["schemas"]["TaxYearEstimate"] | null;
         };
+        AccountIncome: {
+            /** @description The account's currency, of the income's lines */
+            currency: string;
+            /** @description The currency of year_minor and tax; empty when the space's country has no year's estimate */
+            tax_currency: string;
+            /** @description This year */
+            year: number;
+            /** @description The lines are reckoned: a rate for every day they need, and a known way of payment */
+            rated: boolean;
+            /** @description Date YYYY-MM-DD: a deposit's last day by its programme */
+            ends_on: string | null;
+            /**
+             * @description A deposit's way of payment: at the end, monthly onto a card, added to the sum monthly
+             * @enum {string|null}
+             */
+            payout: "end" | "monthly" | "capitalize" | null;
+            /**
+             * Format: int64
+             * @description A deposit: the whole term's interest, from the sum it was opened with (else its balance marks, or its money today when kept by its journal)
+             */
+            term_minor: number | null;
+            /**
+             * Format: int64
+             * @description A deposit paying at the end: what it earned to today
+             */
+            accrued_minor: number | null;
+            /**
+             * Format: int64
+             * @description A deposit whose interest stays on it: what will be on it at the end
+             */
+            at_end_minor: number | null;
+            /**
+             * Format: int64
+             * @description A savings account: this month's interest, at today's balance and rate for the whole month
+             */
+            month_minor: number | null;
+            /** @description Date YYYY-MM-DD: the day month_minor comes */
+            month_on: string | null;
+            /**
+             * Format: int64
+             * @description A savings account: the next twelve month-ends' interest, this month's in, capitalized
+             */
+            twelve_minor: number | null;
+            /**
+             * Format: int64
+             * @description What is still to come to 31 December — the account's estimate.ahead_minor on «Налоги»; null without a rate today, a known way of payment, or the tax's currency
+             */
+            year_end_minor: number | null;
+            /**
+             * Format: int64
+             * @description The account's interest of this year in tax_currency: by its journal, filed under a category marked interest, by its rate — paid and to come; null when the year's estimate leaves it out
+             */
+            year_minor: number | null;
+            /** @description The account's estimate as on «Налоги»: why it is left out, the first balance mark */
+            estimate: components["schemas"]["TaxYearEstimate"] | null;
+            /** @description Its person's tax on interest at the year's end and the account's share; null without the year's estimate */
+            tax: components["schemas"]["AccountIncomeTax"] | null;
+        };
+        AccountIncomeTax: {
+            /** @description Whose income the account's is for tax */
+            person: string;
+            /**
+             * Format: int64
+             * @description The person's interest of the year with what is still to come (interest_counted_minor + interest_ahead_minor on «Налоги»)
+             */
+            interest_minor: number;
+            /**
+             * Format: int64
+             * @description What of it is free of tax: 1 млн × the year's highest key rate so far; null without the rate
+             */
+            free_minor: number | null;
+            /**
+             * Format: int64
+             * @description The person's tax on it: by_notice_year_end_minor on «Налоги»
+             */
+            tax_minor: number;
+            /**
+             * Format: int64
+             * @description The account's part of tax_minor: by its year_minor against interest_minor; the parts of all the person's accounts add up to tax_minor
+             */
+            share_minor: number;
+            /** @description The person's accounts whose interest of the year is not estimated, by name: not in interest_minor */
+            unestimated: string[];
+        };
         TaxYearEstimate: {
             /**
              * Format: int64
@@ -6956,6 +7057,30 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getAccountIncome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The income */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountIncome"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getTaxYearForeign: {

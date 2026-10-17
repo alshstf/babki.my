@@ -107,11 +107,7 @@ func (s *Service) estimates(ctx context.Context, spaceID uuid.UUID, list []accou
 			from = opened
 		}
 		if !byJournal {
-			points := pointsOf(history[a.ID])
-			if on, amount, ok := rates.Opening(a.ID); ok && (len(points) == 0 || points[0].On.After(on)) {
-				// The sum it was opened with, until the first mark.
-				points = append([]interest.Point{{On: on, Minor: amount}}, points...)
-			}
+			points := marked(rates, a.ID, history[a.ID])
 			paid, unrated, err := interest.Earned(points, rates.Of(a.ID), pays, from, end)
 			if err != nil {
 				return nil, err
@@ -140,40 +136,32 @@ func (s *Service) estimates(ctx context.Context, spaceID uuid.UUID, list []accou
 			e.PaysOn = &ends
 		}
 		if current && (byJournal || e.Missing == MissingRate) {
-			ahead, ok, err := s.ahead(ctx, spaceID, a, rates, pays, from, today, end)
+			paid, ok, err := s.fromToday(ctx, spaceID, a, rates, pays, from, today, end)
 			if err != nil {
 				return nil, err
 			}
-			e.Ahead, e.NoRateAhead = ahead, !ok
+			e.Ahead, e.NoRateAhead = 0, !ok
+			for _, p := range paid {
+				if p.On.After(today) {
+					e.Ahead += p.Minor
+				}
+			}
 		}
 		out[a.ID] = e
 	}
 	return out, nil
 }
 
-// ahead is what the account is still to be paid after today to end, on its
-// money today — as the money forecast reckons it: this month's days before
-// today at today's balance and rate, as the bank pays for the whole month.
-// ok is false without today's rate.
-func (s *Service) ahead(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, rates interest.Rates, pays interest.Pays,
-	from, today, end time.Time,
-) (int64, bool, error) {
-	var balance int64
-	if account.CountedByJournal(a.Account) {
-		if s.cash == nil {
-			return 0, true, nil
-		}
-		resp, _, err := s.cash.Positions(ctx, spaceID, a.ID)
-		if err != nil {
-			return 0, false, err
-		}
-		for _, c := range resp.Cash {
-			if c.Currency == a.Currency {
-				balance += c.AmountMinor
-			}
-		}
-	} else if a.Balance != nil {
-		balance = a.Balance.AmountMinor
+// fromToday is what the account is paid from `from` to `to` on its money
+// today — as the money forecast reckons it: this month's days before today
+// at today's balance and rate, as the bank pays for the whole month. ok is
+// false without today's rate.
+func (s *Service) fromToday(ctx context.Context, spaceID uuid.UUID, a account.WithBalance, rates interest.Rates, pays interest.Pays,
+	from, today, to time.Time,
+) ([]interest.Payment, bool, error) {
+	balance, err := s.balanceOf(ctx, spaceID, a)
+	if err != nil {
+		return nil, false, err
 	}
 	if pays.Monthly {
 		if month := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC); month.After(from) {
@@ -187,17 +175,46 @@ func (s *Service) ahead(ctx context.Context, spaceID uuid.UUID, a account.WithBa
 		}
 		return rate(day, balance)
 	}
-	paid, unrated, err := interest.Earned([]interest.Point{{On: from, Minor: balance}}, asToday, pays, from, end)
+	paid, unrated, err := interest.Earned([]interest.Point{{On: from, Minor: balance}}, asToday, pays, from, to)
 	if err != nil || unrated != nil {
-		return 0, unrated == nil, err
+		return nil, unrated == nil, err
 	}
-	var out int64
-	for _, p := range paid {
-		if p.On.After(today) {
-			out += p.Minor
+	return paid, true, nil
+}
+
+// balanceOf is the money on the account today: by its journal, or its last
+// balance mark.
+func (s *Service) balanceOf(ctx context.Context, spaceID uuid.UUID, a account.WithBalance) (int64, error) {
+	if !account.CountedByJournal(a.Account) {
+		if a.Balance == nil {
+			return 0, nil
+		}
+		return a.Balance.AmountMinor, nil
+	}
+	if s.cash == nil {
+		return 0, nil
+	}
+	resp, _, err := s.cash.Positions(ctx, spaceID, a.ID)
+	if err != nil {
+		return 0, err
+	}
+	var balance int64
+	for _, c := range resp.Cash {
+		if c.Currency == a.Currency {
+			balance += c.AmountMinor
 		}
 	}
-	return out, true, nil
+	return balance, nil
+}
+
+// marked are the balance marks of an account kept by its balance, with the
+// sum a deposit was opened with until the first.
+func marked(rates interest.Rates, id uuid.UUID, history []account.BalancePoint) []interest.Point {
+	points := pointsOf(history)
+	if on, amount, ok := rates.Opening(id); ok && (len(points) == 0 || points[0].On.After(on)) {
+		points = append([]interest.Point{{On: on, Minor: amount}}, points...)
+	}
+	return points
 }
 
 func pointsOf(marks []account.BalancePoint) []interest.Point {

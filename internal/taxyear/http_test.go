@@ -127,3 +127,45 @@ func TestAWagesPayslipOverHTTP(t *testing.T) {
 		t.Errorf("reckoned again: %+v", p)
 	}
 }
+
+// A savings account kept by its balance, 600 000 ₽ at 12 % written in by
+// hand: its income comes over HTTP, its tax under the free part is nothing;
+// a card is not a deposit or savings account — 404.
+func TestAnAccountsIncomeOverHTTP(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	accStore, md := account.NewStore(pool), marketdata.NewStore(pool)
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	account.NewHandler(accStore, famStore, marketdata.NewConverter(md), nil, auth, sm).Mount(srv)
+	taxyear.NewHandler(taxyear.NewService(accStore, noFacts{}, famStore, md).WithInterest(accStore, md, nil, nil), auth, sm).Mount(srv)
+	url, c := apitest.Serve(t, srv.Handler())
+
+	newAccount := func(typ string) string {
+		var a struct {
+			ID string `json:"id"`
+		}
+		apitest.Decode(t, apitest.Do(t, c, "POST", url+"/api/v1/accounts", fmt.Sprintf(`{"name":"Счёт","type":%q,"currency":"RUB"}`, typ)), &a)
+		return a.ID
+	}
+	savings, card := newAccount("savings"), newAccount("checking")
+	for _, req := range []struct{ path, body string }{
+		{"/balance", `{"amount_minor":60000000,"as_of":"2026-01-01"}`},
+		{"/rates", `{"from_on":"2026-01-01","kind":"fixed","percent":"12"}`},
+	} {
+		if r := apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+savings+req.path, req.body); r.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %d", req.path, r.StatusCode)
+		}
+	}
+	var got apitypes.AccountIncome
+	apitest.Decode(t, apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+savings+"/income", ""), &got)
+	if !got.Rated || got.MonthMinor.IsNull() || got.TwelveMinor.IsNull() || got.Currency != "RUB" || got.Tax.IsNull() || got.Tax.MustGet().ShareMinor != 0 {
+		t.Errorf("income = %+v", got)
+	}
+	if r := apitest.Do(t, c, "GET", url+"/api/v1/accounts/"+card+"/income", ""); r.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(r.Body)
+		t.Errorf("a card = %d %s, want 404", r.StatusCode, body)
+	}
+}

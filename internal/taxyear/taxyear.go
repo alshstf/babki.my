@@ -114,7 +114,9 @@ type Account struct {
 	AgentTax              int64
 	// Estimate is a deposit's or savings account's interest by its rate:
 	// what the year paid when it is kept by its balance, what is to come.
+	// Marked is the interest filed on it under a category marked interest.
 	Estimate *Estimate
+	Marked   int64
 }
 
 // Person is one person's year.
@@ -224,6 +226,18 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	if err != nil {
 		return Year{}, err
 	}
+	// Earnings under marked categories: wages by employer, interest. A bank's
+	// account with interest filed so is listed with its person.
+	rows, err := s.earnings(ctx, spaceID, year, rules.TaxCurrency, byID, owner)
+	if err != nil {
+		return Year{}, err
+	}
+	interestOn := map[uuid.UUID]bool{}
+	for _, r := range rows {
+		if r.mark == category.TaxInterest && !r.unvalued {
+			interestOn[r.account] = true
+		}
+	}
 	for _, a := range list {
 		if a.Status != account.StatusActive {
 			continue
@@ -248,7 +262,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			return Year{}, fmt.Errorf("taxyear: account %s: %w", a.ID, err)
 		}
 		if bank {
-			if f.Interest == 0 && f.Unvalued == 0 && !said {
+			if f.Interest == 0 && f.Unvalued == 0 && !said && !interestOn[a.ID] {
 				continue
 			}
 			p := personOf(a.Account)
@@ -283,11 +297,6 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		p.Accounts = append(p.Accounts, acc)
 		p.Unvalued += f.Unvalued
 	}
-	// Earnings under marked categories: wages by employer, interest.
-	rows, err := s.earnings(ctx, spaceID, year, rules.TaxCurrency, byID, owner)
-	if err != nil {
-		return Year{}, err
-	}
 	entered, err := s.Entries(ctx, spaceID)
 	if err != nil {
 		return Year{}, err
@@ -317,6 +326,9 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		}
 	}
 	wages := map[uuid.UUID][]earning{}
+	// Interest filed on an account, by whose it is: a member's own earning
+	// on a shared account is in that member's year, not the account's person's.
+	marked := map[[2]uuid.UUID]int64{}
 	for _, r := range rows {
 		p := personByID(r.person)
 		switch {
@@ -324,6 +336,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 			p.Unvalued++
 		case r.mark == category.TaxInterest:
 			p.Interest += r.minor
+			marked[[2]uuid.UUID{r.person, r.account}] += r.minor
 		case r.mark == category.TaxWages:
 			wages[r.person] = append(wages[r.person], r)
 		}
@@ -349,6 +362,9 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 	}
 	for _, who := range order {
 		p := people[who]
+		for i := range p.Accounts {
+			p.Accounts[i].Marked = marked[[2]uuid.UUID{who, p.Accounts[i].ID}]
+		}
 		var securities, dividends int64
 		for _, a := range p.Accounts {
 			securities += a.Securities

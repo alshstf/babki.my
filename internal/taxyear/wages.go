@@ -50,6 +50,7 @@ type WagePayment struct {
 // summed; unvalued when it is not in the tax currency.
 type earning struct {
 	op       uuid.UUID
+	account  uuid.UUID
 	on       time.Time
 	person   uuid.UUID
 	mark     category.TaxMark
@@ -118,7 +119,7 @@ func (s *Service) earnings(ctx context.Context, spaceID uuid.UUID, year int, cur
 			}
 			at[mark] = len(out)
 			out = append(out, earning{
-				op: o.ID, on: o.OccurredOn, person: who, mark: mark, employer: strings.TrimSpace(o.Counterparty),
+				op: o.ID, account: o.AccountID, on: o.OccurredOn, person: who, mark: mark, employer: strings.TrimSpace(o.Counterparty),
 				minor: p.minor, unvalued: o.Currency != currency,
 			})
 		}
