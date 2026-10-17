@@ -383,6 +383,10 @@ func TestTheBanksOwnFigures(t *testing.T) {
 		{"Кубань, детский", "kubankredit-detsky", Holding{Variant: "main", OpenedOn: day("2026-10-16"), Term: 365, Amount: 3_000_000_00}, "2026-10-20", 3_000_000_00, nil, "12.6"},
 		{"Новиком, Капитал", "novikom-kapital", Holding{Variant: "rub", OpenedOn: day("2026-10-16"), Term: 91, Amount: 1_000_000_00}, "2026-10-20", 1_000_000_00, nil, "11"},
 		{"Новиком, премиум онлайн", "novikom-kapital", Holding{Variant: "premium-online", OpenedOn: day("2026-10-16"), Term: 91, Amount: 60_000_000_00}, "2026-10-20", 60_000_000_00, nil, "13.8"},
+		// Минимальные ставки Новикомбанка с 07.10: 181 день «премиум онлайн» — 13,1 % (страница — 13,3 и выше),
+		// «Premium Капитал» в юанях на 367 дней — 2,8 % от 1 млн ¥.
+		{"Новиком, премиум онлайн 181", "novikom-kapital", Holding{Variant: "premium-online", OpenedOn: day("2026-10-16"), Term: 181, Amount: 60_000_000_00}, "2026-10-20", 60_000_000_00, nil, "13.1"},
+		{"Новиком, Premium в юанях", "novikom-kapital", Holding{Variant: "premium-cny", OpenedOn: day("2026-10-16"), Term: 367, Amount: 1_000_000_00}, "2026-10-20", 1_000_000_00, nil, "2.8"},
 		// Сводные документы банков: ГПБ «Условия надбавок» — +5,5 за ПДС на 91 день; ВТБ «Тарифы по депозитам» —
 		// «Привилегия» с зарплатой на 370 дней: 12 + 0,9; Россельхозбанк «Ультра» — 13,6 % на 4 месяца.
 		{"ГПБ, Перспективные сбережения", "gazprombank-perspektivnye", Holding{Variant: "online", OpenedOn: day("2026-10-16"), Term: 91, Amount: 100_000_00}, "2026-10-20", 100_000_00, map[string]int{"pds": 0}, "15.5"},
@@ -405,6 +409,12 @@ func TestTheBanksOwnFigures(t *testing.T) {
 	_, err := programme(t, "alfa-schet").Quote(Holding{Variant: "minimum", OpenedOn: day("2026-02-10")}, day("2026-10-20"), 1, key, nil)
 	if !errors.Is(err, ErrOpened) {
 		t.Errorf("an account of February: %v", err)
+	}
+	// «Premium Капитал» opens from 3,5 million roubles: a smaller sum has no
+	// rate of the line, not the premium one.
+	_, err = programme(t, "novikom-kapital").Quote(Holding{Variant: "premium", OpenedOn: day("2026-10-16"), Term: 91, Amount: 1_000_000_00}, day("2026-10-20"), 1_000_000_00, key, nil)
+	if !errors.Is(err, ErrNoCell) {
+		t.Errorf("Premium Капитал under 3,5 million: %v", err)
 	}
 }
 
