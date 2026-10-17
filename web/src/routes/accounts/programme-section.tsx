@@ -29,6 +29,20 @@ export function rate(s: string): string {
   return `${Number(s).toLocaleString("ru-RU", { maximumFractionDigits: 3 })} %`;
 }
 
+type Payout = NonNullable<NonNullable<AccountRates["programme"]>["payout"]>;
+
+// usePayouts names the ways a deposit's interest is paid.
+function usePayouts(): Record<Payout, string> {
+  const { t } = useTranslation();
+  return {
+    end: t("programme.payoutEnd"),
+    monthly: t("programme.payoutMonthly"),
+    capitalize: t("programme.payoutCapitalize"),
+    daily: t("programme.payoutDaily"),
+    quarterly: t("programme.payoutQuarterly"),
+  };
+}
+
 // The first day of this month, the day a mark made now holds from.
 function thisMonth(): string {
   return `${localToday().slice(0, 8)}01`;
@@ -64,6 +78,7 @@ export function ProgrammeBlock({ account, data, canEdit }: { account: AccountWit
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const untie = useDeleteProgramme(account.id);
+  const payouts = usePayouts();
   const p = data.programme;
   if (!p) {
     return (
@@ -91,6 +106,7 @@ export function ProgrammeBlock({ account, data, canEdit }: { account: AccountWit
           {p.variant_name} · {t("programme.openedOn", { date: formatDate(p.opened_on) })}
           {p.term !== null && ` · ${t("programme.term", { term: p.term, unit })}`}
           {p.amount_minor !== null && ` · ${formatMinor(p.amount_minor, account.currency)}`}
+          {p.payout !== null && ` · ${t("programme.payoutShown", { way: payouts[p.payout] })}`}
         </div>
         <div className="text-muted-foreground">{p.conditions === "auto" ? t("programme.modeAuto") : t("programme.modeManual")}</div>
         {data.quote === null && <div className="text-amber-700 dark:text-amber-400">{t("programme.noQuote")}</div>}
@@ -245,6 +261,12 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
   const termOK = kind === "savings" || (Number.isInteger(term) && (variant?.terms ?? []).some((r) => term >= r.from && term <= r.to));
   const amountOK = kind === "savings" || (amount !== null && amount >= (variant?.amount_from_minor ?? 0));
   const [mode, setMode] = useState<"manual" | "auto">(was?.conditions ?? "auto");
+  const payoutNames = usePayouts();
+  const [payout, setPayout] = useState<Payout | "">(was?.payout ?? "");
+  // A way is asked only where the variant has more than one; one the variant
+  // has not — another variant picked — is dropped.
+  const ways = kind === "deposit" && variant && variant.payouts.length > 1 ? variant.payouts : [];
+  const chosen = payout !== "" && ways.includes(payout) ? payout : null;
   const valid = !!programme && !!variant && /^\d{4}-\d{2}-\d{2}$/.test(openedOn) && termOK && amountOK;
   const unit = variant?.term_unit === "months" ? t("programme.months") : t("programme.days");
   const submit = () => {
@@ -257,6 +279,7 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
         term: kind === "deposit" ? term : null,
         amount_minor: kind === "deposit" ? amount : null,
         conditions: mode,
+        payout: chosen,
       },
       { onSuccess: onClose },
     );
@@ -328,6 +351,24 @@ function ProgrammeDialog({ account, data, onClose }: { account: AccountWithBalan
                     <Input id="programme-amount" inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value)} />
                     <span className="text-xs text-muted-foreground">{t("programme.amountFrom", { amount: formatMinor(variant.amount_from_minor, account.currency) })}</span>
                   </div>
+                </div>
+              )}
+              {ways.length > 0 && (
+                <div className="grid gap-1">
+                  <Label htmlFor="programme-payout">{t("programme.payout")}</Label>
+                  <Select value={chosen ?? ""} onValueChange={(v) => setPayout(v as Payout)}>
+                    <SelectTrigger id="programme-payout">
+                      <SelectValue placeholder={t("programme.payoutNone")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ways.map((w) => (
+                        <SelectItem key={w} value={w}>
+                          {payoutNames[w]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">{t("programme.payoutHint")}</span>
                 </div>
               )}
               {variant && variant.conditions.length > 0 && (

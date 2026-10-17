@@ -156,6 +156,10 @@ func (h *Handler) handleSetProgramme(w http.ResponseWriter, r *http.Request) {
 	if a, err := req.AmountMinor.Get(); err == nil {
 		b.Amount = &a
 	}
+	if way, err := req.Payout.Get(); err == nil {
+		w := deposit.Payout(way)
+		b.Payout = &w
+	}
 	if err := h.store.SetBinding(r.Context(), p.SpaceID, id, b); err != nil {
 		family.WriteError(w, err)
 		return
@@ -240,6 +244,9 @@ func BindingAPI(b *Binding) nullable.Nullable[apitypes.AccountProgrammeInput] {
 	}
 	if b.Amount != nil {
 		out.AmountMinor = nullable.NewNullableWithValue(*b.Amount)
+	}
+	if b.Payout != nil {
+		out.Payout = nullable.NewNullableWithValue(apitypes.AccountProgrammeInputPayout(*b.Payout))
 	}
 	return nullable.NewNullableWithValue(out)
 }

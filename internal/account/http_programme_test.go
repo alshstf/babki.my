@@ -110,6 +110,30 @@ func TestADepositTiedToItsProgramme(t *testing.T) {
 	}
 }
 
+// «СберВклад» with interest monthly pays it onto a card or adds it to the
+// sum, as chosen at opening: the way is kept with the programme; a way the
+// variant has not is refused; none said — none kept.
+func TestADepositsWayOfPayment(t *testing.T) {
+	url, c := programmeAPI(t)
+	dep := newAccount(t, url, c, "deposit", 500_000_00)
+	put := func(payout string) *http.Response {
+		return apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+dep+"/programme",
+			`{"programme_id":"sber-sbervklad","variant_id":"monthly","opened_on":"2026-10-16","term":6,"amount_minor":50000000,"conditions":"manual"`+payout+`}`)
+	}
+	var got apitypes.AccountRates
+	apitest.Decode(t, put(`,"payout":"capitalize"`), &got)
+	if p := got.Programme.MustGet(); p.Payout.MustGet() != apitypes.AccountProgrammePayoutCapitalize {
+		t.Errorf("chosen = %+v", p)
+	}
+	if r := put(`,"payout":"end"`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a way the variant has not = %d, want 400", r.StatusCode)
+	}
+	apitest.Decode(t, put(``), &got)
+	if p := got.Programme.MustGet(); !p.Payout.IsNull() {
+		t.Errorf("none said = %+v", p)
+	}
+}
+
 // The ВТБ-Счёт on the minimal balance, opened today: the base 6 % without a
 // mark; marked a new client — the welcome 14,2 %. Opened half a year ago,
 // marked for the wages and purchases from 50 000 ₽ — 6 + 2 + 4; the purchases'

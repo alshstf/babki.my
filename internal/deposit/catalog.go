@@ -335,6 +335,17 @@ func (p Programme) VariantMoney(id string) (string, bool) {
 	return "", false
 }
 
+// Pays says the variant, in the edition of the day of opening, pays the
+// interest that way.
+func (p Programme) Pays(id string, opened time.Time, way Payout) bool {
+	e, ok := p.EditionOn(opened)
+	if !ok {
+		return false
+	}
+	v, ok := e.Variant(id)
+	return ok && slices.Contains(v.Payouts, way)
+}
+
 func (v Variant) admits(opened time.Time) bool {
 	return v.OpenedFrom == "" || opened.Format(time.DateOnly) >= v.OpenedFrom
 }

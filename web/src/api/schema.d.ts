@@ -2876,6 +2876,11 @@ export interface components {
              * @enum {string}
              */
             conditions: "manual" | "auto";
+            /**
+             * @description A deposit's way of payment chosen at opening, one of its variant's payouts; null for the variant's only way, or not said — then a variant with more than one way leaves the year's tax unestimated. Ignored for a savings account
+             * @enum {string|null}
+             */
+            payout?: "end" | "monthly" | "capitalize" | "daily" | "quarterly" | null;
         };
         AccountProgramme: {
             programme_id: string;
@@ -2894,6 +2899,11 @@ export interface components {
             amount_minor: number | null;
             /** @enum {string} */
             conditions: "manual" | "auto";
+            /**
+             * @description The way of payment chosen at opening; null when not chosen
+             * @enum {string|null}
+             */
+            payout: "end" | "monthly" | "capitalize" | "daily" | "quarterly" | null;
         };
         ProgrammeQuote: {
             /** @description The rate a year on today's balance, weighed by its parts */

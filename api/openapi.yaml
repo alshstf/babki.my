@@ -3907,9 +3907,10 @@ components:
         term: { type: integer, nullable: true, description: "A deposit's term in the variant's unit; null for a savings account" }
         amount_minor: { type: integer, format: int64, nullable: true, description: "A deposit's sum at opening; null for a savings account" }
         conditions: { type: string, enum: [manual, auto], description: "How the conditions are told: by the family's marks, or by the program from its data where it can (Р-53)" }
+        payout: { type: string, nullable: true, enum: [end, monthly, capitalize, daily, quarterly], description: "A deposit's way of payment chosen at opening, one of its variant's payouts; null for the variant's only way, or not said — then a variant with more than one way leaves the year's tax unestimated. Ignored for a savings account" }
     AccountProgramme:
       type: object
-      required: [programme_id, programme_name, bank_id, bank_name, kind, variant_id, variant_name, opened_on, term, term_unit, amount_minor, conditions]
+      required: [programme_id, programme_name, bank_id, bank_name, kind, variant_id, variant_name, opened_on, term, term_unit, amount_minor, conditions, payout]
       properties:
         programme_id: { type: string }
         programme_name: { type: string }
@@ -3923,6 +3924,7 @@ components:
         term_unit: { type: string, nullable: true, enum: [days, months] }
         amount_minor: { type: integer, format: int64, nullable: true }
         conditions: { type: string, enum: [manual, auto] }
+        payout: { type: string, nullable: true, enum: [end, monthly, capitalize, daily, quarterly], description: "The way of payment chosen at opening; null when not chosen" }
     ProgrammeQuote:
       type: object
       required: [percent, edition_from, checked_on, sources, notes, period, bonuses, parts, mgs]

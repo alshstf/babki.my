@@ -178,6 +178,10 @@ func (h *Handler) writeProgramme(ctx context.Context, out *apitypes.AccountRates
 		ProgrammeId: p.ID, ProgrammeName: p.Name, BankId: p.Bank, BankName: bank.Name, Kind: apitypes.AccountProgrammeKind(p.Kind),
 		VariantId: b.Variant, VariantName: v.Name, OpenedOn: b.OpenedOn.Format(time.DateOnly), Conditions: apitypes.AccountProgrammeConditions(b.Conditions),
 		Term: nullable.NewNullNullable[int](), TermUnit: nullable.NewNullNullable[apitypes.AccountProgrammeTermUnit](), AmountMinor: nullable.NewNullNullable[int64](),
+		Payout: nullable.NewNullNullable[apitypes.AccountProgrammePayout](),
+	}
+	if b.Payout != nil {
+		ap.Payout = nullable.NewNullableWithValue(apitypes.AccountProgrammePayout(*b.Payout))
 	}
 	if b.Term != nil {
 		ap.Term = nullable.NewNullableWithValue(*b.Term)
