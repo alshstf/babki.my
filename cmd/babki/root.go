@@ -183,14 +183,17 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	// the endpoints say push is off.
 	var pushKeys *notify.Keys
 	var pushSender notify.Sender
+	// Telegram's bot tokens are sealed with the same key (decision Р-61 Б).
+	var telegram *notify.Telegram
 	if r.box != nil {
 		keys, err := notify.KeysFrom(r.box)
 		if err != nil {
 			return err
 		}
 		pushKeys, pushSender = &keys, notify.NewWebPush(keys)
+		telegram = &notify.Telegram{API: notify.NewBotAPI(), Box: r.box}
 	}
-	notify.NewHandler(notify.NewStore(r.pool), pushKeys, pushSender, famAuth, famSM, r.log).Mount(srv)
+	notify.NewHandler(notify.NewStore(r.pool), pushKeys, pushSender, famAuth, famSM, r.log).WithTelegram(telegram).Mount(srv)
 	cashflowSvc := cashflow.NewService(opStore, accStore, category.NewStore(r.pool), famStore, converter)
 	cashflow.NewHandler(cashflowSvc, famAuth, famSM).Mount(srv)
 	budgetSvc := budget.NewService(r.pool, cashflowSvc, category.NewStore(r.pool))
@@ -518,13 +521,13 @@ func newMigrateCmd() *cobra.Command {
 	}
 }
 
-// newResealCmd re-encrypts every broker token and receipts mailbox password
-// with BABKI_ENCRYPTION_KEY, reading those sealed with
+// newResealCmd re-encrypts every broker token, receipts mailbox password and
+// Telegram bot token with BABKI_ENCRYPTION_KEY, reading those sealed with
 // BABKI_ENCRYPTION_KEY_PREVIOUS, the last step of a key change.
 func newResealCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reseal",
-		Short: "Перешифровать токены брокеров и пароли почты для чеков текущим ключом",
+		Short: "Перешифровать токены брокеров, пароли почты для чеков и токены ботов Telegram текущим ключом",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
@@ -544,6 +547,11 @@ func newResealCmd() *cobra.Command {
 				return err
 			}
 			r.log.Info("receipts mailbox passwords resealed with the current key", "count", m)
+			b, err := notify.NewStore(r.pool).ResealBots(ctx, r.box)
+			if err != nil {
+				return err
+			}
+			r.log.Info("telegram bot tokens resealed with the current key", "count", b)
 			return nil
 		},
 	}

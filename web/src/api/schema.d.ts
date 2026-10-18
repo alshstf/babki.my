@@ -628,6 +628,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/telegram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Telegram as the reminders' second channel (decision Р-61 Б): whether the server can keep a bot's token (it needs the encryption key), the space's bot, and whether the member's chat is tied to it. */
+        get: operations["getTelegram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/telegram/bot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description The owner gives the space a bot by its token from @BotFather. Telegram is asked the bot's name first; the token is kept sealed with the encryption key and never shown again, only its last four characters. A new bot unties the chats tied to the one before. */
+        put: operations["setTelegramBot"];
+        post?: never;
+        /** @description The owner takes the space's bot away, and with it every chat tied to it. */
+        delete: operations["deleteTelegramBot"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/telegram/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description A code to tie the member's chat with: opened as the link, Telegram sends the bot «/start <code>», and the program ties the chat within a minute. The code lasts a quarter of an hour; a new one replaces it. */
+        post: operations["linkTelegram"];
+        /** @description Unties the member's chat. */
+        delete: operations["unlinkTelegram"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recurring/hidden": {
         parameters: {
             query?: never;
@@ -5306,6 +5359,8 @@ export interface components {
         /** @description One of card, budget, goal, storage, payout, declared, sync, reconcile, stale (a plain string: an enum's values would take the generated names of other enums). What a reminder is about: card — a credit card's payment; budget — a category near or past its limit; goal — a savings goal late or due; storage — a safe box's rent ending; payout — payouts that came; declared — dividends declared on the family's papers; sync — a broker's token refused or its sync failing; reconcile — an account apart from its broker; stale — prices or rates not loading */
         PushKind: string;
         PushSettings: {
+            /** @description Telegram's messages carry the sums; without them a sum shows as «…» */
+            amounts: boolean;
             /** @description Every kind, in the order to show them, with whether the member takes it */
             kinds: components["schemas"]["PushKindSetting"][];
             /** @description Hour 0–23 by the server's clock from which nothing is sent */
@@ -5315,11 +5370,42 @@ export interface components {
         };
         PushKindSetting: {
             kind: components["schemas"]["PushKind"];
+            /** @description The member takes it on their devices */
             on: boolean;
+            /** @description The member takes it in Telegram */
+            telegram: boolean;
+        };
+        TelegramStatus: {
+            /** @description The server can keep a bot's token: it has the encryption key */
+            available: boolean;
+            /** @description The member may give or take the space's bot: the owner */
+            can_manage: boolean;
+            bot: components["schemas"]["TelegramBot"] | null;
+            /** @description The member's chat is tied to the space's bot */
+            linked: boolean;
+        };
+        TelegramBot: {
+            /** @description The bot's name in Telegram, without @ */
+            username: string;
+            token_last4: string;
+        };
+        TelegramBotInput: {
+            /** @description The bot's token from @BotFather */
+            token: string;
+        };
+        TelegramLink: {
+            code: string;
+            /** @description https://t.me/<bot>?start=<code> */
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
         };
         PushSettingsInput: {
-            /** @description The kinds the member does not take */
+            /** @description The kinds the member does not take on their devices */
             off: components["schemas"]["PushKind"][];
+            /** @description The kinds the member does not take in Telegram */
+            telegram_off: components["schemas"]["PushKind"][];
+            amounts: boolean;
             quiet_from: number;
             quiet_to: number;
         };
@@ -8215,6 +8301,123 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getTelegram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The space's bot and the member's chat */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramStatus"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    setTelegramBot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramBotInput"];
+            };
+        };
+        responses: {
+            /** @description The space's bot as kept */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramStatus"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteTelegramBot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The space without a bot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramStatus"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    linkTelegram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The code and the link to open */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramLink"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    unlinkTelegram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member without a chat */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramStatus"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     hideRecurring: {

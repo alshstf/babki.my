@@ -53,9 +53,9 @@ func (s *Store) Forget(ctx context.Context, endpoint string) error {
 	return nil
 }
 
-// Spaces are the spaces with a device to send to.
+// Spaces are the spaces with a device or a Telegram chat to send to.
 func (s *Store) Spaces(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := s.db.Query(ctx, `SELECT DISTINCT space_id FROM push_subscriptions`)
+	rows, err := s.db.Query(ctx, `SELECT space_id FROM push_subscriptions UNION SELECT space_id FROM telegram_chats`)
 	if err != nil {
 		return nil, fmt.Errorf("notify: spaces: %w", err)
 	}

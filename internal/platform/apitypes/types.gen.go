@@ -6261,11 +6261,19 @@ type PushKind = string
 type PushKindSetting struct {
 	// Kind One of card, budget, goal, storage, payout, declared, sync, reconcile, stale (a plain string: an enum's values would take the generated names of other enums). What a reminder is about: card — a credit card's payment; budget — a category near or past its limit; goal — a savings goal late or due; storage — a safe box's rent ending; payout — payouts that came; declared — dividends declared on the family's papers; sync — a broker's token refused or its sync failing; reconcile — an account apart from its broker; stale — prices or rates not loading
 	Kind PushKind `json:"kind"`
-	On   bool     `json:"on"`
+
+	// On The member takes it on their devices
+	On bool `json:"on"`
+
+	// Telegram The member takes it in Telegram
+	Telegram bool `json:"telegram"`
 }
 
 // PushSettings defines model for PushSettings.
 type PushSettings struct {
+	// Amounts Telegram's messages carry the sums; without them a sum shows as «…»
+	Amounts bool `json:"amounts"`
+
 	// Kinds Every kind, in the order to show them, with whether the member takes it
 	Kinds []PushKindSetting `json:"kinds"`
 
@@ -6278,10 +6286,15 @@ type PushSettings struct {
 
 // PushSettingsInput defines model for PushSettingsInput.
 type PushSettingsInput struct {
-	// Off The kinds the member does not take
+	Amounts bool `json:"amounts"`
+
+	// Off The kinds the member does not take on their devices
 	Off       []PushKind `json:"off"`
 	QuietFrom int        `json:"quiet_from"`
 	QuietTo   int        `json:"quiet_to"`
+
+	// TelegramOff The kinds the member does not take in Telegram
+	TelegramOff []PushKind `json:"telegram_off"`
 }
 
 // PushSubscriptionRequest defines model for PushSubscriptionRequest.
@@ -7293,6 +7306,42 @@ type TaxYearWagePayment struct {
 	On            string             `json:"on"`
 	OperationId   openapi_types.UUID `json:"operation_id"`
 	WithheldMinor int64              `json:"withheld_minor"`
+}
+
+// TelegramBot defines model for TelegramBot.
+type TelegramBot struct {
+	TokenLast4 string `json:"token_last4"`
+
+	// Username The bot's name in Telegram, without @
+	Username string `json:"username"`
+}
+
+// TelegramBotInput defines model for TelegramBotInput.
+type TelegramBotInput struct {
+	// Token The bot's token from @BotFather
+	Token string `json:"token"`
+}
+
+// TelegramLink defines model for TelegramLink.
+type TelegramLink struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Url https://t.me/<bot>?start=<code>
+	Url string `json:"url"`
+}
+
+// TelegramStatus defines model for TelegramStatus.
+type TelegramStatus struct {
+	// Available The server can keep a bot's token: it has the encryption key
+	Available bool                           `json:"available"`
+	Bot       nullable.Nullable[TelegramBot] `json:"bot"`
+
+	// CanManage The member may give or take the space's bot: the owner
+	CanManage bool `json:"can_manage"`
+
+	// Linked The member's chat is tied to the space's bot
+	Linked bool `json:"linked"`
 }
 
 // TermRange defines model for TermRange.
@@ -8499,6 +8548,9 @@ type UpdateSpaceJSONRequestBody = UpdateSpaceRequest
 
 // EnterTaxYearWageJSONRequestBody defines body for EnterTaxYearWage for application/json ContentType.
 type EnterTaxYearWageJSONRequestBody = TaxYearWageEntry
+
+// SetTelegramBotJSONRequestBody defines body for SetTelegramBot for application/json ContentType.
+type SetTelegramBotJSONRequestBody = TelegramBotInput
 
 // CreateTinvestConnectionJSONRequestBody defines body for CreateTinvestConnection for application/json ContentType.
 type CreateTinvestConnectionJSONRequestBody = CreateTinvestConnectionRequest

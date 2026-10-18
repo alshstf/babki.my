@@ -31,16 +31,18 @@ const (
 // Kinds are every kind, in the order the settings show them.
 var Kinds = []Kind{KindCard, KindBudget, KindGoal, KindStorage, KindPayout, KindDeclared, KindSync, KindReconcile, KindStale}
 
-// Prefs are a member's choice: the kinds turned off, and the hours from
+// Prefs are a member's choice: the kinds turned off on the devices and in
+// Telegram, whether Telegram's messages carry the sums, and the hours from
 // QuietFrom to QuietTo, by the server's clock, when nothing is sent.
 type Prefs struct {
-	Off                []Kind
+	Off, TelegramOff   []Kind
+	Amounts            bool
 	QuietFrom, QuietTo int
 }
 
-// DefaultPrefs: every kind, quiet from 21 to 9 — as reminders went before
-// there was a choice.
-func DefaultPrefs() Prefs { return Prefs{QuietFrom: 21, QuietTo: 9} }
+// DefaultPrefs: every kind, the sums in, quiet from 21 to 9 — as reminders
+// went before there was a choice.
+func DefaultPrefs() Prefs { return Prefs{Amounts: true, QuietFrom: 21, QuietTo: 9} }
 
 // Quiet says nothing is sent at hour; equal hours are never quiet.
 func (p Prefs) Quiet(hour int) bool {
@@ -54,16 +56,20 @@ func (p Prefs) Quiet(hour int) bool {
 	}
 }
 
-// Wants says the member takes reminders of kind.
+// Wants says the member takes reminders of kind on their devices.
 func (p Prefs) Wants(k Kind) bool { return !slices.Contains(p.Off, k) }
+
+// WantsTelegram says the member takes reminders of kind in Telegram.
+func (p Prefs) WantsTelegram(k Kind) bool { return !slices.Contains(p.TelegramOff, k) }
 
 var errPrefs = fmt.Errorf("%w: quiet hours are 0 to 23, and the kinds are the known ones", family.ErrValidation)
 
 // Prefs are the member's choice, the default without one.
 func (s *Store) Prefs(ctx context.Context, userID uuid.UUID) (Prefs, error) {
 	p := DefaultPrefs()
-	var off []string
-	err := s.db.QueryRow(ctx, `SELECT off, quiet_from, quiet_to FROM push_prefs WHERE user_id = $1`, userID).Scan(&off, &p.QuietFrom, &p.QuietTo)
+	var off, tg []string
+	err := s.db.QueryRow(ctx, `SELECT off, telegram_off, amounts, quiet_from, quiet_to FROM push_prefs WHERE user_id = $1`, userID).
+		Scan(&off, &tg, &p.Amounts, &p.QuietFrom, &p.QuietTo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, nil
 	}
@@ -73,6 +79,9 @@ func (s *Store) Prefs(ctx context.Context, userID uuid.UUID) (Prefs, error) {
 	for _, k := range off {
 		p.Off = append(p.Off, Kind(k))
 	}
+	for _, k := range tg {
+		p.TelegramOff = append(p.TelegramOff, Kind(k))
+	}
 	return p, nil
 }
 
@@ -81,21 +90,35 @@ func (s *Store) SetPrefs(ctx context.Context, userID uuid.UUID, p Prefs) error {
 	if p.QuietFrom < 0 || p.QuietFrom > 23 || p.QuietTo < 0 || p.QuietTo > 23 {
 		return errPrefs
 	}
-	off := make([]string, 0, len(p.Off))
-	for _, k := range p.Off {
-		if !slices.Contains(Kinds, k) {
-			return errPrefs
-		}
-		if !slices.Contains(off, string(k)) {
-			off = append(off, string(k))
-		}
+	off, err := kindsOf(p.Off)
+	if err != nil {
+		return err
 	}
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO push_prefs (user_id, off, quiet_from, quiet_to) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (user_id) DO UPDATE SET off = EXCLUDED.off, quiet_from = EXCLUDED.quiet_from, quiet_to = EXCLUDED.quiet_to`,
-		userID, off, p.QuietFrom, p.QuietTo)
+	tg, err := kindsOf(p.TelegramOff)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO push_prefs (user_id, off, telegram_off, amounts, quiet_from, quiet_to) VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (user_id) DO UPDATE SET off = EXCLUDED.off, telegram_off = EXCLUDED.telegram_off, amounts = EXCLUDED.amounts,
+			quiet_from = EXCLUDED.quiet_from, quiet_to = EXCLUDED.quiet_to`,
+		userID, off, tg, p.Amounts, p.QuietFrom, p.QuietTo)
 	if err != nil {
 		return fmt.Errorf("notify: set prefs: %w", err)
 	}
 	return nil
+}
+
+// kindsOf are the kinds as kept, each once; an unknown one is refused.
+func kindsOf(list []Kind) ([]string, error) {
+	out := make([]string, 0, len(list))
+	for _, k := range list {
+		if !slices.Contains(Kinds, k) {
+			return nil, errPrefs
+		}
+		if !slices.Contains(out, string(k)) {
+			out = append(out, string(k))
+		}
+	}
+	return out, nil
 }
