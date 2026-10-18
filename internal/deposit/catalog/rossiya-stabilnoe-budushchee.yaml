@@ -17,6 +17,7 @@ editions:
     variants:
       - id: main
         name: В офисе
+        audience: [bundle]
         payouts: [end]
         ops: none
         term_unit: days

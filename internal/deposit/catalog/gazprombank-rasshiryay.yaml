@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: В юанях
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days

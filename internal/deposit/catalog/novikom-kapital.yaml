@@ -24,6 +24,7 @@ editions:
     variants:
       - id: rub
         name: В рублях
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -40,6 +41,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 100000000, percent: "9" }
       - id: cny
         name: В юанях
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -57,6 +59,7 @@ editions:
         currency: CNY
       - id: social
         name: «Капитал Социальный»
+        audience: [social]
         payouts: [end]
         ops: none
         term_unit: days
@@ -68,6 +71,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 1000000, percent: "9.1" }
       - id: salary-online
         name: «Капитал зарплатный онлайн»
+        audience: [salary]
         payouts: [end]
         ops: none
         term_unit: days
@@ -79,6 +83,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 1000000, percent: "10" }
       - id: premium
         name: «Премиум / Premium Капитал»
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days
@@ -90,6 +95,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 350000000, percent: "9.7" }
       - id: premium-cny
         name: «Премиум / Premium Капитал» в юанях
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days
@@ -102,6 +108,7 @@ editions:
         currency: CNY
       - id: premium-usd
         name: «Премиум / Premium Капитал» в долларах
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days
@@ -111,6 +118,7 @@ editions:
         currency: USD
       - id: premium-online
         name: «Капитал премиум онлайн»
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days

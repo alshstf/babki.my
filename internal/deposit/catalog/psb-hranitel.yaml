@@ -15,6 +15,7 @@ editions:
     variants:
       - id: minimum
         name: На минимальный остаток
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -22,6 +23,7 @@ editions:
           - { percent: "10.5" }
       - id: daily
         name: На ежедневный остаток
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

@@ -22,6 +22,7 @@ editions:
     variants:
       - id: minimum
         name: На минимальный остаток
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -40,6 +41,7 @@ editions:
               - { from: 10000000, plus: "5" }
       - id: daily
         name: На ежедневный остаток
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -64,6 +66,7 @@ editions:
               - { from: 12, plus: "1" }
       - id: only-minimum
         name: Alfa Only, на минимальный остаток
+        audience: [premium]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -82,6 +85,7 @@ editions:
               - { from: 10000000, plus: "3.5" }
       - id: club-minimum
         name: А-Клуб, на минимальный остаток
+        audience: [premium]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -99,6 +103,7 @@ editions:
               - { from: 10000000, plus: "3.5" }
       - id: only-daily
         name: Alfa Only, на ежедневный остаток
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -116,6 +121,7 @@ editions:
               - { from: 2000000, plus: "2.5" }
       - id: club-daily
         name: А-Клуб, на ежедневный остаток
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

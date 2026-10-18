@@ -18,6 +18,7 @@ editions:
     variants:
       - id: premium-online-end
         name: «Премиум», дистанционно, в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: months
@@ -31,6 +32,7 @@ editions:
           - { from: 36, to: 36, amount_from: 50000000, percent: "8.2" }
       - id: premium-online-monthly
         name: «Премиум», дистанционно, ежемесячно
+        audience: [premium]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -44,6 +46,7 @@ editions:
           - { from: 36, to: 36, amount_from: 50000000, percent: "7.35" }
       - id: premium-office-end
         name: «Премиум», в офисе, в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: months
@@ -57,6 +60,7 @@ editions:
           - { from: 36, to: 36, amount_from: 50000000, percent: "7.8" }
       - id: premium-office-monthly
         name: «Премиум», в офисе, ежемесячно
+        audience: [premium]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -70,6 +74,7 @@ editions:
           - { from: 36, to: 36, amount_from: 50000000, percent: "7" }
       - id: ultra-online-end
         name: «Ультра», дистанционно, в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: months
@@ -85,6 +90,7 @@ editions:
           - { from: 36, to: 36, amount_from: 150000000, percent: "8.2" }
       - id: ultra-online-monthly
         name: «Ультра», дистанционно, ежемесячно
+        audience: [premium]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -100,6 +106,7 @@ editions:
           - { from: 36, to: 36, amount_from: 150000000, percent: "7.35" }
       - id: ultra-office-end
         name: «Ультра», в офисе, в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: months
@@ -115,6 +122,7 @@ editions:
           - { from: 36, to: 36, amount_from: 150000000, percent: "7.8" }
       - id: ultra-office-monthly
         name: «Ультра», в офисе, ежемесячно
+        audience: [premium]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -130,6 +138,7 @@ editions:
           - { from: 36, to: 36, amount_from: 150000000, percent: "7" }
       - id: usd
         name: В долларах
+        audience: [premium]
         payouts: [end, monthly]
         ops: none
         term_unit: months
@@ -141,6 +150,7 @@ editions:
         currency: USD
       - id: eur
         name: В евро
+        audience: [premium]
         payouts: [end, monthly]
         ops: none
         term_unit: months
@@ -152,6 +162,7 @@ editions:
         currency: EUR
       - id: cny-end
         name: В юанях, в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: months
@@ -166,6 +177,7 @@ editions:
         currency: CNY
       - id: cny-monthly
         name: В юанях, ежемесячно
+        audience: [premium]
         payouts: [monthly]
         ops: none
         term_unit: months

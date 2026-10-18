@@ -16,6 +16,7 @@ editions:
     variants:
       - id: premium
         name: «Премиум»
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -37,6 +38,7 @@ editions:
           - { from: 367, to: 367, amount_from: 100000000000, percent: "7.6" }
       - id: exclusive
         name: «Эксклюзив»
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -49,6 +51,7 @@ editions:
           - { from: 367, to: 367, amount_from: 100000000000, percent: "7.5" }
       - id: dostoyanie
         name: «Достояние»
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -56,6 +59,7 @@ editions:
           - { from: 1092, to: 1092, amount_from: 10000000000, percent: "12.75" }
       - id: dostoyanie-premium
         name: «Достояние. Премиум»
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days

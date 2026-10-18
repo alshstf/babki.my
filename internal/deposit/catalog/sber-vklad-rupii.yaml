@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: В рупиях
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: months

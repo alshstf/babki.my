@@ -17,6 +17,7 @@ editions:
     variants:
       - id: end
         name: Проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -36,6 +37,7 @@ editions:
           - { from: 91, to: 91, amount_from: 140000000, percent: "13.5" }
       - id: monthly
         name: Проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -52,6 +54,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 100000000, percent: "9.16" }
       - id: premium-end
         name: «Доход. Премиум», проценты в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days
@@ -79,6 +82,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 1000000000, percent: "10.8" }
       - id: premium-monthly
         name: «Доход. Премиум», проценты ежемесячно
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -103,6 +107,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 1000000000, percent: "9.24" }
       - id: private-end
         name: «Доход. Частный», проценты в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days
@@ -129,6 +134,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 1000000000, percent: "10.85" }
       - id: private-monthly
         name: «Доход. Частный», проценты ежемесячно
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -153,6 +159,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 1000000000, percent: "9.27" }
       - id: cny
         name: В юанях
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -166,6 +173,7 @@ editions:
         currency: CNY
       - id: cny-premium
         name: В юанях, «Доход. Премиум»
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -179,6 +187,7 @@ editions:
         currency: CNY
       - id: cny-private
         name: В юанях, «Доход. Частный»
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days

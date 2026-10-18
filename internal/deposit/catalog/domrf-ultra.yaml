@@ -17,6 +17,7 @@ editions:
     variants:
       - id: ultra
         name: С пакетом «Ультра»
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -26,6 +27,7 @@ editions:
           - { amount_from: 50000000001, key_plus: "-5" }
       - id: no-package
         name: Без пакета
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

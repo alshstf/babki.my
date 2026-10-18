@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: Проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days

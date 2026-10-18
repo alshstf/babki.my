@@ -3020,6 +3020,8 @@ export interface components {
         };
         DepositVariant: {
             id: string;
+            /** @description Whom the bank opens the variant to: all alone — anyone; else only those of every group listed (new — new depositors or clients; youth — children and the young; social — recipients of social support; salary — the bank's salary clients; premium — a premium package or status; bundle — with a long-term savings, insurance, fund or metals contract; regional — holders of a region's resident card; closed — no longer opened) */
+            audience: ("all" | "new" | "pensioner" | "youth" | "social" | "salary" | "premium" | "bundle" | "regional" | "closed")[];
             name: string;
             /** @description The variant's currency; only an account in it can be tied to the variant, and amount_from_minor is in its minor units */
             currency: string;

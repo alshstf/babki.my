@@ -18,6 +18,7 @@ editions:
     variants:
       - id: minimum
         name: «Премиум»
+        audience: [closed]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw

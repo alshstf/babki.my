@@ -16,6 +16,7 @@ editions:
     variants:
       - id: premium
         name: «Комфорт Плюс. Премиум»
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: topup_withdraw
         term_unit: days
@@ -27,6 +28,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 200000000, key_plus: "-0.6" }
       - id: private
         name: «Комфорт Плюс. Частный»
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: topup_withdraw
         term_unit: days

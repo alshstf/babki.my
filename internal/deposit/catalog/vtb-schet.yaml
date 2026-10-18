@@ -23,6 +23,7 @@ editions:
     variants:
       - id: minimum
         name: На минимальный остаток
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -52,6 +53,7 @@ editions:
               - { from: 2, plus: "1.5" }
       - id: daily
         name: На ежедневный остаток
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -63,6 +65,7 @@ editions:
         bonuses: *vtb-bonuses
       - id: privilege-minimum
         name: «Привилегия», на минимальный остаток
+        audience: [premium]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -82,6 +85,7 @@ editions:
               - { from: 10000000, plus: "4.25" }
       - id: privilege-daily
         name: «Привилегия», на ежедневный остаток
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

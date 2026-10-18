@@ -15,6 +15,7 @@ editions:
     variants:
       - id: end
         name: Проценты в конце срока
+        audience: [pensioner]
         payouts: [end]
         ops: none
         term_unit: months
@@ -27,6 +28,7 @@ editions:
           - { from: 36, to: 36, amount_from: 1000000, percent: "12" }
       - id: monthly
         name: Проценты ежемесячно
+        audience: [pensioner]
         payouts: [monthly]
         ops: none
         term_unit: months

@@ -25,6 +25,7 @@ editions:
     variants:
       - id: end
         name: Онлайн, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -75,6 +76,7 @@ editions:
           - { id: savings, name: На накопительных счетах Сбера от 100 000 ₽, plus: "0.5", check: manual, terms: [{ from: 1, to: 12 }] }
       - id: monthly
         name: Онлайн, проценты ежемесячно
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: months

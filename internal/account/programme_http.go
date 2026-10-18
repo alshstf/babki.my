@@ -53,6 +53,10 @@ func variantAPI(v deposit.Variant) apitypes.DepositVariant {
 	for _, p := range v.Payouts {
 		out.Payouts = append(out.Payouts, apitypes.DepositVariantPayouts(p))
 	}
+	out.Audience = make([]apitypes.DepositVariantAudience, 0, len(v.Audience))
+	for _, a := range v.Audience {
+		out.Audience = append(out.Audience, apitypes.DepositVariantAudience(a))
+	}
 	least := int64(-1)
 	seen := map[[2]int]bool{}
 	for _, c := range v.Grid {

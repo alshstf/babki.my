@@ -757,6 +757,48 @@ func (e DepositVariantAccrual) Valid() bool {
 	}
 }
 
+// Defines values for DepositVariantAudience.
+const (
+	DepositVariantAudienceAll       DepositVariantAudience = "all"
+	DepositVariantAudienceBundle    DepositVariantAudience = "bundle"
+	DepositVariantAudienceClosed    DepositVariantAudience = "closed"
+	DepositVariantAudienceNew       DepositVariantAudience = "new"
+	DepositVariantAudiencePensioner DepositVariantAudience = "pensioner"
+	DepositVariantAudiencePremium   DepositVariantAudience = "premium"
+	DepositVariantAudienceRegional  DepositVariantAudience = "regional"
+	DepositVariantAudienceSalary    DepositVariantAudience = "salary"
+	DepositVariantAudienceSocial    DepositVariantAudience = "social"
+	DepositVariantAudienceYouth     DepositVariantAudience = "youth"
+)
+
+// Valid indicates whether the value is a known member of the DepositVariantAudience enum.
+func (e DepositVariantAudience) Valid() bool {
+	switch e {
+	case DepositVariantAudienceAll:
+		return true
+	case DepositVariantAudienceBundle:
+		return true
+	case DepositVariantAudienceClosed:
+		return true
+	case DepositVariantAudienceNew:
+		return true
+	case DepositVariantAudiencePensioner:
+		return true
+	case DepositVariantAudiencePremium:
+		return true
+	case DepositVariantAudienceRegional:
+		return true
+	case DepositVariantAudienceSalary:
+		return true
+	case DepositVariantAudienceSocial:
+		return true
+	case DepositVariantAudienceYouth:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DepositVariantOps.
 const (
 	DepositVariantOpsNone          DepositVariantOps = "none"
@@ -966,22 +1008,22 @@ func (e ImportFileFormat) Valid() bool {
 
 // Defines values for ImportRowVerdict.
 const (
-	Duplicate ImportRowVerdict = "duplicate"
-	New       ImportRowVerdict = "new"
-	Refused   ImportRowVerdict = "refused"
-	Unparsed  ImportRowVerdict = "unparsed"
+	ImportRowVerdictDuplicate ImportRowVerdict = "duplicate"
+	ImportRowVerdictNew       ImportRowVerdict = "new"
+	ImportRowVerdictRefused   ImportRowVerdict = "refused"
+	ImportRowVerdictUnparsed  ImportRowVerdict = "unparsed"
 )
 
 // Valid indicates whether the value is a known member of the ImportRowVerdict enum.
 func (e ImportRowVerdict) Valid() bool {
 	switch e {
-	case Duplicate:
+	case ImportRowVerdictDuplicate:
 		return true
-	case New:
+	case ImportRowVerdictNew:
 		return true
-	case Refused:
+	case ImportRowVerdictRefused:
 		return true
-	case Unparsed:
+	case ImportRowVerdictUnparsed:
 		return true
 	default:
 		return false
@@ -4210,8 +4252,11 @@ type DepositVariant struct {
 	Accrual nullable.Nullable[DepositVariantAccrual] `json:"accrual"`
 
 	// AmountFromMinor The least sum the bank has a rate for
-	AmountFromMinor int64                `json:"amount_from_minor"`
-	Conditions      []ProgrammeCondition `json:"conditions"`
+	AmountFromMinor int64 `json:"amount_from_minor"`
+
+	// Audience Whom the bank opens the variant to: all alone — anyone; else only those of every group listed (new — new depositors or clients; youth — children and the young; social — recipients of social support; salary — the bank's salary clients; premium — a premium package or status; bundle — with a long-term savings, insurance, fund or metals contract; regional — holders of a region's resident card; closed — no longer opened)
+	Audience   []DepositVariantAudience `json:"audience"`
+	Conditions []ProgrammeCondition     `json:"conditions"`
 
 	// Currency The variant's currency; only an account in it can be tied to the variant, and amount_from_minor is in its minor units
 	Currency string                                    `json:"currency"`
@@ -4230,6 +4275,9 @@ type DepositVariant struct {
 
 // DepositVariantAccrual defines model for DepositVariant.Accrual.
 type DepositVariantAccrual string
+
+// DepositVariantAudience defines model for DepositVariant.Audience.
+type DepositVariantAudience string
 
 // DepositVariantOps defines model for DepositVariant.Ops.
 type DepositVariantOps string

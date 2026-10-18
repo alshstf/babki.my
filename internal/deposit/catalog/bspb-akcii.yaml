@@ -16,6 +16,7 @@ editions:
     variants:
       - id: osen-online-end
         name: «Осень» online, в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -24,6 +25,7 @@ editions:
           - { from: 6, to: 6, amount_from: 1000000, percent: "13.5" }
       - id: osen-online-monthly
         name: «Осень» online, ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -32,6 +34,7 @@ editions:
           - { from: 6, to: 6, amount_from: 1000000, percent: "13.1" }
       - id: osen-office-end
         name: «Осень» в офисе, в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -40,6 +43,7 @@ editions:
           - { from: 6, to: 6, amount_from: 1000000, percent: "13" }
       - id: osen-office-monthly
         name: «Осень» в офисе, ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -48,6 +52,7 @@ editions:
           - { from: 6, to: 6, amount_from: 1000000, percent: "12.6" }
       - id: popolnyaemy-online-end
         name: «Пополняемый» online, в конце срока
+        audience: [all]
         payouts: [end]
         ops: topup
         term_unit: months
@@ -57,6 +62,7 @@ editions:
           - { from: 12, to: 12, amount_from: 1000000, percent: "10.5" }
       - id: popolnyaemy-online-monthly
         name: «Пополняемый» online, ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: topup
         term_unit: months
@@ -66,6 +72,7 @@ editions:
           - { from: 12, to: 12, amount_from: 1000000, percent: "9.7" }
       - id: popolnyaemy-office-end
         name: «Пополняемый» в офисе, в конце срока
+        audience: [all]
         payouts: [end]
         ops: topup
         term_unit: months
@@ -75,6 +82,7 @@ editions:
           - { from: 12, to: 12, amount_from: 1000000, percent: "10" }
       - id: popolnyaemy-office-monthly
         name: «Пополняемый» в офисе, ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: topup
         term_unit: months
@@ -84,6 +92,7 @@ editions:
           - { from: 12, to: 12, amount_from: 1000000, percent: "9.2" }
       - id: start
         name: «Выгодный старт»
+        audience: [new]
         payouts: [end]
         ops: none
         term_unit: months

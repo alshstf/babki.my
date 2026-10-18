@@ -15,6 +15,7 @@ editions:
     variants:
       - id: strategy
         name: «Моя стратегия» (страхование жизни)
+        audience: [bundle]
         payouts: [end]
         ops: none
         term_unit: days
@@ -24,6 +25,7 @@ editions:
           - { from: 367, to: 367, amount_from: 5000000, percent: "14.7" }
       - id: invest
         name: «Инвестиционный доход» (паи ПИФ)
+        audience: [bundle]
         payouts: [end]
         ops: none
         term_unit: days
@@ -33,6 +35,7 @@ editions:
           - { from: 367, to: 367, amount_from: 5000000, percent: "14.2" }
       - id: precious
         name: «Драгоценный» (драгоценные металлы)
+        audience: [bundle]
         payouts: [end]
         ops: none
         term_unit: days

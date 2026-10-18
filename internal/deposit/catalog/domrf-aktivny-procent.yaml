@@ -19,6 +19,7 @@ editions:
     variants:
       - id: d91
         name: 91 дней
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -37,6 +38,7 @@ editions:
               - { from: 9000000, plus: "1.5" }
       - id: d122
         name: 122 дней
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -55,6 +57,7 @@ editions:
               - { from: 9000000, plus: "1.5" }
       - id: d151
         name: 151 дней
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -73,6 +76,7 @@ editions:
               - { from: 9000000, plus: "1.6" }
       - id: d181
         name: 181 дней
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -91,6 +95,7 @@ editions:
               - { from: 9000000, plus: "1.6" }
       - id: d367
         name: 367 дней
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days

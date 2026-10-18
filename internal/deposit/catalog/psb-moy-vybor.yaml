@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: Проценты в конце срока
+        audience: [salary]
         payouts: [end]
         ops: none
         term_unit: days

@@ -16,6 +16,7 @@ editions:
     variants:
       - id: rub
         name: В рублях
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -24,6 +25,7 @@ editions:
           - { amount_from: 10001, percent: "7.5" }
       - id: cny
         name: В юанях
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw

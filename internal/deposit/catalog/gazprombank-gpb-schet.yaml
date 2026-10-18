@@ -22,6 +22,7 @@ editions:
     variants:
       - id: minimum
         name: На минимальный остаток
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
@@ -33,6 +34,7 @@ editions:
           - { name: Приветственная, months: 2, grid: [{ percent: "14" }], requires: new_client }
       - id: daily
         name: На ежедневный остаток
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

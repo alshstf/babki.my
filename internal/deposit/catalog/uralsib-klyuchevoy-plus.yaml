@@ -16,6 +16,7 @@ editions:
     variants:
       - id: monthly
         name: Проценты ежемесячно
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -25,6 +26,7 @@ editions:
           - { from: 367, to: 367, amount_from: 50000000, key_plus: "-0.7" }
       - id: premium
         name: «Ключевой Плюс. Премиум»
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -34,6 +36,7 @@ editions:
           - { from: 367, to: 367, amount_from: 200000000, key_plus: "-0.3" }
       - id: private
         name: «Ключевой Плюс. Частный»
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days

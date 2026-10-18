@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: «Накопительная ипотека»
+        audience: [all]
         payouts: [end]
         ops: topup
         term_unit: days

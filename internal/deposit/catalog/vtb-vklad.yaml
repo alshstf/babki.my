@@ -25,6 +25,7 @@ editions:
     variants:
       - id: online-end
         name: ВТБ Онлайн, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -84,6 +85,7 @@ editions:
             terms: [{ from: 61, to: 61, plus: "3" }, { from: 91, to: 91, plus: "1.4" }, { from: 120, to: 120, plus: "1.4" }, { from: 181, to: 181, plus: "1.4" }, { from: 370, to: 370, plus: "1.5" }, { from: 548, to: 548, plus: "2.2" }, { from: 730, to: 730, plus: "3.3" }, { from: 1095, to: 1095, plus: "0.9" }]
       - id: online-monthly
         name: ВТБ Онлайн, проценты ежемесячно
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -115,6 +117,7 @@ editions:
         bonuses: *vtb-vklad-bonuses
       - id: office-end
         name: В отделении, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -146,6 +149,7 @@ editions:
         bonuses: *vtb-vklad-bonuses
       - id: office-monthly
         name: В отделении, проценты ежемесячно
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -177,6 +181,7 @@ editions:
         bonuses: *vtb-vklad-bonuses
       - id: privilege-online-end
         name: «Привилегия», ВТБ Онлайн, проценты в конце срока
+        audience: [premium]
         payouts: [end]
         ops: none
         term_unit: days
@@ -231,6 +236,7 @@ editions:
             terms: [{ from: 61, to: 61, plus: "3" }, { from: 91, to: 91, plus: "1.5" }, { from: 120, to: 120, plus: "1.5" }, { from: 181, to: 181, plus: "1.5" }, { from: 370, to: 370, plus: "1.6" }, { from: 548, to: 548, plus: "2.3" }, { from: 730, to: 730, plus: "3.4" }, { from: 1095, to: 1095, plus: "1.1" }]
       - id: privilege-online-monthly
         name: «Привилегия», ВТБ Онлайн, проценты ежемесячно
+        audience: [premium]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -262,6 +268,7 @@ editions:
         bonuses: *vtb-vklad-privilege-bonuses
       - id: cny
         name: В юанях, без пополнения и снятия
+        audience: [all]
         payouts: [end, monthly, capitalize]
         ops: none
         term_unit: days
