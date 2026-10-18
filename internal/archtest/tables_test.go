@@ -54,6 +54,8 @@ var owners = map[string]string{
 	"push_subscriptions":          "internal/notify",
 	"push_sent":                   "internal/notify",
 	"push_prefs":                  "internal/notify",
+	"account_loyalty":             "internal/cashback",
+	"account_loyalty_picks":       "internal/cashback",
 	"telegram_bots":               "internal/notify",
 	"telegram_chats":              "internal/notify",
 	"telegram_link_codes":         "internal/notify",

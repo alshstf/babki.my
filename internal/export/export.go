@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/allocation"
 	"babki.my/babki/internal/budget"
+	"babki.my/babki/internal/cashback"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
@@ -141,6 +142,7 @@ type Handler struct {
 	receipts    receipts
 	allocations allocations
 	valuables   valuableSets
+	loyalty     loyaltyData
 	wages       wageEntries
 	classes     handClasses
 	goals       savingsGoals
@@ -158,6 +160,18 @@ func NewHandler(sp spaces, acc accounts, j journals, inst instruments, ev events
 		spaces: sp, accounts: acc, journals: j, instruments: inst, events: ev, prices: pr, categories: cats,
 		loans: l, cards: cc, budgets: b, receipts: rc, allocations: al, auth: auth, sm: sm, now: time.Now,
 	}
+}
+
+// loyaltyData is the cards' loyalty programmes and picks (decision Р-58).
+type loyaltyData interface {
+	Bindings(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]cashback.Binding, error)
+	AllPicks(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]cashback.PeriodPick, error)
+}
+
+// WithLoyalty writes the cards' loyalty programmes and picks into the export.
+func (h *Handler) WithLoyalty(l loyaltyData) *Handler {
+	h.loyalty = l
+	return h
 }
 
 // WithValuables writes valuables accounts' bars and coins into the export.
@@ -255,6 +269,16 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 	if err != nil {
 		return apitypes.SpaceExport{}, err
 	}
+	var cards map[uuid.UUID]cashback.Binding
+	var picks map[uuid.UUID][]cashback.PeriodPick
+	if h.loyalty != nil {
+		if cards, err = h.loyalty.Bindings(ctx, spaceID); err != nil {
+			return apitypes.SpaceExport{}, err
+		}
+		if picks, err = h.loyalty.AllPicks(ctx, spaceID); err != nil {
+			return apitypes.SpaceExport{}, err
+		}
+	}
 	// A loan's and a card's terms ride on their account.
 	loanTerms, err := h.loans.All(ctx, spaceID)
 	if err != nil {
@@ -288,6 +312,16 @@ func (h *Handler) Space(ctx context.Context, spaceID uuid.UUID) (apitypes.SpaceE
 			out.Programme = account.BindingAPI(&b)
 		}
 		out.ConditionMarks = account.MarksAPI(marks[a.ID])
+		if b, ok := cards[a.ID]; ok {
+			l := apitypes.ExportLoyalty{ProgrammeId: b.Programme, VariantId: b.Variant}
+			for _, p := range picks[a.ID] {
+				l.Picks = append(l.Picks, apitypes.ExportLoyaltyPick{CategoryId: p.Category, PeriodFrom: p.From.Format(time.DateOnly), Percent: p.Percent.String()})
+			}
+			if l.Picks == nil {
+				l.Picks = []apitypes.ExportLoyaltyPick{}
+			}
+			out.Loyalty = &l
+		}
 		if t, ok := loanOf[a.ID]; ok {
 			out.Loan = nullable.NewNullableWithValue(loan.TermsAPI(t))
 			for _, p := range t.Prepayments {

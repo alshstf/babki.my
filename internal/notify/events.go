@@ -199,3 +199,26 @@ func DeclaredReminders(list []Declared, today time.Time) []Reminder {
 	}
 	return out
 }
+
+// PickDue is a card whose bank's loyalty programme lets its holder pick
+// categories for the period from From to To, none said yet (decision Р-58).
+type PickDue struct {
+	AccountID uuid.UUID
+	Name      string
+	Owner     *uuid.UUID
+	From, To  time.Time
+}
+
+// LoyaltyReminders: each card's period without picks, once.
+func LoyaltyReminders(list []PickDue) []Reminder {
+	out := make([]Reminder, 0, len(list))
+	for _, d := range list {
+		out = append(out, Reminder{
+			Kind: KindLoyalty, Key: "loyalty:" + d.AccountID.String() + ":" + day(d.From), Owner: d.Owner, Title: d.Name,
+			URL: "/accounts/" + d.AccountID.String(),
+			Body: fmt.Sprintf("Выберите категории кэшбэка на период с %s по %s в приложении банка и отметьте их здесь — тогда программа посчитает кэшбэк.",
+				d.From.Format("02.01"), d.To.Format("02.01")),
+		})
+	}
+	return out
+}

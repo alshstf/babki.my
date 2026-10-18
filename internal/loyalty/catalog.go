@@ -281,3 +281,22 @@ func (e Edition) check() error {
 	}
 	return nil
 }
+
+// PeriodOf is the period of the pick day falls in, its first and last days:
+// a calendar month; two months from an odd one (January–February,
+// March–April…), as Новикомбанк counts them; a calendar quarter. Without a
+// choice, the month — what a bank pays its bonus for.
+func (p Period) PeriodOf(day time.Time) (from, to time.Time) {
+	m := day.Month()
+	months := 1
+	switch p {
+	case PeriodTwoMonths:
+		m -= (m - 1) % 2
+		months = 2
+	case PeriodQuarter:
+		m -= (m - 1) % 3
+		months = 3
+	}
+	from = time.Date(day.Year(), m, 1, 0, 0, 0, 0, time.UTC)
+	return from, from.AddDate(0, months, -1)
+}

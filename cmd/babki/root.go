@@ -21,6 +21,7 @@ import (
 	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/benchmark"
 	"babki.my/babki/internal/budget"
+	"babki.my/babki/internal/cashback"
 	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/compare"
@@ -179,6 +180,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)
 	creditcard.NewHandler(cardSvc, famAuth, famSM).Mount(srv)
+	// A card's bank loyalty programme and its cashback (decision Р-58).
+	cashback.NewHandler(cashback.NewService(cashback.NewStore(r.pool), accStore, opStore), famAuth, famSM).Mount(srv)
 	// Push reminders need keys derived from the encryption key; without one
 	// the endpoints say push is off.
 	var pushKeys *notify.Keys
@@ -230,7 +233,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
 	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, category.NewStore(r.pool),
 		loanSvc, cardSvc, budgetSvc, receiptSvc, allocationSvc, famAuth, famSM).WithValuables(valuablesSvc).WithWages(taxSvc).
-		WithPlanning(instStore, goalsSvc, allocationSvc).WithHidden(recurringHidden).Mount(srv)
+		WithPlanning(instStore, goalsSvc, allocationSvc).WithHidden(recurringHidden).WithLoyalty(cashback.NewStore(r.pool)).Mount(srv)
 	// A hand entry is followed by the registry at once (a purchase before a
 	// known split must not wait for the sweep); opSvc is the one service every
 	// hand-entry door writes through.

@@ -148,11 +148,11 @@ func TestTheMemberChoosesTheirReminders(t *testing.T) {
 
 	var got apitypes.PushSettings
 	apitest.Decode(t, apitest.Do(t, c, "GET", base+"/api/v1/push/settings", ""), &got)
-	if got.QuietFrom != 21 || got.QuietTo != 9 || len(got.Kinds) != 9 || got.Kinds[0].Kind != "card" || !got.Kinds[0].On {
+	if got.QuietFrom != 21 || got.QuietTo != 9 || len(got.Kinds) != 10 || got.Kinds[0].Kind != "card" || !got.Kinds[0].On {
 		t.Fatalf("default = %+v", got)
 	}
 	apitest.Decode(t, apitest.Do(t, c, "PUT", base+"/api/v1/push/settings", `{"off":["budget"],"quiet_from":23,"quiet_to":7}`), &got)
-	if got.QuietFrom != 23 || got.QuietTo != 7 || got.Kinds[1].Kind != "budget" || got.Kinds[1].On || !got.Kinds[0].On {
+	if got.QuietFrom != 23 || got.QuietTo != 7 || got.Kinds[2].Kind != "budget" || got.Kinds[2].On || !got.Kinds[0].On {
 		t.Fatalf("set = %+v", got)
 	}
 	for _, bad := range []string{`{"off":[],"quiet_from":24,"quiet_to":7}`, `{"off":["news"],"quiet_from":23,"quiet_to":7}`} {
@@ -304,7 +304,7 @@ func TestTelegramAsTheSecondChannel(t *testing.T) {
 	alex.Role = family.RoleOwner
 	var got apitypes.PushSettings
 	apitest.Decode(t, apitest.Do(t, c, "PUT", base+"/api/v1/push/settings", `{"off":[],"telegram_off":["budget"],"amounts":false,"quiet_from":0,"quiet_to":0}`), &got)
-	if got.Amounts || got.Kinds[1].Telegram || !got.Kinds[1].On || !got.Kinds[0].Telegram {
+	if got.Amounts || got.Kinds[2].Telegram || !got.Kinds[2].On || !got.Kinds[0].Telegram {
 		t.Fatalf("settings = %+v", got)
 	}
 	reminders := []notify.Reminder{

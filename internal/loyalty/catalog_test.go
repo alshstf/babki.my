@@ -96,3 +96,22 @@ editions:
 		}
 	}
 }
+
+// A pick's period: the month; two months from an odd one; the quarter.
+func TestThePeriodOfAPick(t *testing.T) {
+	day := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for p, want := range map[Period]string{
+		PeriodMonth:     "2026-10-01 2026-10-31",
+		PeriodTwoMonths: "2026-09-01 2026-10-31",
+		PeriodQuarter:   "2026-10-01 2026-12-31",
+		PeriodNone:      "2026-10-01 2026-10-31",
+	} {
+		from, to := p.PeriodOf(day)
+		if got := from.Format(time.DateOnly) + " " + to.Format(time.DateOnly); got != want {
+			t.Errorf("%s = %s, want %s", p, got, want)
+		}
+	}
+	if from, _ := PeriodTwoMonths.PeriodOf(time.Date(2026, 2, 28, 0, 0, 0, 0, time.UTC)); from.Month() != time.January {
+		t.Errorf("February's two months begin in %s", from.Month())
+	}
+}

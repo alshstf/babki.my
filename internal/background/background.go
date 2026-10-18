@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/budget"
+	"babki.my/babki/internal/cashback"
 	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
 	"babki.my/babki/internal/corporateaction"
@@ -216,7 +217,8 @@ func NewWorkers(
 	reminders = notify.WithTelegram(reminders, telegram)
 	reminders = notify.WithEvents(reminders, &events{
 		pool: pool, tinvest: tinvestDeps.Store, accounts: accounts, instruments: instruments,
-		payouts: payouts.NewService(operations, accounts, mdStore, spaces, converter),
+		payouts:  payouts.NewService(operations, accounts, mdStore, spaces, converter),
+		cashback: cashback.NewService(cashback.NewStore(pool), accounts, operations),
 	})
 	river.AddWorker(workers, notify.WithGoals(reminders, goals.NewService(pool, structures, accounts).WithKeyRates(mdStore).
 		WithMeasures(depositcheck.New(accounts, operations, category.NewStore(pool)))))
