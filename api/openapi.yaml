@@ -4758,10 +4758,11 @@ components:
         currency: { type: string, description: "RUB: the central bank prices metals in roubles" }
     TaxYear:
       type: object
-      required: [year, supported, currency, declare_by, pay_by, notice_by, key_rate, to_pay_minor, refund_minor, people]
+      required: [year, supported, currency, declare_by, pay_by, notice_by, agents_by, key_rate, to_pay_minor, refund_minor, people]
       properties:
         year: { type: integer }
         notice_by: { type: string, description: "Date YYYY-MM-DD: the last day to pay the tax on deposits' interest, which the tax office asks for by notice" }
+        agents_by: { type: string, description: "Date YYYY-MM-DD: the end of the January after the year — by then the Russian brokers have withheld its tax, often in that January (Р-60 Б)" }
         key_rate: { type: string, nullable: true, description: "Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown" }
         to_pay_minor: { type: integer, format: int64, description: "The people's to_pay_minor summed" }
         refund_minor: { type: integer, format: int64, description: "The people's refund_minor summed" }
@@ -4971,7 +4972,7 @@ components:
         withheld_minor: { type: integer, format: int64, minimum: 0, description: "At most gross_minor" }
     TaxYearAccount:
       type: object
-      required: [account_id, name, bank, foreign_broker, sales_minor, sales_long_minor, coupons_minor, dividends_minor, interest_minor, withheld_minor, securities_minor, agent_tax_minor, unvalued, low_rate, checking]
+      required: [account_id, name, bank, foreign_broker, sales_minor, sales_long_minor, coupons_minor, dividends_minor, interest_minor, withheld_minor, withheld_january_minor, withheld_after_minor, securities_minor, agent_tax_minor, agent_short_minor, agent_over_minor, unvalued, low_rate, checking]
       properties:
         account_id: { type: string, format: uuid }
         name: { type: string }
@@ -4983,8 +4984,12 @@ components:
         dividends_minor: { type: integer, format: int64 }
         interest_minor: { type: integer, format: int64, description: "Interest paid on the account: a bank's counts toward the person's interest; a broker's is shown, not taxed here" }
         withheld_minor: { type: integer, format: int64, description: "Tax rows of the year: what was withheld" }
+        withheld_january_minor: { type: integer, format: int64, description: "Of withheld_minor, the rows of the year's January — at a broker, possibly the year before's tax" }
+        withheld_after_minor: { type: integer, format: int64, description: "Tax rows of the January after the year: a Russian broker withholds a year's tax at its end, often then" }
         securities_minor: { type: integer, format: int64, description: "The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons" }
         agent_tax_minor: { type: integer, format: int64, description: "What the broker withholds for the year as a tax agent; 0 for a broker abroad" }
+        agent_short_minor: { type: integer, format: int64, description: "A Russian broker: how much withheld_minor and withheld_after_minor together fall short of agent_tax_minor; 0 otherwise (Р-60 Б)" }
+        agent_over_minor: { type: integer, format: int64, description: "A Russian broker: how much they go past agent_tax_minor; 0 otherwise" }
         unvalued: { type: integer }
         low_rate: { type: boolean, description: "A rouble savings account or deposit at no more than 1 % a year all the year: its interest is not in the base (НК РФ ст. 214.2); its rate known for every day of the year" }
         checking: { type: boolean, description: "A current account or card: its rate is not known to the program, so its interest is in" }

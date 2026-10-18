@@ -108,7 +108,8 @@ func YearAPI(y Year) apitypes.TaxYear {
 	out := apitypes.TaxYear{
 		Year: y.Year, Supported: true, Currency: y.Currency, People: make([]apitypes.TaxYearPerson, 0, len(y.People)),
 		DeclareBy: y.DeclareBy.Format(time.DateOnly), PayBy: y.PayBy.Format(time.DateOnly), NoticeBy: y.NoticeBy.Format(time.DateOnly),
-		KeyRate: nullable.NewNullNullable[string](),
+		AgentsBy: y.AgentsBy.Format(time.DateOnly),
+		KeyRate:  nullable.NewNullNullable[string](),
 	}
 	if y.KeyRate != nil {
 		out.KeyRate = nullable.NewNullableWithValue(y.KeyRate.StringFixed(2))
@@ -131,7 +132,9 @@ func YearAPI(y Year) apitypes.TaxYear {
 				AccountId: a.ID, Name: a.Name, Bank: a.Bank, ForeignBroker: a.ForeignBroker,
 				SalesMinor: a.Facts.Sales, SalesLongMinor: a.Facts.SalesLong, CouponsMinor: a.Facts.Coupons,
 				DividendsMinor: a.Facts.Dividends, InterestMinor: a.Facts.Interest, WithheldMinor: a.Facts.Withheld,
-				SecuritiesMinor: a.Securities, AgentTaxMinor: a.AgentTax, Unvalued: a.Facts.Unvalued, LowRate: a.LowRate, Checking: a.Checking,
+				WithheldJanuaryMinor: a.Facts.WithheldJanuary, WithheldAfterMinor: a.Facts.WithheldAfter,
+				SecuritiesMinor: a.Securities, AgentTaxMinor: a.AgentTax, AgentShortMinor: a.AgentShort, AgentOverMinor: a.AgentOver,
+				Unvalued: a.Facts.Unvalued, LowRate: a.LowRate, Checking: a.Checking,
 				Estimate: nullable.NewNullNullable[apitypes.TaxYearEstimate](),
 			}
 			if e := a.Estimate; e != nil {

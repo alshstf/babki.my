@@ -18,7 +18,7 @@ if (!Element.prototype.scrollIntoView) {
 // Alex with two Russian brokers past the threshold and a broker abroad;
 // Maria whose broker took more than her year's tax.
 const year: TaxYear = {
-  year: 2026, supported: true, currency: "RUB", declare_by: "2027-04-30", pay_by: "2027-07-15", notice_by: "2027-12-01", key_rate: "21.00",
+  year: 2026, supported: true, currency: "RUB", declare_by: "2027-04-30", pay_by: "2027-07-15", notice_by: "2027-12-01", agents_by: "2027-01-31", key_rate: "21.00",
   to_pay_minor: 32_000_00, refund_minor: 8_000_00,
   people: [
     {
@@ -28,9 +28,9 @@ const year: TaxYear = {
       wages_net_minor: 0, wages_minor: 0, wages_tax_minor: 0, wages_withheld_minor: 0, wages_to_pay_minor: 0, employers: [], wage_payments: [],
       property_sold_minor: 0, property_gain_minor: 0, property_base_minor: 0, property_free: 0,
       accounts: [
-        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, unvalued: 2, low_rate: false, checking: false, estimate: null },
-        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, low_rate: false, checking: false, estimate: null },
-        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, low_rate: false, checking: false, estimate: null },
+        { account_id: "a-1", name: "Т-Банк", bank: false, foreign_broker: false, sales_minor: 2_400_000_00, sales_long_minor: 400_000_00, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 6_500_00, securities_minor: 2_000_000_00, agent_tax_minor: 260_000_00, agent_short_minor: 253_500_00, agent_over_minor: 0, withheld_january_minor: 0, withheld_after_minor: 0, unvalued: 2, low_rate: false, checking: false, estimate: null },
+        { account_id: "a-2", name: "Freedom KZ", bank: false, foreign_broker: true, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 100_000_00, interest_minor: 0, withheld_minor: 10_000_00, securities_minor: 0, agent_tax_minor: 0, agent_short_minor: 0, agent_over_minor: 0, withheld_january_minor: 0, withheld_after_minor: 0, unvalued: 0, low_rate: false, checking: false, estimate: null },
+        { account_id: "a-4", name: "Накопительный", bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 400_000_00, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, agent_short_minor: 0, agent_over_minor: 0, withheld_january_minor: 0, withheld_after_minor: 0, unvalued: 0, low_rate: false, checking: false, estimate: null },
       ],
     },
     {
@@ -78,9 +78,66 @@ const norm = (s: string | null) => (s ?? "").replace(/\s/g, " ");
 afterEach(() => {
   cleanup();
   fetchMock.mockReset();
+  vi.useRealTimers();
 });
 
+// The year's tax checked against the Russian brokers' tax rows on a day.
+function onDay(day: string) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(`${day}T12:00:00`));
+}
+
+// Alex's year with the January after it: Т-Банк withheld the year's tax
+// then, Альфа a little more than reckoned, a row of the year's January too.
+function settled(): TaxYear {
+  const y = structuredClone(year);
+  const alex = y.people[0];
+  alex.accounts = [
+    { ...alex.accounts[0], withheld_after_minor: 253_500_00, agent_short_minor: 0 },
+    { ...alex.accounts[0], account_id: "a-5", name: "Альфа", withheld_minor: 131_000_00, agent_tax_minor: 130_000_00, agent_short_minor: 0, agent_over_minor: 1_000_00, withheld_january_minor: 1_000_00 },
+    ...alex.accounts.slice(1),
+  ];
+  return y;
+}
+
 describe("TaxesPage", () => {
+  // Decision Р-60 Б.
+  it("sets each Russian broker's tax rows against what it withholds, a gap normal before the year's end", async () => {
+    onDay("2026-10-19");
+    answer(year);
+    show();
+    const people = await screen.findAllByTestId("tax-person");
+    const check = within(people[0]).getByTestId("tax-agent-check");
+    expect(within(check).getAllByTestId("tax-agent-row").map((r) => norm(r.textContent))).toEqual([
+      "Т-Банк: насчитано к удержанию 260 000,00 ₽ · удержано 6 500,00 ₽ — не удержано 253 500,00 ₽",
+    ]);
+    expect(norm(check.textContent)).toContain("До конца года разница — нормально");
+    expect(within(check).queryByTestId("tax-agent-hints")).toBeNull();
+  });
+
+  it("counts the January after the year, when the brokers withhold its tax", async () => {
+    onDay("2027-01-20");
+    answer(settled());
+    show();
+    const check = within((await screen.findAllByTestId("tax-person"))[0]).getByTestId("tax-agent-check");
+    const rows = within(check).getAllByTestId("tax-agent-row").map((r) => norm(r.textContent));
+    expect(rows[0]).toBe("Т-Банк: насчитано к удержанию 260 000,00 ₽ · удержано 6 500,00 ₽ · в январе 2027 ещё 253 500,00 ₽ — сошлось");
+    expect(rows[1]).toBe(
+      "Альфа: насчитано к удержанию 130 000,00 ₽ · удержано 131 000,00 ₽ — удержано больше на 1 000,00 ₽Из удержанного 1 000,00 ₽ — в январе 2026: если это налог за 2025 год, к этому году он не относится.",
+    );
+    expect(norm(check.textContent)).toContain("до 31.01.2027 разница ещё может сократиться");
+  });
+
+  it("says what to look at when a broker's rows still do not match after January", async () => {
+    onDay("2027-02-10");
+    answer(settled());
+    show();
+    const hints = within((await screen.findAllByTestId("tax-person"))[0]).getByTestId("tax-agent-hints");
+    expect(norm(hints.textContent)).toContain("Не сошлось — что проверить:");
+    expect(norm(hints.textContent)).toContain("ИИС: с него налог удерживается только при закрытии счёта;");
+    expect(norm(hints.textContent)).toContain("излишек он возвращает по вашему заявлению (НК РФ ст. 231)");
+  });
+
   it("says per person what is left to pay, or to get back, and why", async () => {
     answer(year);
     show();
@@ -114,7 +171,7 @@ describe("TaxesPage", () => {
 
   it("says what each deposit's rate brings, what is to come by the year's end, and why one is not known", async () => {
     const est = { paid_minor: 0, from: null, ahead_minor: 0, missing: null, missing_on: null, no_rate_ahead: false, pays_on: null };
-    const bankRow = { bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, unvalued: 0, low_rate: false, checking: false };
+    const bankRow = { bank: true, foreign_broker: false, sales_minor: 0, sales_long_minor: 0, coupons_minor: 0, dividends_minor: 0, interest_minor: 0, withheld_minor: 0, securities_minor: 0, agent_tax_minor: 0, agent_short_minor: 0, agent_over_minor: 0, withheld_january_minor: 0, withheld_after_minor: 0, unvalued: 0, low_rate: false, checking: false };
     const maria = {
       ...year.people[1],
       interest_estimated_minor: 213_351_55, interest_counted_minor: 213_351_55, interest_ahead_minor: 98_175_97,

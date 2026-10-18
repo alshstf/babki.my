@@ -112,6 +112,10 @@ type Account struct {
 	// withholds on them for the year, nothing for a broker abroad.
 	Securities, Dividends int64
 	AgentTax              int64
+	// AgentShort and AgentOver are how a Russian broker's tax rows — of the
+	// year and of the January after it — fall short of AgentTax or go past
+	// it (decision Р-60 Б): one of them is 0.
+	AgentShort, AgentOver int64
 	// Estimate is a deposit's or savings account's interest by its rate:
 	// what the year paid when it is kept by its balance, what is to come.
 	// Marked is the interest filed on it under a category marked interest.
@@ -183,8 +187,10 @@ type Year struct {
 	Currency string
 	People   []Person
 	// DeclareBy and PayBy are the return's and the payment's last days;
-	// NoticeBy the last day to pay the tax on deposits' interest.
-	DeclareBy, PayBy, NoticeBy time.Time
+	// NoticeBy the last day to pay the tax on deposits' interest; AgentsBy
+	// the end of the January after the year, by which the brokers have
+	// withheld its tax.
+	DeclareBy, PayBy, NoticeBy, AgentsBy time.Time
 	// KeyRate is the year's highest so far, nil when unknown.
 	KeyRate *decimal.Decimal
 }
@@ -308,6 +314,8 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		acc.Dividends = max(f.Dividends, 0)
 		if !a.ForeignBroker {
 			acc.AgentTax = family.Banded(rules.InvestmentBands[:], max(acc.Securities, 0)+acc.Dividends, rules.TaxUnitMinor)
+			gap := acc.AgentTax - f.Withheld - f.WithheldAfter
+			acc.AgentShort, acc.AgentOver = max(gap, 0), max(-gap, 0)
 			p.ByAgents += acc.AgentTax
 			p.Withheld += f.Withheld
 		} else {
@@ -374,6 +382,7 @@ func (s *Service) Of(ctx context.Context, spaceID uuid.UUID, year int) (Year, er
 		DeclareBy: time.Date(year+1, time.April, 30, 0, 0, 0, 0, time.UTC),
 		PayBy:     time.Date(year+1, time.July, 15, 0, 0, 0, 0, time.UTC),
 		NoticeBy:  time.Date(year+1, time.December, 1, 0, 0, 0, 0, time.UTC),
+		AgentsBy:  time.Date(year+1, time.January, 31, 0, 0, 0, 0, time.UTC),
 	}
 	// The year's highest key rate so far: for this year it may still rise.
 	end := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)

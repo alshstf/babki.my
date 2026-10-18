@@ -4082,6 +4082,8 @@ export interface components {
             year: number;
             /** @description Date YYYY-MM-DD: the last day to pay the tax on deposits' interest, which the tax office asks for by notice */
             notice_by: string;
+            /** @description Date YYYY-MM-DD: the end of the January after the year — by then the Russian brokers have withheld its tax, often in that January (Р-60 Б) */
+            agents_by: string;
             /** @description Decimal, percent: the year's highest key rate so far — for this year it may still rise; null when unknown */
             key_rate: string | null;
             /**
@@ -4542,6 +4544,16 @@ export interface components {
             withheld_minor: number;
             /**
              * Format: int64
+             * @description Of withheld_minor, the rows of the year's January — at a broker, possibly the year before's tax
+             */
+            withheld_january_minor: number;
+            /**
+             * Format: int64
+             * @description Tax rows of the January after the year: a Russian broker withholds a year's tax at its end, often then
+             */
+            withheld_after_minor: number;
+            /**
+             * Format: int64
              * @description The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons
              */
             securities_minor: number;
@@ -4550,6 +4562,16 @@ export interface components {
              * @description What the broker withholds for the year as a tax agent; 0 for a broker abroad
              */
             agent_tax_minor: number;
+            /**
+             * Format: int64
+             * @description A Russian broker: how much withheld_minor and withheld_after_minor together fall short of agent_tax_minor; 0 otherwise (Р-60 Б)
+             */
+            agent_short_minor: number;
+            /**
+             * Format: int64
+             * @description A Russian broker: how much they go past agent_tax_minor; 0 otherwise
+             */
+            agent_over_minor: number;
             unvalued: number;
             /** @description A rouble savings account or deposit at no more than 1 % a year all the year: its interest is not in the base (НК РФ ст. 214.2); its rate known for every day of the year */
             low_rate: boolean;
