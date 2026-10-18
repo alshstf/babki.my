@@ -1,0 +1,32 @@
+id: novikom-cashback
+bank: novikom
+name: Программа лояльности «Кешбэк»
+watch:
+  - https://novikom.ru/cards/cashback-program/
+editions:
+  - from: 2026-09-01
+    checked_on: 2026-10-19
+    sources:
+      - https://novikom.ru/documents/perechen-mss-kodov-po-izbrannym-kategoriyam-deystvuyushchim-s-01-09-2026-po-31-10-2026.pdf
+      - https://novikom.ru/documents/tarify-i-usloviya-banka-po-pl-keshbek-01092026.pdf
+      - https://novikom.ru/documents/perechen-mss-kodov-po-operatsiyam-isklyucheniyam-po-programme-keshbek.pdf
+    notes: >-
+      Избранные категории на период с 01.09.2026 по 31.10.2026: банк выкладывает перечень на каждые два месяца (с марта,
+      мая, июля, сентября), клиент подключает до 4 категорий в приложении один раз за период — выбор каждый раз заново.
+      Кешбэк по избранным категориям — до 25 %. Кроме них — базовый кешбэк по сумме покупок месяца (0,25–1 % по
+      типу карты, до 7 000 ₽ в месяц) — его каталог пока не считает. Исключения — перечень MCC банка.
+    period: two_months
+    variants:
+      - { id: cashback, name: Карта с программой «Кешбэк», pick: 4, of: 10 }
+    categories:
+      - { id: supermarkets, name: Супермаркеты и онлайн-супермаркеты, mcc: ["5300", "5411", "5422", "5441", "5451", "5462", "5499", "5715", "5921"] }
+      - { id: utilities, name: Оплата ЖКУ, mcc: ["4900"] }
+      - { id: stationery, name: Канцтовары, mcc: ["5111", "5943", "7339"] }
+      - { id: digital, name: Цифровые товары и игры, mcc: ["5815", "5816", "5817", "5818", "5734"] }
+      - { id: restaurants, name: Рестораны, mcc: ["5811", "5812", "5813"] }
+      - { id: transport, name: Транспорт, mcc: ["4111", "4131", "4457", "4468", "4784", "4789", "5013", "5271", "5551", "5561", "5592", "5598", "5599", "7523"] }
+      - { id: kids, name: Детские товары, mcc: ["5641", "5945"] }
+      - { id: yandex, name: Яндекс (экосистема), mcc: ["3990"] }
+      - { id: fastfood, name: Фастфуд, mcc: ["5814"] }
+      - { id: pharmacy, name: Аптеки, mcc: ["5122", "5912"] }
+    excluded: ["4812", "4814", "4829", "6012", "6050", "6051", "6211", "6536", "6538", "6540", "7299", "7311", "7372", "7399", "7995", "8999"]
