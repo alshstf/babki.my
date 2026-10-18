@@ -530,3 +530,23 @@ func TestPSBSavingsBeforeTheCatalog(t *testing.T) {
 	q, err = zapas.Quote(fresh, day("2026-07-20"), 300_000_00, nil, marks(map[string]int{"new_client": 0}))
 	pct(t, q, err, "5")
 }
+
+// Decision Р-59 Б: ДОМ.РФ's savings account by the bank's tables from
+// 26.12.2025 — the first two months' rate 15,4 in January, 14,9 from 20.02,
+// 13,6 from 29.04, 13,4 from 30.05; 4 % after them all year. «Ультра» is
+// the key rate less 2 from 26.12.2025 too.
+func TestDomRFSavingsBeforeTheCatalog(t *testing.T) {
+	p := programme(t, "domrf-nakopitelny")
+	for _, c := range []struct{ opened, on, want string }{
+		{"2026-01-05", "2026-01-10", "15.4"},
+		{"2026-02-25", "2026-03-10", "14.9"},
+		{"2026-05-05", "2026-05-20", "13.6"},
+		{"2026-06-01", "2026-07-15", "13.4"},
+		{"2025-11-01", "2026-02-10", "4"},
+	} {
+		q, err := p.Quote(Holding{Variant: "daily", OpenedOn: day(c.opened)}, day(c.on), 100_000_00, nil, nil)
+		pct(t, q, err, c.want)
+	}
+	q, err := programme(t, "domrf-ultra").Quote(Holding{Variant: "ultra", OpenedOn: day("2025-06-01")}, day("2026-01-10"), 1_000_000_00, keys("2025-10-27", "16.5", "2025-12-22", "16"), nil)
+	pct(t, q, err, "14")
+}

@@ -6,6 +6,32 @@ watch:
   - https://domrfbank.ru/savings-account/ultra/
   - https://domrfbank.ru/deposits/docs/
 editions:
+  - from: 2025-12-26
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/bed/ccojdhkdvphnreiifgrnyl0f4jrrbqhy/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2026.12.2025.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 26.12.2025» — те же дисконты к ключевой ставке во всех таблицах банка по
+      01.10.2026: до 6 млн ₽ — минус 2, от 6 до 500 млн ₽ — минус 1,1, свыше 500 млн ₽ — минус 5; без пакета — минус 5.
+    variants:
+      - id: ultra
+        name: С пакетом «Ультра»
+        audience: [premium]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { amount_from: 0, key_plus: "-2" }
+          - { amount_from: 600000000, key_plus: "-1.1" }
+          - { amount_from: 50000000001, key_plus: "-5" }
+      - id: no-package
+        name: Без пакета
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { key_plus: "-5" }
   - from: 2026-10-09
     checked_on: 2026-10-16
     sources:
