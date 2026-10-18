@@ -151,6 +151,10 @@ func toAPI(o Operation) apitypes.Operation {
 	if o.CategoryID != nil {
 		out.CategoryId = nullable.NewNullableWithValue(*o.CategoryID)
 	}
+	if o.MCC != "" {
+		mcc := o.MCC
+		out.Mcc = &mcc
+	}
 	if o.MemberID != nil {
 		out.MemberId = nullable.NewNullableWithValue(*o.MemberID)
 	}

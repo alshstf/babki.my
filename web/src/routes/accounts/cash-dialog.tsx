@@ -96,6 +96,8 @@ export function CashDialog({
   const [note, setNote] = useState("");
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [counterparty, setCounterparty] = useState("");
+  // A purchase's merchant category code, as the bank's app shows it (Р-58).
+  const [mcc, setMcc] = useState("");
   // Whether the category is the person's choice; until then the family's
   // rules suggest one from the counterparty.
   const [chosen, setChosen] = useState(false);
@@ -125,6 +127,7 @@ export function CashDialog({
     setNote(editing?.note ?? "");
     setCategoryId(editing?.category_id ?? null);
     setCounterparty(editing?.counterparty ?? "");
+    setMcc(editing?.mcc ?? "");
     setChosen(editing?.category_id != null);
     setMemberId(editing?.member_id ?? null);
     setPickedId(account.id);
@@ -166,7 +169,8 @@ export function CashDialog({
   const isCredit = CREDIT_TYPES.has(type);
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
-  const valid = amountValid && occurredOn !== "";
+  const mccValid = mcc.trim() === "" || /^\d{4}$/.test(mcc.trim());
+  const valid = amountValid && occurredOn !== "" && mccValid;
 
   // A photo of a receipt fills the total, the day and which way the money
   // went; the shop is not in the code, the person names it. The fiscal
@@ -256,6 +260,7 @@ export function CashDialog({
         note,
         category_id: categoryId,
         counterparty: counterparty.trim(),
+        ...(type === "withdrawal" && mcc.trim() !== "" ? { mcc: mcc.trim() } : {}),
         member_id: memberId,
       },
       {
@@ -420,6 +425,23 @@ export function CashDialog({
               onChange={(e) => typeCounterparty(e.target.value)}
             />
           </div>
+          {type === "withdrawal" && (
+            <div className="grid gap-2">
+              <Label htmlFor="cash-mcc">{t("cash.mcc")}</Label>
+              <Input
+                id="cash-mcc"
+                inputMode="numeric"
+                maxLength={4}
+                className="w-24"
+                aria-invalid={!mccValid}
+                value={mcc}
+                onChange={(e) => setMcc(e.target.value)}
+              />
+              <p className={mccValid ? "text-xs text-muted-foreground" : "text-xs text-destructive"}>
+                {mccValid ? t("cash.mccHint") : t("cash.mccBad")}
+              </p>
+            </div>
+          )}
           {family.length > 1 && (
             <div className="grid gap-2">
               <Label htmlFor="cash-member">{t("cash.member")}</Label>

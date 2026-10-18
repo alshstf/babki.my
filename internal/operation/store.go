@@ -97,7 +97,7 @@ func (s *Store) withAccountsLocked(ctx context.Context, spaceID uuid.UUID, accou
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
 	trading_mode, transfer_group_id, split_ratio, source, external_id, created_at,
-	occurred_at, face_before_minor, category_id, counterparty, member_id`
+	occurred_at, face_before_minor, category_id, counterparty, member_id, COALESCE(mcc, '')`
 
 func scan(row pgx.Row) (Operation, error) {
 	var o Operation
@@ -105,7 +105,7 @@ func scan(row pgx.Row) (Operation, error) {
 		&o.OccurredOn, &o.SettledOn, &o.Quantity, &o.Price, &o.AmountMinor,
 		&o.Currency, &o.FeeMinor, &o.Note, &o.TradingMode, &o.TransferGroupID,
 		&o.SplitRatio, &o.Source, &o.ExternalID, &o.CreatedAt, &o.OccurredAt, &o.FaceBeforeMinor,
-		&o.CategoryID, &o.Counterparty, &o.MemberID)
+		&o.CategoryID, &o.Counterparty, &o.MemberID, &o.MCC)
 	return o, err
 }
 
@@ -121,9 +121,9 @@ const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
 		fee_minor, note, trading_mode, transfer_group_id, split_ratio, source,
-		external_id, created_at, occurred_at, face_before_minor, category_id, counterparty, member_id)
+		external_id, created_at, occurred_at, face_before_minor, category_id, counterparty, member_id, mcc)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19, $20, $21, $22, $23
+		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19, $20, $21, $22, $23, NULLIF($24, '')
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
@@ -135,7 +135,7 @@ func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
 		op.FeeMinor, op.Note, op.TradingMode, op.TransferGroupID, op.SplitRatio,
 		op.Source, op.ExternalID, createdAt, op.OccurredAt, op.FaceBeforeMinor,
-		op.CategoryID, op.Counterparty, op.MemberID,
+		op.CategoryID, op.Counterparty, op.MemberID, op.MCC,
 	}
 }
 
@@ -898,4 +898,31 @@ func (s *Store) Delete(ctx context.Context, spaceID, id uuid.UUID) (int, error) 
 		return 0, pgx.ErrNoRows
 	}
 	return int(ct.RowsAffected()), nil
+}
+
+// MCCByCounterparty is the merchant category code each counterparty's
+// latest purchase in the space carried, by the counterparty in lower case —
+// the row's note where it names none, as a bank's statement writes the shop
+// in its description (decision Р-58): a statement without the code takes it
+// from the family's earlier rows.
+func (s *Store) MCCByCounterparty(ctx context.Context, spaceID uuid.UUID) (map[string]string, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (who) who, mcc FROM (
+			SELECT lower(trim(CASE WHEN counterparty <> '' THEN counterparty ELSE note END)) AS who, mcc, occurred_on, created_at
+			FROM operations WHERE space_id = $1 AND mcc IS NOT NULL) known
+		WHERE who <> ''
+		ORDER BY who, occurred_on DESC, created_at DESC`, spaceID)
+	if err != nil {
+		return nil, fmt.Errorf("operation: mcc by counterparty: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var who, mcc string
+		if err := rows.Scan(&who, &mcc); err != nil {
+			return nil, fmt.Errorf("operation: mcc by counterparty: %w", err)
+		}
+		out[who] = mcc
+	}
+	return out, rows.Err()
 }

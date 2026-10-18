@@ -1598,6 +1598,8 @@ var notComparedFields = map[string]string{
 	"CreatedAt": "the journal's own numbering of the row within its day, " +
 		"assigned by the write path; the projection never has one",
 	"MemberID": "whose the row is in the family, never the broker's: kept like CategoryID",
+	"MCC": "a card purchase's merchant code (decision Р-58): a broker's operations carry none, " +
+		"so the projection never states one",
 	"CategoryID": "the family's filing of the row, never the broker's: a rebuild leaves it alone on a row " +
 		"it keeps, and operation.Store.ApplyDelta carries it over to a corrected record",
 	"Parts": "the family's split of the row across categories (decision Р-36), never the broker's: " +

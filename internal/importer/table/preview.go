@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -71,6 +72,20 @@ type Service struct {
 	ops      writer
 	imports  *Store
 	cats     categorizer
+	mccs     mccSource
+}
+
+// mccSource is the merchant category code of each counterparty's latest
+// purchase in the space (decision Р-58).
+type mccSource interface {
+	MCCByCounterparty(ctx context.Context, spaceID uuid.UUID) (map[string]string, error)
+}
+
+// WithMCCs lets a statement's purchase without a code take its
+// counterparty's from the family's earlier rows.
+func (s *Service) WithMCCs(m mccSource) *Service {
+	s.mccs = m
+	return s
 }
 
 // Catalog is the instrument catalog as the service reads and writes it.
@@ -121,6 +136,12 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 	if err != nil {
 		return Preview{}, err
 	}
+	known := map[string]string{}
+	if s.mccs != nil {
+		if known, err = s.mccs.MCCByCounterparty(ctx, spaceID); err != nil {
+			return Preview{}, err
+		}
+	}
 	r := &reader{
 		accountID: acc.ID, currency: acc.Currency, mapping: m, papers: s.papers,
 		known: map[string]*instrument.Instrument{}, categories: cats,
@@ -139,6 +160,7 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 			return Preview{}, err
 		default:
 			file(&op)
+			learnMCC(&op, known)
 			id := fingerprint(op, seen)
 			op.ExternalID = &id
 			row.Operation = &op
@@ -208,4 +230,24 @@ func (s *Service) filer(ctx context.Context, spaceID uuid.UUID, acc account.Acco
 // refusal is the journal's refusal of a row, its words carried as they are.
 func refusal(ref operation.ImportRefusal) *Unreadable {
 	return unreadable(ReasonEngineRefused, "", ref.Err.Error())
+}
+
+// learnMCC gives a purchase without a merchant category code its
+// counterparty's — the note's where it names none — from the family's
+// earlier rows or the table's rows above, and remembers the code of one
+// that has it.
+func learnMCC(op *operation.Operation, known map[string]string) {
+	who := op.Counterparty
+	if who == "" {
+		who = op.Note
+	}
+	who = strings.ToLower(strings.TrimSpace(who))
+	if op.Type != operation.TypeWithdrawal || who == "" {
+		return
+	}
+	if op.MCC != "" {
+		known[who] = op.MCC
+		return
+	}
+	op.MCC = known[who]
 }

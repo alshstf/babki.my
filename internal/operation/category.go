@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -50,6 +51,17 @@ func categoryKind(t Type) category.Kind {
 		return category.KindIncome
 	}
 	return category.KindExpense
+}
+
+// checkMCC refuses a merchant category code that is not four digits.
+func checkMCC(mcc string) error {
+	if mcc == "" {
+		return nil
+	}
+	if len(mcc) != 4 || strings.Trim(mcc, "0123456789") != "" {
+		return fmt.Errorf("%w: mcc must be four digits", family.ErrValidation)
+	}
+	return nil
 }
 
 // checkCounterparty refuses a counterparty longer than the column holds.

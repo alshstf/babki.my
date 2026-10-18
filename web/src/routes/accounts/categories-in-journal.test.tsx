@@ -72,6 +72,7 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     categorizable: true,
     category_id: null,
     counterparty: "Пятёрочка",
+    mcc: "5411",
     ...overrides,
   };
 }
@@ -193,7 +194,8 @@ describe("the journal's categories", () => {
     renderTable();
     const chip = await screen.findByTestId("operation-category");
     expect(chip).toHaveTextContent("Указать категорию");
-    expect(screen.getByTestId("operation-counterparty")).toHaveTextContent("Пятёрочка");
+    // The purchase's merchant code (Р-58) by its counterparty.
+    expect(screen.getByTestId("operation-counterparty")).toHaveTextContent("Пятёрочка · MCC 5411");
 
     fireEvent.click(chip);
     const list = await screen.findByRole("listbox", { name: "Категории" });

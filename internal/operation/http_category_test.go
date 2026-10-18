@@ -321,3 +321,40 @@ func TestWhoseARowIsIsSetOnItsOwn(t *testing.T) {
 		t.Errorf("given back = %+v, want nobody named", back)
 	}
 }
+
+// Decision Р-58: a purchase written in by hand keeps its merchant category
+// code; one that is not four digits is refused; an update without it clears
+// it, as the counterparty is cleared.
+func TestAPurchaseKeepsItsMerchantCode(t *testing.T) {
+	url, c := newAPI(t)
+	acc := mkAccount(t, url, c, "Карта", "RUB")
+	resp := apitest.Do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
+		`{"account_id":%q,"type":"withdrawal","occurred_on":"2026-09-02","amount_minor":-250000,"currency":"RUB","counterparty":"Пятёрочка","mcc":"5411"}`, acc))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a purchase with its code = %s", status(t, resp))
+	}
+	var op struct {
+		ID  string  `json:"id"`
+		MCC *string `json:"mcc"`
+	}
+	apitest.Decode(t, resp, &op)
+	if op.MCC == nil || *op.MCC != "5411" {
+		t.Fatalf("stored = %+v", op)
+	}
+	for _, bad := range []string{"541", "54a1", "54111"} {
+		r := apitest.Do(t, c, "POST", url+"/api/v1/operations", fmt.Sprintf(
+			`{"account_id":%q,"type":"withdrawal","occurred_on":"2026-09-02","amount_minor":-100,"currency":"RUB","mcc":%q}`, acc, bad))
+		if r.StatusCode != http.StatusBadRequest {
+			t.Errorf("mcc %q = %s, want 400", bad, status(t, r))
+		}
+	}
+	r := apitest.Do(t, c, "PUT", url+"/api/v1/operations/"+op.ID, fmt.Sprintf(
+		`{"account_id":%q,"type":"withdrawal","occurred_on":"2026-09-02","amount_minor":-250000,"currency":"RUB","counterparty":"Пятёрочка"}`, acc))
+	var updated struct {
+		MCC *string `json:"mcc"`
+	}
+	apitest.Decode(t, r, &updated)
+	if updated.MCC != nil {
+		t.Errorf("after an update without it = %v", *updated.MCC)
+	}
+}

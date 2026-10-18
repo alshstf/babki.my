@@ -25,12 +25,15 @@ const (
 	// family's, by its name or «Родитель / Дочерняя»).
 	FieldCounterparty Field = "counterparty"
 	FieldCategory     Field = "category"
+	// FieldMCC is a card purchase's merchant category code (decision Р-58):
+	// Т-Банк's statement has the column.
+	FieldMCC Field = "mcc"
 )
 
 // Fields lists every field, in the order a person reads a trade.
 var Fields = []Field{
 	FieldDate, FieldType, FieldInstrument, FieldQuantity, FieldPrice,
-	FieldAmount, FieldCurrency, FieldFee, FieldNote, FieldCounterparty, FieldCategory,
+	FieldAmount, FieldCurrency, FieldFee, FieldNote, FieldCounterparty, FieldCategory, FieldMCC,
 }
 
 // Types are the operations a table may hold: what a person records by hand,
@@ -60,6 +63,7 @@ var headerWords = []struct {
 	field Field
 	words []string
 }{
+	{FieldMCC, []string{"mcc"}},
 	{FieldFee, []string{"комисс", "commission", "fee"}},
 	// Before the type: «Категория операции» names the category, not the type.
 	{FieldCategory, []string{"категор", "category"}},

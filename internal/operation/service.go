@@ -255,6 +255,9 @@ func validateFields(o Operation) error {
 	if !o.Type.Valid() {
 		return fmt.Errorf("%w: invalid operation type", family.ErrValidation)
 	}
+	if err := checkMCC(o.MCC); err != nil {
+		return err
+	}
 	if !currency.Valid(o.Currency) {
 		return fmt.Errorf("%w: currency must be ISO-4217 uppercase", family.ErrValidation)
 	}
