@@ -2227,6 +2227,27 @@ paths:
       responses:
         "200": { description: The catalog, content: { application/json: { schema: { $ref: "#/components/schemas/DepositProgrammes" } } } }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/deposit-comparison:
+    post:
+      tags: [accounts]
+      operationId: compareDeposits
+      description: >-
+        The comparison of the catalog's deposits and savings accounts in roubles on a sum over a horizon (decision
+        Р-57 Б): each variant open to the person's groups at the term of its grid that brings the most a day,
+        prolonged at the terms of the day while the horizon lasts, by day at its rate under the key rate's scenario
+        and the conditions as chosen — each condition of each variant as the family's data tell it today, met, or
+        not met, the preset over all; what it earns, a year compounded, the tax it adds to the person's tax on
+        interest year by year, what is left, and what of the sum deposit insurance covers with the person's money
+        in the bank. Rows by what is left. 400 for an ask out of bounds or without today's key rate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepositComparisonInput" }
+      responses:
+        "200": { description: The comparison, content: { application/json: { schema: { $ref: "#/components/schemas/DepositComparison" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
       tags: [accounts]
@@ -4022,6 +4043,87 @@ components:
         sources: { type: array, items: { type: string } }
         notes: { type: string }
         variants: { type: array, items: { $ref: "#/components/schemas/DepositVariant" } }
+    DepositComparisonInput:
+      type: object
+      required: [amount_minor, months]
+      properties:
+        amount_minor: { type: integer, format: int64, description: "The sum in roubles, kopecks: 1 to 1 billion roubles" }
+        months: { type: integer, description: "The horizon from today, 1 to 60 months" }
+        person_id: { type: string, format: uuid, nullable: true, description: "Whose tax and insurance; the user asking when absent" }
+        key_percent: { type: string, nullable: true, description: "Decimal, 0 to 100: the key rate all along the horizon; today's when absent" }
+        preset: { type: string, enum: [now, yes, no], description: "How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent" }
+        choices:
+          type: array
+          items: { $ref: "#/components/schemas/DepositConditionChoice" }
+          description: "Conditions chosen one by one, over the preset"
+        audiences:
+          type: array
+          items: { type: string, enum: [new, pensioner, youth, social, salary, premium, bundle, regional] }
+          description: "The groups the person is in: the variants open only to them are compared too"
+    DepositConditionChoice:
+      type: object
+      required: [programme_id, variant_id, condition, state]
+      properties:
+        programme_id: { type: string }
+        variant_id: { type: string }
+        condition: { type: string, description: "The condition's id in the variant" }
+        state: { type: string, enum: [now, yes, no] }
+        level: { type: integer, nullable: true, description: "With yes, the step of a stepped bonus, from 0; its highest when absent" }
+    DepositComparison:
+      type: object
+      required: [start_on, end_on, key_percent, person, skipped, rows]
+      properties:
+        start_on: { type: string, description: "Date YYYY-MM-DD: today, the day the sum is put in" }
+        end_on: { type: string, description: "Date YYYY-MM-DD: the horizon's end" }
+        key_percent: { type: string, description: "Decimal: the key rate taken all along" }
+        person: { type: string, description: "Whose tax and insurance, by name" }
+        skipped: { type: integer, description: "Variants open to the groups left out: in another currency, a sum the bank has no rate for, a day without a rate" }
+        rows: { type: array, items: { $ref: "#/components/schemas/DepositComparisonRow" } }
+    DepositComparisonRow:
+      type: object
+      required: [programme_id, programme_name, bank_id, bank_name, kind, variant_id, variant_name, audience, term, term_unit, payout, prolonged, days, income_minor, yearly_percent, tax_minor, net_minor, insured_minor, conditions, edition_from, sources]
+      properties:
+        programme_id: { type: string }
+        programme_name: { type: string }
+        bank_id: { type: string }
+        bank_name: { type: string }
+        kind: { type: string, enum: [deposit, savings] }
+        variant_id: { type: string }
+        variant_name: { type: string }
+        audience: { type: array, items: { type: string, enum: [all, new, pensioner, youth, social, salary, premium, bundle, regional, closed] } }
+        term: { type: integer, nullable: true, description: "A deposit's term chosen, in term_unit; null for a savings account" }
+        term_unit: { type: string, nullable: true, enum: [days, months] }
+        payout: { type: string, enum: [end, monthly, capitalize], description: "The way of payment taken: added to the deposit, else at the end, else monthly onto a card" }
+        prolonged: { type: integer, description: "How many times the deposit is prolonged within the horizon" }
+        days: { type: integer, description: "The days the income is for: to the last term's end — at most a month past the horizon — or the horizon's end" }
+        income_minor: { type: integer, format: int64 }
+        yearly_percent: { type: string, description: "Decimal, to hundredths: the income a year, compounded" }
+        tax_minor: { type: integer, format: int64, nullable: true, description: "What the income adds to the person's tax on interest, year by year; null when not known" }
+        net_minor: { type: integer, format: int64, description: "The income less tax_minor" }
+        insured_minor: { type: integer, format: int64, nullable: true, description: "What of the sum deposit insurance covers, the person's money in the bank counted first; null without a limit" }
+        edition_from: { type: string, description: "Date YYYY-MM-DD: the edition of the bank's terms taken" }
+        sources: { type: array, items: { type: string }, description: "The bank's documents of the edition" }
+        conditions: { type: array, items: { $ref: "#/components/schemas/DepositComparisonCondition" } }
+    DepositComparisonCondition:
+      type: object
+      required: [id, name, kind, check, group, plus, levels, now_known, now_met, now_level, measured_minor, measured_month, state, chosen_level, met, level]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [bonus, requirement] }
+        check: { type: string, enum: [manual, card_spend, wages, bank_balance] }
+        group: { type: string, nullable: true, description: "Bonuses of one group do not add up: the largest counts" }
+        plus: { type: string, nullable: true }
+        levels: { type: array, items: { $ref: "#/components/schemas/BonusLevel" } }
+        now_known: { type: boolean, description: "The family's data tell it today: a new client — no account in the bank; a bonus the program measures — the last month finished" }
+        now_met: { type: boolean }
+        now_level: { type: integer }
+        measured_minor: { type: integer, format: int64, nullable: true }
+        measured_month: { type: string, nullable: true, description: "YYYY-MM" }
+        state: { type: string, enum: [now, yes, no], description: "How it was taken" }
+        chosen_level: { type: integer, description: "With yes, the step chosen; -1 the highest" }
+        met: { type: boolean, description: "Met as reckoned" }
+        level: { type: integer, description: "The step it was reckoned at" }
     DepositVariant:
       type: object
       required: [id, name, currency, accrual, payouts, ops, term_unit, terms, amount_from_minor, conditions, welcome, audience]

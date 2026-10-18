@@ -1601,6 +1601,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/deposit-comparison": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The comparison of the catalog's deposits and savings accounts in roubles on a sum over a horizon (decision Р-57 Б): each variant open to the person's groups at the term of its grid that brings the most a day, prolonged at the terms of the day while the horizon lasts, by day at its rate under the key rate's scenario and the conditions as chosen — each condition of each variant as the family's data tell it today, met, or not met, the preset over all; what it earns, a year compounded, the tax it adds to the person's tax on interest year by year, what is left, and what of the sum deposit insurance covers with the person's money in the bank. Rows by what is left. 400 for an ask out of bounds or without today's key rate. */
+        post: operations["compareDeposits"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/summary": {
         parameters: {
             query?: never;
@@ -3017,6 +3034,133 @@ export interface components {
             sources: string[];
             notes: string;
             variants: components["schemas"]["DepositVariant"][];
+        };
+        DepositComparisonInput: {
+            /**
+             * Format: int64
+             * @description The sum in roubles, kopecks: 1 to 1 billion roubles
+             */
+            amount_minor: number;
+            /** @description The horizon from today, 1 to 60 months */
+            months: number;
+            /**
+             * Format: uuid
+             * @description Whose tax and insurance; the user asking when absent
+             */
+            person_id?: string | null;
+            /** @description Decimal, 0 to 100: the key rate all along the horizon; today's when absent */
+            key_percent?: string | null;
+            /**
+             * @description How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent
+             * @enum {string}
+             */
+            preset?: "now" | "yes" | "no";
+            /** @description Conditions chosen one by one, over the preset */
+            choices?: components["schemas"]["DepositConditionChoice"][];
+            /** @description The groups the person is in: the variants open only to them are compared too */
+            audiences?: ("new" | "pensioner" | "youth" | "social" | "salary" | "premium" | "bundle" | "regional")[];
+        };
+        DepositConditionChoice: {
+            programme_id: string;
+            variant_id: string;
+            /** @description The condition's id in the variant */
+            condition: string;
+            /** @enum {string} */
+            state: "now" | "yes" | "no";
+            /** @description With yes, the step of a stepped bonus, from 0; its highest when absent */
+            level?: number | null;
+        };
+        DepositComparison: {
+            /** @description Date YYYY-MM-DD: today, the day the sum is put in */
+            start_on: string;
+            /** @description Date YYYY-MM-DD: the horizon's end */
+            end_on: string;
+            /** @description Decimal: the key rate taken all along */
+            key_percent: string;
+            /** @description Whose tax and insurance, by name */
+            person: string;
+            /** @description Variants open to the groups left out: in another currency, a sum the bank has no rate for, a day without a rate */
+            skipped: number;
+            rows: components["schemas"]["DepositComparisonRow"][];
+        };
+        DepositComparisonRow: {
+            programme_id: string;
+            programme_name: string;
+            bank_id: string;
+            bank_name: string;
+            /** @enum {string} */
+            kind: "deposit" | "savings";
+            variant_id: string;
+            variant_name: string;
+            audience: ("all" | "new" | "pensioner" | "youth" | "social" | "salary" | "premium" | "bundle" | "regional" | "closed")[];
+            /** @description A deposit's term chosen, in term_unit; null for a savings account */
+            term: number | null;
+            /** @enum {string|null} */
+            term_unit: "days" | "months" | null;
+            /**
+             * @description The way of payment taken: added to the deposit, else at the end, else monthly onto a card
+             * @enum {string}
+             */
+            payout: "end" | "monthly" | "capitalize";
+            /** @description How many times the deposit is prolonged within the horizon */
+            prolonged: number;
+            /** @description The days the income is for: to the last term's end — at most a month past the horizon — or the horizon's end */
+            days: number;
+            /** Format: int64 */
+            income_minor: number;
+            /** @description Decimal, to hundredths: the income a year, compounded */
+            yearly_percent: string;
+            /**
+             * Format: int64
+             * @description What the income adds to the person's tax on interest, year by year; null when not known
+             */
+            tax_minor: number | null;
+            /**
+             * Format: int64
+             * @description The income less tax_minor
+             */
+            net_minor: number;
+            /**
+             * Format: int64
+             * @description What of the sum deposit insurance covers, the person's money in the bank counted first; null without a limit
+             */
+            insured_minor: number | null;
+            /** @description Date YYYY-MM-DD: the edition of the bank's terms taken */
+            edition_from: string;
+            /** @description The bank's documents of the edition */
+            sources: string[];
+            conditions: components["schemas"]["DepositComparisonCondition"][];
+        };
+        DepositComparisonCondition: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: "bonus" | "requirement";
+            /** @enum {string} */
+            check: "manual" | "card_spend" | "wages" | "bank_balance";
+            /** @description Bonuses of one group do not add up: the largest counts */
+            group: string | null;
+            plus: string | null;
+            levels: components["schemas"]["BonusLevel"][];
+            /** @description The family's data tell it today: a new client — no account in the bank; a bonus the program measures — the last month finished */
+            now_known: boolean;
+            now_met: boolean;
+            now_level: number;
+            /** Format: int64 */
+            measured_minor: number | null;
+            /** @description YYYY-MM */
+            measured_month: string | null;
+            /**
+             * @description How it was taken
+             * @enum {string}
+             */
+            state: "now" | "yes" | "no";
+            /** @description With yes, the step chosen; -1 the highest */
+            chosen_level: number;
+            /** @description Met as reckoned */
+            met: boolean;
+            /** @description The step it was reckoned at */
+            level: number;
         };
         DepositVariant: {
             id: string;
@@ -9923,6 +10067,32 @@ export interface operations {
                     "application/json": components["schemas"]["DepositProgrammes"];
                 };
             };
+            401: components["responses"]["Error"];
+        };
+    };
+    compareDeposits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositComparisonInput"];
+            };
+        };
+        responses: {
+            /** @description The comparison */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositComparison"];
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
         };
     };

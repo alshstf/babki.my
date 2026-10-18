@@ -721,6 +721,246 @@ func (e CreditCardTermsGraceRunFrom) Valid() bool {
 	}
 }
 
+// Defines values for DepositComparisonConditionCheck.
+const (
+	DepositComparisonConditionCheckBankBalance DepositComparisonConditionCheck = "bank_balance"
+	DepositComparisonConditionCheckCardSpend   DepositComparisonConditionCheck = "card_spend"
+	DepositComparisonConditionCheckManual      DepositComparisonConditionCheck = "manual"
+	DepositComparisonConditionCheckWages       DepositComparisonConditionCheck = "wages"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonConditionCheck enum.
+func (e DepositComparisonConditionCheck) Valid() bool {
+	switch e {
+	case DepositComparisonConditionCheckBankBalance:
+		return true
+	case DepositComparisonConditionCheckCardSpend:
+		return true
+	case DepositComparisonConditionCheckManual:
+		return true
+	case DepositComparisonConditionCheckWages:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonConditionKind.
+const (
+	DepositComparisonConditionKindBonus       DepositComparisonConditionKind = "bonus"
+	DepositComparisonConditionKindRequirement DepositComparisonConditionKind = "requirement"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonConditionKind enum.
+func (e DepositComparisonConditionKind) Valid() bool {
+	switch e {
+	case DepositComparisonConditionKindBonus:
+		return true
+	case DepositComparisonConditionKindRequirement:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonConditionState.
+const (
+	DepositComparisonConditionStateNo  DepositComparisonConditionState = "no"
+	DepositComparisonConditionStateNow DepositComparisonConditionState = "now"
+	DepositComparisonConditionStateYes DepositComparisonConditionState = "yes"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonConditionState enum.
+func (e DepositComparisonConditionState) Valid() bool {
+	switch e {
+	case DepositComparisonConditionStateNo:
+		return true
+	case DepositComparisonConditionStateNow:
+		return true
+	case DepositComparisonConditionStateYes:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonInputAudiences.
+const (
+	DepositComparisonInputAudiencesBundle    DepositComparisonInputAudiences = "bundle"
+	DepositComparisonInputAudiencesNew       DepositComparisonInputAudiences = "new"
+	DepositComparisonInputAudiencesPensioner DepositComparisonInputAudiences = "pensioner"
+	DepositComparisonInputAudiencesPremium   DepositComparisonInputAudiences = "premium"
+	DepositComparisonInputAudiencesRegional  DepositComparisonInputAudiences = "regional"
+	DepositComparisonInputAudiencesSalary    DepositComparisonInputAudiences = "salary"
+	DepositComparisonInputAudiencesSocial    DepositComparisonInputAudiences = "social"
+	DepositComparisonInputAudiencesYouth     DepositComparisonInputAudiences = "youth"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonInputAudiences enum.
+func (e DepositComparisonInputAudiences) Valid() bool {
+	switch e {
+	case DepositComparisonInputAudiencesBundle:
+		return true
+	case DepositComparisonInputAudiencesNew:
+		return true
+	case DepositComparisonInputAudiencesPensioner:
+		return true
+	case DepositComparisonInputAudiencesPremium:
+		return true
+	case DepositComparisonInputAudiencesRegional:
+		return true
+	case DepositComparisonInputAudiencesSalary:
+		return true
+	case DepositComparisonInputAudiencesSocial:
+		return true
+	case DepositComparisonInputAudiencesYouth:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonInputPreset.
+const (
+	DepositComparisonInputPresetNo  DepositComparisonInputPreset = "no"
+	DepositComparisonInputPresetNow DepositComparisonInputPreset = "now"
+	DepositComparisonInputPresetYes DepositComparisonInputPreset = "yes"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonInputPreset enum.
+func (e DepositComparisonInputPreset) Valid() bool {
+	switch e {
+	case DepositComparisonInputPresetNo:
+		return true
+	case DepositComparisonInputPresetNow:
+		return true
+	case DepositComparisonInputPresetYes:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonRowAudience.
+const (
+	DepositComparisonRowAudienceAll       DepositComparisonRowAudience = "all"
+	DepositComparisonRowAudienceBundle    DepositComparisonRowAudience = "bundle"
+	DepositComparisonRowAudienceClosed    DepositComparisonRowAudience = "closed"
+	DepositComparisonRowAudienceNew       DepositComparisonRowAudience = "new"
+	DepositComparisonRowAudiencePensioner DepositComparisonRowAudience = "pensioner"
+	DepositComparisonRowAudiencePremium   DepositComparisonRowAudience = "premium"
+	DepositComparisonRowAudienceRegional  DepositComparisonRowAudience = "regional"
+	DepositComparisonRowAudienceSalary    DepositComparisonRowAudience = "salary"
+	DepositComparisonRowAudienceSocial    DepositComparisonRowAudience = "social"
+	DepositComparisonRowAudienceYouth     DepositComparisonRowAudience = "youth"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonRowAudience enum.
+func (e DepositComparisonRowAudience) Valid() bool {
+	switch e {
+	case DepositComparisonRowAudienceAll:
+		return true
+	case DepositComparisonRowAudienceBundle:
+		return true
+	case DepositComparisonRowAudienceClosed:
+		return true
+	case DepositComparisonRowAudienceNew:
+		return true
+	case DepositComparisonRowAudiencePensioner:
+		return true
+	case DepositComparisonRowAudiencePremium:
+		return true
+	case DepositComparisonRowAudienceRegional:
+		return true
+	case DepositComparisonRowAudienceSalary:
+		return true
+	case DepositComparisonRowAudienceSocial:
+		return true
+	case DepositComparisonRowAudienceYouth:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonRowKind.
+const (
+	DepositComparisonRowKindDeposit DepositComparisonRowKind = "deposit"
+	DepositComparisonRowKindSavings DepositComparisonRowKind = "savings"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonRowKind enum.
+func (e DepositComparisonRowKind) Valid() bool {
+	switch e {
+	case DepositComparisonRowKindDeposit:
+		return true
+	case DepositComparisonRowKindSavings:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonRowPayout.
+const (
+	DepositComparisonRowPayoutCapitalize DepositComparisonRowPayout = "capitalize"
+	DepositComparisonRowPayoutEnd        DepositComparisonRowPayout = "end"
+	DepositComparisonRowPayoutMonthly    DepositComparisonRowPayout = "monthly"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonRowPayout enum.
+func (e DepositComparisonRowPayout) Valid() bool {
+	switch e {
+	case DepositComparisonRowPayoutCapitalize:
+		return true
+	case DepositComparisonRowPayoutEnd:
+		return true
+	case DepositComparisonRowPayoutMonthly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositComparisonRowTermUnit.
+const (
+	DepositComparisonRowTermUnitDays   DepositComparisonRowTermUnit = "days"
+	DepositComparisonRowTermUnitMonths DepositComparisonRowTermUnit = "months"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonRowTermUnit enum.
+func (e DepositComparisonRowTermUnit) Valid() bool {
+	switch e {
+	case DepositComparisonRowTermUnitDays:
+		return true
+	case DepositComparisonRowTermUnitMonths:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DepositConditionChoiceState.
+const (
+	DepositConditionChoiceStateNo  DepositConditionChoiceState = "no"
+	DepositConditionChoiceStateNow DepositConditionChoiceState = "now"
+	DepositConditionChoiceStateYes DepositConditionChoiceState = "yes"
+)
+
+// Valid indicates whether the value is a known member of the DepositConditionChoiceState enum.
+func (e DepositConditionChoiceState) Valid() bool {
+	switch e {
+	case DepositConditionChoiceStateNo:
+		return true
+	case DepositConditionChoiceStateNow:
+		return true
+	case DepositConditionChoiceStateYes:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DepositProgrammeKind.
 const (
 	DepositProgrammeKindDeposit DepositProgrammeKind = "deposit"
@@ -1650,16 +1890,16 @@ func (e ProgrammeConditionCheck) Valid() bool {
 
 // Defines values for ProgrammeConditionKind.
 const (
-	Bonus       ProgrammeConditionKind = "bonus"
-	Requirement ProgrammeConditionKind = "requirement"
+	ProgrammeConditionKindBonus       ProgrammeConditionKind = "bonus"
+	ProgrammeConditionKindRequirement ProgrammeConditionKind = "requirement"
 )
 
 // Valid indicates whether the value is a known member of the ProgrammeConditionKind enum.
 func (e ProgrammeConditionKind) Valid() bool {
 	switch e {
-	case Bonus:
+	case ProgrammeConditionKindBonus:
 		return true
-	case Requirement:
+	case ProgrammeConditionKindRequirement:
 		return true
 	default:
 		return false
@@ -4224,6 +4464,170 @@ type DayPrice struct {
 	// Source Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …
 	Source string `json:"source"`
 }
+
+// DepositComparison defines model for DepositComparison.
+type DepositComparison struct {
+	// EndOn Date YYYY-MM-DD: the horizon's end
+	EndOn string `json:"end_on"`
+
+	// KeyPercent Decimal: the key rate taken all along
+	KeyPercent string `json:"key_percent"`
+
+	// Person Whose tax and insurance, by name
+	Person string                 `json:"person"`
+	Rows   []DepositComparisonRow `json:"rows"`
+
+	// Skipped Variants open to the groups left out: in another currency, a sum the bank has no rate for, a day without a rate
+	Skipped int `json:"skipped"`
+
+	// StartOn Date YYYY-MM-DD: today, the day the sum is put in
+	StartOn string `json:"start_on"`
+}
+
+// DepositComparisonCondition defines model for DepositComparisonCondition.
+type DepositComparisonCondition struct {
+	Check DepositComparisonConditionCheck `json:"check"`
+
+	// ChosenLevel With yes, the step chosen; -1 the highest
+	ChosenLevel int `json:"chosen_level"`
+
+	// Group Bonuses of one group do not add up: the largest counts
+	Group nullable.Nullable[string]      `json:"group"`
+	Id    string                         `json:"id"`
+	Kind  DepositComparisonConditionKind `json:"kind"`
+
+	// Level The step it was reckoned at
+	Level         int                      `json:"level"`
+	Levels        []BonusLevel             `json:"levels"`
+	MeasuredMinor nullable.Nullable[int64] `json:"measured_minor"`
+
+	// MeasuredMonth YYYY-MM
+	MeasuredMonth nullable.Nullable[string] `json:"measured_month"`
+
+	// Met Met as reckoned
+	Met  bool   `json:"met"`
+	Name string `json:"name"`
+
+	// NowKnown The family's data tell it today: a new client — no account in the bank; a bonus the program measures — the last month finished
+	NowKnown bool                      `json:"now_known"`
+	NowLevel int                       `json:"now_level"`
+	NowMet   bool                      `json:"now_met"`
+	Plus     nullable.Nullable[string] `json:"plus"`
+
+	// State How it was taken
+	State DepositComparisonConditionState `json:"state"`
+}
+
+// DepositComparisonConditionCheck defines model for DepositComparisonCondition.Check.
+type DepositComparisonConditionCheck string
+
+// DepositComparisonConditionKind defines model for DepositComparisonCondition.Kind.
+type DepositComparisonConditionKind string
+
+// DepositComparisonConditionState How it was taken
+type DepositComparisonConditionState string
+
+// DepositComparisonInput defines model for DepositComparisonInput.
+type DepositComparisonInput struct {
+	// AmountMinor The sum in roubles, kopecks: 1 to 1 billion roubles
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Audiences The groups the person is in: the variants open only to them are compared too
+	Audiences *[]DepositComparisonInputAudiences `json:"audiences,omitempty"`
+
+	// Choices Conditions chosen one by one, over the preset
+	Choices *[]DepositConditionChoice `json:"choices,omitempty"`
+
+	// KeyPercent Decimal, 0 to 100: the key rate all along the horizon; today's when absent
+	KeyPercent nullable.Nullable[string] `json:"key_percent,omitempty"`
+
+	// Months The horizon from today, 1 to 60 months
+	Months int `json:"months"`
+
+	// PersonId Whose tax and insurance; the user asking when absent
+	PersonId nullable.Nullable[openapi_types.UUID] `json:"person_id,omitempty"`
+
+	// Preset How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent
+	Preset *DepositComparisonInputPreset `json:"preset,omitempty"`
+}
+
+// DepositComparisonInputAudiences defines model for DepositComparisonInput.Audiences.
+type DepositComparisonInputAudiences string
+
+// DepositComparisonInputPreset How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent
+type DepositComparisonInputPreset string
+
+// DepositComparisonRow defines model for DepositComparisonRow.
+type DepositComparisonRow struct {
+	Audience   []DepositComparisonRowAudience `json:"audience"`
+	BankId     string                         `json:"bank_id"`
+	BankName   string                         `json:"bank_name"`
+	Conditions []DepositComparisonCondition   `json:"conditions"`
+
+	// Days The days the income is for: to the last term's end — at most a month past the horizon — or the horizon's end
+	Days int `json:"days"`
+
+	// EditionFrom Date YYYY-MM-DD: the edition of the bank's terms taken
+	EditionFrom string `json:"edition_from"`
+	IncomeMinor int64  `json:"income_minor"`
+
+	// InsuredMinor What of the sum deposit insurance covers, the person's money in the bank counted first; null without a limit
+	InsuredMinor nullable.Nullable[int64] `json:"insured_minor"`
+	Kind         DepositComparisonRowKind `json:"kind"`
+
+	// NetMinor The income less tax_minor
+	NetMinor int64 `json:"net_minor"`
+
+	// Payout The way of payment taken: added to the deposit, else at the end, else monthly onto a card
+	Payout        DepositComparisonRowPayout `json:"payout"`
+	ProgrammeId   string                     `json:"programme_id"`
+	ProgrammeName string                     `json:"programme_name"`
+
+	// Prolonged How many times the deposit is prolonged within the horizon
+	Prolonged int `json:"prolonged"`
+
+	// Sources The bank's documents of the edition
+	Sources []string `json:"sources"`
+
+	// TaxMinor What the income adds to the person's tax on interest, year by year; null when not known
+	TaxMinor nullable.Nullable[int64] `json:"tax_minor"`
+
+	// Term A deposit's term chosen, in term_unit; null for a savings account
+	Term        nullable.Nullable[int]                          `json:"term"`
+	TermUnit    nullable.Nullable[DepositComparisonRowTermUnit] `json:"term_unit"`
+	VariantId   string                                          `json:"variant_id"`
+	VariantName string                                          `json:"variant_name"`
+
+	// YearlyPercent Decimal, to hundredths: the income a year, compounded
+	YearlyPercent string `json:"yearly_percent"`
+}
+
+// DepositComparisonRowAudience defines model for DepositComparisonRow.Audience.
+type DepositComparisonRowAudience string
+
+// DepositComparisonRowKind defines model for DepositComparisonRow.Kind.
+type DepositComparisonRowKind string
+
+// DepositComparisonRowPayout The way of payment taken: added to the deposit, else at the end, else monthly onto a card
+type DepositComparisonRowPayout string
+
+// DepositComparisonRowTermUnit defines model for DepositComparisonRow.TermUnit.
+type DepositComparisonRowTermUnit string
+
+// DepositConditionChoice defines model for DepositConditionChoice.
+type DepositConditionChoice struct {
+	// Condition The condition's id in the variant
+	Condition string `json:"condition"`
+
+	// Level With yes, the step of a stepped bonus, from 0; its highest when absent
+	Level       nullable.Nullable[int]      `json:"level,omitempty"`
+	ProgrammeId string                      `json:"programme_id"`
+	State       DepositConditionChoiceState `json:"state"`
+	VariantId   string                      `json:"variant_id"`
+}
+
+// DepositConditionChoiceState defines model for DepositConditionChoice.State.
+type DepositConditionChoiceState string
 
 // DepositProgramme defines model for DepositProgramme.
 type DepositProgramme struct {
@@ -7895,6 +8299,9 @@ type ReorderCategoryRulesJSONRequestBody = ReorderCategoryRulesRequest
 
 // UpdateCategoryRuleJSONRequestBody defines body for UpdateCategoryRule for application/json ContentType.
 type UpdateCategoryRuleJSONRequestBody = UpdateCategoryRuleRequest
+
+// CompareDepositsJSONRequestBody defines body for CompareDeposits for application/json ContentType.
+type CompareDepositsJSONRequestBody = DepositComparisonInput
 
 // CreateGoalJSONRequestBody defines body for CreateGoal for application/json ContentType.
 type CreateGoalJSONRequestBody = GoalInput
