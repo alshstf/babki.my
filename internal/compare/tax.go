@@ -23,21 +23,24 @@ const freeBase = 1_000_000_00
 // key. Later years take this year's other incomes: there is no forecast of
 // them.
 type taxContext struct {
-	person    string
-	known     bool
-	rules     family.TaxRules
-	year      int
-	other     int64
-	invested  int64
-	freeNow   int64
-	freeLater int64
+	person   string
+	known    bool
+	rules    family.TaxRules
+	year     int
+	other    int64
+	invested int64
+	freeNow  int64
+	// freeIn is a year's free part by the scenario's key rate.
+	freeIn func(year int) int64
 }
 
 // taxOf is the person's tax context; known is false without the year's
 // estimate or its key rate.
-func (s *Service) taxOf(ctx context.Context, spaceID, person uuid.UUID, today time.Time, key decimal.Decimal, rules family.TaxRules) (taxContext, error) {
+func (s *Service) taxOf(ctx context.Context, spaceID, person uuid.UUID, today time.Time, key func(year int) decimal.Decimal, rules family.TaxRules) (taxContext, error) {
 	out := taxContext{rules: rules, year: today.Year()}
-	out.freeLater = key.Mul(decimal.NewFromInt(freeBase)).Div(decimal.NewFromInt(100)).Round(0).IntPart()
+	out.freeIn = func(year int) int64 {
+		return key(year).Mul(decimal.NewFromInt(freeBase)).Div(decimal.NewFromInt(100)).Round(0).IntPart()
+	}
 	if s.members != nil {
 		members, err := s.members.ListMembers(ctx, spaceID)
 		if err != nil {
@@ -87,9 +90,9 @@ func (t taxContext) added(payments []interest.Payment) (int64, bool) {
 	}
 	var out int64
 	for year, x := range byYear {
-		free := t.freeLater
+		free := t.freeIn(year)
 		if year == t.year {
-			free = max(t.freeNow, t.freeLater)
+			free = max(t.freeNow, free)
 		}
 		band := func(interest int64) int64 {
 			return family.Banded(t.rules.InvestmentBands[:], t.invested+max(interest-free, 0), t.rules.TaxUnitMinor)

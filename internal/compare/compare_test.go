@@ -174,3 +174,39 @@ func TestFiveYearsInTime(t *testing.T) {
 		t.Logf("five years in %s", d)
 	}
 }
+
+// The Bank of Russia's forecast: a deposit tied to the key rate earns less
+// as the forecast falls (11,5 % in 2027 against 14 % today), the year's path
+// told; a fixed one is not moved by it.
+func TestTheForecastScenario(t *testing.T) {
+	svc, maria := service(t)
+	ask := Ask{Amount: 1_000_000_00, Months: 24, Person: maria}
+	today, err := svc.Compare(t.Context(), uuid.New(), ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask.Key = Scenario{Forecast: true}
+	ahead, err := svc.Compare(t.Context(), uuid.New(), ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ahead.Forecast == nil || ahead.Forecast.Published != "2026-07-24" || len(ahead.KeyPath) < 3 ||
+		!ahead.KeyPath[1].Percent.Equal(decimal.RequireFromString("11.5")) {
+		t.Fatalf("path %+v, forecast %+v", ahead.KeyPath, ahead.Forecast)
+	}
+	income := func(r Result, programme, variant string) int64 {
+		for _, row := range r.Rows {
+			if row.Programme.ID == programme && row.Variant.ID == variant {
+				return row.Earning.Income
+			}
+		}
+		t.Fatalf("no %s %s", programme, variant)
+		return 0
+	}
+	if a, b := income(ahead, "gazprombank-klyuchevoy-moment", "end"), income(today, "gazprombank-klyuchevoy-moment", "end"); a >= b {
+		t.Errorf("«Ключевой момент» by the forecast %d, by today's key %d", a, b)
+	}
+	if a, b := income(ahead, "sber-sbervklad", "end"), income(today, "sber-sbervklad", "end"); a != b {
+		t.Errorf("СберВклад by the forecast %d, by today's key %d", a, b)
+	}
+}

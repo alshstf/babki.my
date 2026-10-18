@@ -139,7 +139,10 @@ func TestAudiencesAndConditions(t *testing.T) {
 // paying 150 000 next year, where the scenario's key 10 % frees 100 000,
 // adds 13 % of the 150 000 above it on top of the person's 100 000 — 19 500.
 func TestTheTaxADepositAdds(t *testing.T) {
-	tc := taxContext{known: true, rules: family.TaxRulesFor("RU"), year: 2026, other: 100_000_00, freeNow: 160_000_00, freeLater: 100_000_00}
+	tc := taxContext{
+		known: true, rules: family.TaxRulesFor("RU"), year: 2026, other: 100_000_00, freeNow: 160_000_00,
+		freeIn: func(int) int64 { return 100_000_00 },
+	}
 	this, ok := tc.added([]interest.Payment{{On: day("2026-12-20"), Minor: 150_000_00}})
 	if !ok || this != 11_700_00 {
 		t.Errorf("this year: %d", this)

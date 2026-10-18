@@ -3048,8 +3048,13 @@ export interface components {
              * @description Whose tax and insurance; the user asking when absent
              */
             person_id?: string | null;
-            /** @description Decimal, 0 to 100: the key rate all along the horizon; today's when absent */
+            /** @description Decimal, 0 to 100: the key rate all along the horizon, with key_scenario custom or absent; today's when absent */
             key_percent?: string | null;
+            /**
+             * @description today — today's key rate all along; forecast — the Bank of Russia's forecast, the middle of each year's range (today's before it begins); custom — key_percent. Absent: custom with key_percent, else today
+             * @enum {string}
+             */
+            key_scenario?: "today" | "forecast" | "custom";
             /**
              * @description How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent
              * @enum {string}
@@ -3075,13 +3080,28 @@ export interface components {
             start_on: string;
             /** @description Date YYYY-MM-DD: the horizon's end */
             end_on: string;
-            /** @description Decimal: the key rate taken all along */
+            /** @description Decimal: today's key rate, or the one set */
             key_percent: string;
+            /** @description The scenario's highest key rate in each year of the horizon: the rates the deposits tied to it earn by, and the year's interest free of tax */
+            key_path: components["schemas"]["YearKeyRate"][];
+            /** @description With key_scenario forecast: the Bank of Russia's forecast taken */
+            forecast: components["schemas"]["KeyForecastInfo"] | null;
             /** @description Whose tax and insurance, by name */
             person: string;
             /** @description Variants open to the groups left out: in another currency, a sum the bank has no rate for, a day without a rate */
             skipped: number;
             rows: components["schemas"]["DepositComparisonRow"][];
+        };
+        YearKeyRate: {
+            year: number;
+            /** @description Decimal */
+            percent: string;
+        };
+        KeyForecastInfo: {
+            /** @description Date YYYY-MM-DD the forecast was published */
+            published_on: string;
+            /** @description The Bank of Russia's document */
+            source: string;
         };
         DepositComparisonRow: {
             programme_id: string;

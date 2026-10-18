@@ -464,3 +464,21 @@ func TestWhomTheVariantsAreOpenTo(t *testing.T) {
 		}
 	}
 }
+
+// The Bank of Russia's forecast of 24 July 2026: the rest of 2026 13,7–14,0 —
+// 13,85; 2027 10,5–12,5 — 11,5; 2029's 8 for 2031; nothing for 2025.
+func TestTheKeyRateForecast(t *testing.T) {
+	f, err := Forecast()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for on, want := range map[string]string{"2026-10-19": "13.85", "2026-03-01": "14.55", "2027-06-01": "11.5", "2031-01-01": "8"} {
+		got, ok := f.On(day(on))
+		if !ok || !got.Equal(decimal.RequireFromString(want)) {
+			t.Errorf("%s: %s %v, want %s", on, got, ok, want)
+		}
+	}
+	if _, ok := f.On(day("2025-12-31")); ok {
+		t.Error("2025: a forecast")
+	}
+}

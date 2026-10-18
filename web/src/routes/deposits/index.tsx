@@ -53,7 +53,7 @@ export function DepositsPage() {
   const members = useMembers();
   const [amountText, setAmountText] = useState("1 000 000");
   const [months, setMonths] = useState(12);
-  const [keyMode, setKeyMode] = useState<"today" | "custom">("today");
+  const [keyMode, setKeyMode] = useState<"today" | "forecast" | "custom">("today");
   const [keyText, setKeyText] = useState("");
   const [preset, setPreset] = useState<Preset>("now");
   const [person, setPerson] = useState<string>("");
@@ -73,6 +73,7 @@ export function DepositsPage() {
             months,
             person_id: who || null,
             key_percent: keyMode === "custom" ? keyPercent : null,
+            key_scenario: keyMode,
             preset,
             choices: Object.values(choices),
             audiences,
@@ -133,12 +134,13 @@ export function DepositsPage() {
           <div className="grid gap-1">
             <Label htmlFor="deposits-key">{t("deposits.key")}</Label>
             <div className="flex gap-2">
-              <Select value={keyMode} onValueChange={(v) => setKeyMode(v as "today" | "custom")}>
+              <Select value={keyMode} onValueChange={(v) => setKeyMode(v as "today" | "forecast" | "custom")}>
                 <SelectTrigger id="deposits-key" className="min-w-0 flex-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="today">{t("deposits.keyToday")}</SelectItem>
+                  <SelectItem value="forecast">{t("deposits.keyForecast")}</SelectItem>
                   <SelectItem value="custom">{t("deposits.keyCustom")}</SelectItem>
                 </SelectContent>
               </Select>
@@ -264,7 +266,16 @@ export function DepositsPage() {
               </Table>
             </div>
             <div className="grid gap-1 text-xs text-muted-foreground" data-testid="deposits-notes">
-              <p>{t("deposits.noteKey", { key: percent(data.key_percent) })}</p>
+              {data.forecast ? (
+                <p>
+                  {t("deposits.noteForecast", { date: formatDate(data.forecast.published_on) })}{" "}
+                  <a href={data.forecast.source} target="_blank" rel="noreferrer" className="underline">
+                    {t("deposits.forecastSource")}
+                  </a>
+                </p>
+              ) : (
+                <p>{t("deposits.noteKey", { key: percent(data.key_percent) })}</p>
+              )}
               <p>{t("deposits.noteTerm")}</p>
               <p>{t("deposits.noteTax", { person: data.person })}</p>
               <p>{t("deposits.noteInsured", { person: data.person })}</p>

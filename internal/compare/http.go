@@ -42,13 +42,24 @@ func (h *Handler) handleCompare(w http.ResponseWriter, r *http.Request) {
 	if id, err := req.PersonId.Get(); err == nil {
 		ask.Person = id
 	}
-	if raw, err := req.KeyPercent.Get(); err == nil {
+	if raw, err := req.KeyPercent.Get(); err == nil && (req.KeyScenario == nil || *req.KeyScenario == apitypes.DepositComparisonInputKeyScenarioCustom) {
 		pct, err := decimal.NewFromString(raw)
 		if err != nil {
 			httpjson.Error(w, http.StatusBadRequest, "key_percent must be a decimal")
 			return
 		}
 		ask.Key = Scenario{Custom: true, Percent: pct}
+	}
+	if req.KeyScenario != nil {
+		switch *req.KeyScenario {
+		case apitypes.DepositComparisonInputKeyScenarioForecast:
+			ask.Key = Scenario{Forecast: true}
+		case apitypes.DepositComparisonInputKeyScenarioCustom:
+			if !ask.Key.Custom {
+				httpjson.Error(w, http.StatusBadRequest, "key_scenario custom needs key_percent")
+				return
+			}
+		}
 	}
 	if req.Preset != nil {
 		ask.Preset = State(*req.Preset)
@@ -79,6 +90,13 @@ func resultAPI(res Result) apitypes.DepositComparison {
 	out := apitypes.DepositComparison{
 		StartOn: res.Start.Format(time.DateOnly), EndOn: res.End.Format(time.DateOnly), KeyPercent: res.KeyPercent.String(),
 		Person: res.Person, Skipped: res.Skipped, Rows: make([]apitypes.DepositComparisonRow, 0, len(res.Rows)),
+		KeyPath: make([]apitypes.YearKeyRate, 0, len(res.KeyPath)), Forecast: nullable.NewNullNullable[apitypes.KeyForecastInfo](),
+	}
+	for _, y := range res.KeyPath {
+		out.KeyPath = append(out.KeyPath, apitypes.YearKeyRate{Year: y.Year, Percent: y.Percent.String()})
+	}
+	if f := res.Forecast; f != nil {
+		out.Forecast = nullable.NewNullableWithValue(apitypes.KeyForecastInfo{PublishedOn: f.Published, Source: f.Source})
 	}
 	minor := func(v *int64) nullable.Nullable[int64] {
 		if v == nil {
