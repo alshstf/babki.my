@@ -42,6 +42,43 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/push/subscriptions", member(h.handleSubscribe))
 	srv.Mount("DELETE /api/v1/push/subscriptions", member(h.handleUnsubscribe))
 	srv.Mount("POST /api/v1/push/test", member(h.handleTest))
+	srv.Mount("GET /api/v1/push/settings", member(h.handleSettings))
+	srv.Mount("PUT /api/v1/push/settings", member(h.handleSetSettings))
+}
+
+func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	prefs, err := h.store.Prefs(r.Context(), p.UserID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, settingsAPI(prefs))
+}
+
+func (h *Handler) handleSetSettings(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.PushSettingsInput
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	prefs := Prefs{QuietFrom: req.QuietFrom, QuietTo: req.QuietTo}
+	for _, k := range req.Off {
+		prefs.Off = append(prefs.Off, Kind(k))
+	}
+	if err := h.store.SetPrefs(r.Context(), p.UserID, prefs); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	h.handleSettings(w, r)
+}
+
+func settingsAPI(p Prefs) apitypes.PushSettings {
+	out := apitypes.PushSettings{QuietFrom: p.QuietFrom, QuietTo: p.QuietTo, Kinds: make([]apitypes.PushKindSetting, 0, len(Kinds))}
+	for _, k := range Kinds {
+		out.Kinds = append(out.Kinds, apitypes.PushKindSetting{Kind: apitypes.PushKind(k), On: p.Wants(k)})
+	}
+	return out
 }
 
 func (h *Handler) handleKey(w http.ResponseWriter, _ *http.Request) {

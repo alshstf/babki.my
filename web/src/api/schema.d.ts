@@ -610,6 +610,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/push/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The member's choice of reminders (decision Р-61 Б): each kind on or off, and the quiet hours by the server's clock when nothing is sent — from 21 to 9 until the member says otherwise. */
+        get: operations["getPushSettings"];
+        /** @description Keeps the member's choice of reminders. */
+        put: operations["setPushSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recurring/hidden": {
         parameters: {
             query?: never;
@@ -5285,6 +5303,26 @@ export interface components {
             devices: number;
             delivered: number;
         };
+        /** @description One of card, budget, goal, storage, payout, declared, sync, reconcile, stale (a plain string: an enum's values would take the generated names of other enums). What a reminder is about: card — a credit card's payment; budget — a category near or past its limit; goal — a savings goal late or due; storage — a safe box's rent ending; payout — payouts that came; declared — dividends declared on the family's papers; sync — a broker's token refused or its sync failing; reconcile — an account apart from its broker; stale — prices or rates not loading */
+        PushKind: string;
+        PushSettings: {
+            /** @description Every kind, in the order to show them, with whether the member takes it */
+            kinds: components["schemas"]["PushKindSetting"][];
+            /** @description Hour 0–23 by the server's clock from which nothing is sent */
+            quiet_from: number;
+            /** @description Hour 0–23 from which reminders go again; equal to quiet_from — never quiet */
+            quiet_to: number;
+        };
+        PushKindSetting: {
+            kind: components["schemas"]["PushKind"];
+            on: boolean;
+        };
+        PushSettingsInput: {
+            /** @description The kinds the member does not take */
+            off: components["schemas"]["PushKind"][];
+            quiet_from: number;
+            quiet_to: number;
+        };
         /**
          * @description The receipt's kind (its QR code's n): a purchase, its refund, the seller paying out (scrap bought from you), the refund of that
          * @enum {string}
@@ -8130,6 +8168,53 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    getPushSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member's choice */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushSettings"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    setPushSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description The choice as kept */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushSettings"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     hideRecurring: {

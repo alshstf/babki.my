@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/notify"
@@ -97,7 +98,7 @@ func TestRemindersReachTheirMembersOnce(t *testing.T) {
 
 	reminders := []notify.Reminder{{Key: "shared"}, {Key: "alex-only", Owner: &owner.UserID}}
 	for range 2 {
-		if err := notify.Deliver(t.Context(), store, sender, slog.Default(), owner.SpaceID, reminders); err != nil {
+		if err := notify.Deliver(t.Context(), store, sender, slog.Default(), owner.SpaceID, reminders, noon); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -120,5 +121,78 @@ func TestRemindersReachTheirMembersOnce(t *testing.T) {
 	}
 	if r := apitest.Do(t, c, "DELETE", base+"/api/v1/push/subscriptions?endpoint="+url.QueryEscape(alexPhone), ""); r.StatusCode != http.StatusNoContent {
 		t.Errorf("turning off = %d", r.StatusCode)
+	}
+}
+
+var noon = time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+
+// Decision Р-61 Б: a member's choice — every kind and quiet from 21 to 9
+// until said otherwise; with budgets off and quiet from 23 to 7, a budget's
+// reminder never reaches them, a card's waits through the quiet hours and
+// comes after; another member's choice is theirs alone. A quiet hour out of
+// 0–23 or an unknown kind is refused.
+func TestTheMemberChoosesTheirReminders(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	store := notify.NewStore(pool)
+	sender := &fakeSender{gone: map[string]bool{}, got: map[string][]string{}, tries: map[string]int{}}
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
+	notify.NewHandler(store, nil, sender, auth, sm, slog.Default()).Mount(srv)
+	base, c := apitest.Serve(t, srv.Handler())
+
+	var got apitypes.PushSettings
+	apitest.Decode(t, apitest.Do(t, c, "GET", base+"/api/v1/push/settings", ""), &got)
+	if got.QuietFrom != 21 || got.QuietTo != 9 || len(got.Kinds) != 9 || got.Kinds[0].Kind != "card" || !got.Kinds[0].On {
+		t.Fatalf("default = %+v", got)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "PUT", base+"/api/v1/push/settings", `{"off":["budget"],"quiet_from":23,"quiet_to":7}`), &got)
+	if got.QuietFrom != 23 || got.QuietTo != 7 || got.Kinds[1].Kind != "budget" || got.Kinds[1].On || !got.Kinds[0].On {
+		t.Fatalf("set = %+v", got)
+	}
+	for _, bad := range []string{`{"off":[],"quiet_from":24,"quiet_to":7}`, `{"off":["news"],"quiet_from":23,"quiet_to":7}`} {
+		if r := apitest.Do(t, c, "PUT", base+"/api/v1/push/settings", bad); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, r.StatusCode)
+		}
+	}
+
+	var alex family.Principal
+	if err := pool.QueryRow(t.Context(), `SELECT u.id, s.id FROM users u, spaces s WHERE u.username = 'alex'`).Scan(&alex.UserID, &alex.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	alex.Role = family.RoleOwner
+	bob, err := family.NewService(famStore).CreateMember(t.Context(), alex, "bob", "Боб", "secret123", family.RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alexPhone, bobPhone := "https://fcm.googleapis.com/fcm/send/alex", "https://web.push.apple.com/bob"
+	for _, d := range []notify.Subscription{{Endpoint: alexPhone, UserID: alex.UserID, P256dh: "k", Auth: "a"}, {Endpoint: bobPhone, UserID: bob.ID, P256dh: "k", Auth: "a"}} {
+		if err := store.Subscribe(t.Context(), alex.SpaceID, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reminders := []notify.Reminder{{Kind: notify.KindBudget, Key: "budget"}, {Kind: notify.KindCard, Key: "card"}}
+	for _, at := range []int{23, 6, 7} {
+		if err := notify.Deliver(t.Context(), store, sender, slog.Default(), alex.SpaceID, reminders, time.Date(2026, 10, 19, at, 30, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+		if at == 6 && len(sender.got[alexPhone]) != 0 {
+			t.Errorf("at 6 alex got %v in his quiet hours", sender.got[alexPhone])
+		}
+	}
+	if g := sender.got[alexPhone]; len(g) != 1 || g[0] != "card" {
+		t.Errorf("alex got %v, want the card's alone, after 7", g)
+	}
+	// Bob's choice is the default: quiet from 21 till 9.
+	if g := sender.got[bobPhone]; len(g) != 0 {
+		t.Errorf("bob got %v before 9", g)
+	}
+	if err := notify.Deliver(t.Context(), store, sender, slog.Default(), alex.SpaceID, reminders, noon); err != nil {
+		t.Fatal(err)
+	}
+	if g := sender.got[bobPhone]; len(g) != 2 {
+		t.Errorf("bob got %v at noon, want both", g)
 	}
 }

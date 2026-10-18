@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataSourcesList } from "@/components/data-sources";
+import { NotificationsSection } from "./notifications";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -282,6 +283,7 @@ export function SettingsPage() {
         </CardContent>
       </Card>
       <ConnectionsSection />
+      <NotificationsSection />
       <Card className="max-w-md">
         <CardHeader>
           <CardTitle>{t("dataSources.title")}</CardTitle>

@@ -823,6 +823,33 @@ paths:
               schema: { $ref: "#/components/schemas/PushTestResult" }
         "401": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /api/v1/push/settings:
+    get:
+      tags: [push]
+      operationId: getPushSettings
+      description: >-
+        The member's choice of reminders (decision Р-61 Б): each kind on or off, and the quiet hours by the server's
+        clock when nothing is sent — from 21 to 9 until the member says otherwise.
+      responses:
+        "200":
+          description: The member's choice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushSettings" }
+        "401": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [push]
+      operationId: setPushSettings
+      description: Keeps the member's choice of reminders.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PushSettingsInput" } } } }
+      responses:
+        "200":
+          description: The choice as kept
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushSettings" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/recurring/hidden:
     put:
       tags: [recurring]
@@ -5456,6 +5483,37 @@ components:
       properties:
         devices: { type: integer }
         delivered: { type: integer }
+    PushKind:
+      type: string
+      description: >-
+        One of card, budget, goal, storage, payout, declared, sync, reconcile, stale (a plain string: an enum's
+        values would take the generated names of other enums). What a reminder is about: card — a credit card's payment; budget — a category near or past its limit; goal — a
+        savings goal late or due; storage — a safe box's rent ending; payout — payouts that came; declared — dividends
+        declared on the family's papers; sync — a broker's token refused or its sync failing; reconcile — an account
+        apart from its broker; stale — prices or rates not loading
+    PushSettings:
+      type: object
+      required: [kinds, quiet_from, quiet_to]
+      properties:
+        kinds:
+          type: array
+          description: Every kind, in the order to show them, with whether the member takes it
+          items: { $ref: "#/components/schemas/PushKindSetting" }
+        quiet_from: { type: integer, description: "Hour 0–23 by the server's clock from which nothing is sent" }
+        quiet_to: { type: integer, description: "Hour 0–23 from which reminders go again; equal to quiet_from — never quiet" }
+    PushKindSetting:
+      type: object
+      required: [kind, on]
+      properties:
+        kind: { $ref: "#/components/schemas/PushKind" }
+        on: { type: boolean }
+    PushSettingsInput:
+      type: object
+      required: [off, quiet_from, quiet_to]
+      properties:
+        off: { type: array, items: { $ref: "#/components/schemas/PushKind" }, description: "The kinds the member does not take" }
+        quiet_from: { type: integer, minimum: 0, maximum: 23 }
+        quiet_to: { type: integer, minimum: 0, maximum: 23 }
     ReceiptKind:
       type: string
       enum: [purchase, refund, payout, payout_refund]
