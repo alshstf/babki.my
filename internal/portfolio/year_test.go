@@ -19,8 +19,10 @@ import (
 // A year as an estimate of its tax reads it (decision Р-41): 150 of 200
 // shares sold in 2026 for 45 000 — the 100 of 2020 at 10 000, held over three
 // years, gain 20 000, and 50 of the 100 of 2025 at 10 000 gain 5 000; a
-// dollar coupon at the day's rate; a dividend; a tax row taken as withheld;
-// a sale of 2025 and a dividend of 2027 are not the year's.
+// dollar coupon at the day's rate; a dividend; tax rows taken as withheld,
+// January's told apart; a sale of 2025 and a dividend of 2027 are not the
+// year's. 2025 has a tax row of its January and one of the January after it,
+// on its own (Р-60 Б); February 2026's is 2026's alone.
 func TestTheYearsFacts(t *testing.T) {
 	pool := testdb.New(t)
 	md := marketdata.NewStore(pool)
@@ -43,6 +45,12 @@ func TestTheYearsFacts(t *testing.T) {
 	}
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"coupon","occurred_on":"2026-02-01","amount_minor":5000,"currency":"USD"}`, acc.ID, bond.ID))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"tax","occurred_on":"2026-07-01","amount_minor":-39000,"currency":"RUB"}`, acc.ID))
+	for _, tax := range []struct {
+		on    string
+		minor int
+	}{{"2025-01-15", -1000}, {"2026-01-20", -2000}, {"2026-02-01", -4000}} {
+		createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"tax","occurred_on":%q,"amount_minor":%d,"currency":"RUB"}`, acc.ID, tax.on, tax.minor))
+	}
 
 	var space uuid.UUID
 	if err := pool.QueryRow(t.Context(), `SELECT id FROM spaces LIMIT 1`).Scan(&space); err != nil {
@@ -56,12 +64,13 @@ func TestTheYearsFacts(t *testing.T) {
 	// The 2025 sale took 10 of the 2020 lot first: 90 of it left, so 2026's
 	// 150 are 90 of 2020 (cost 9 000) and 60 of 2025 (cost 12 000) for 45 000:
 	// 27 000 − 9 000 = 18 000 long, 18 000 − 12 000 = 6 000.
-	want := portfolio.YearFacts{Sales: 2_400_000, SalesLong: 1_800_000, Coupons: 400_000, Dividends: 300_000, Withheld: 39_000}
+	want := portfolio.YearFacts{Sales: 2_400_000, SalesLong: 1_800_000, Coupons: 400_000, Dividends: 300_000, Withheld: 45_000, WithheldJanuary: 2_000}
 	if got != want {
 		t.Errorf("2026 = %+v, want %+v", got, want)
 	}
-	if got, _ := svc.YearFacts(t.Context(), space, uuid.MustParse(acc.ID), 2025, "RUB", 3); got.Sales != 100_000 || got.SalesLong != 100_000 || got.Dividends != 0 {
-		t.Errorf("2025 = %+v: the 10 of 2020 sold for 2 000 against 1 000, held over three years", got)
+	if got, _ := svc.YearFacts(t.Context(), space, uuid.MustParse(acc.ID), 2025, "RUB", 3); got.Sales != 100_000 || got.SalesLong != 100_000 || got.Dividends != 0 ||
+		got.Withheld != 1_000 || got.WithheldJanuary != 1_000 || got.WithheldAfter != 2_000 {
+		t.Errorf("2025 = %+v: the 10 of 2020 sold for 2 000 against 1 000, held over three years, a tax row of its January and one of the January after", got)
 	}
 }
 

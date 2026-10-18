@@ -62,6 +62,39 @@ func broker(name string, owner *uuid.UUID, foreign bool) account.WithBalance {
 	}}
 }
 
+// Decision Р-60 Б: a Russian broker's tax rows against what it withholds
+// for the year — short by what is not withheld yet; the January after the
+// year's rows counting; past it, over; a broker abroad not checked. The
+// brokers have withheld the year's tax by the end of the January after it.
+func TestTheBrokersWithholdingChecked(t *testing.T) {
+	alex := member("Алекс", family.RoleOwner)
+	short, january, over := broker("Т-Банк", &alex.ID, false), broker("Альфа", &alex.ID, false), broker("БКС", &alex.ID, false)
+	kz := broker("Freedom KZ", &alex.ID, true)
+	f := fakeFacts{
+		short.ID:   {Sales: 2_000_000_00, Withheld: 6_500_00, WithheldJanuary: 1_500_00},
+		january.ID: {Sales: 1_000_000_00, Withheld: 30_000_00, WithheldAfter: 100_000_00},
+		over.ID:    {Dividends: 100_000_00, Withheld: 14_000_00},
+		kz.ID:      {Dividends: 100_000_00, Withheld: 10_000_00},
+	}
+	svc := NewService(fakeAccounts{short, january, over, kz}, f, fakeSpaces{residency: "RU", members: []family.Member{alex}}, fakeKeys{rate21})
+	y, err := svc.Of(t.Context(), uuid.New(), 2026)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y.AgentsBy.Format(time.DateOnly) != "2027-01-31" {
+		t.Errorf("agents by %s", y.AgentsBy.Format(time.DateOnly))
+	}
+	want := map[string][2]int64{"Т-Банк": {253_500_00, 0}, "Альфа": {0, 0}, "БКС": {0, 1_000_00}, "Freedom KZ": {0, 0}}
+	for _, a := range y.People[0].Accounts {
+		if got := [2]int64{a.AgentShort, a.AgentOver}; got != want[a.Name] {
+			t.Errorf("%s: short and over %v, want %v", a.Name, got, want[a.Name])
+		}
+	}
+	if p := y.People[0]; p.Withheld != 50_500_00 {
+		t.Errorf("withheld in the year %d: the January after is not the year's", p.Withheld)
+	}
+}
+
 // Alex, the owner: two Russian brokers with 2 млн each on papers — each
 // withholds 13 %, the 15 % on the 1,6 млн past the threshold is his to pay;
 // a shared one at a loss, his by default; a broker abroad whose dividends

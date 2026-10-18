@@ -6789,6 +6789,9 @@ type TableImport struct {
 
 // TaxYear defines model for TaxYear.
 type TaxYear struct {
+	// AgentsBy Date YYYY-MM-DD: the end of the January after the year — by then the Russian brokers have withheld its tax, often in that January (Р-60 Б)
+	AgentsBy string `json:"agents_by"`
+
 	// Currency What the tax is counted in; empty when not supported
 	Currency string `json:"currency"`
 
@@ -6822,6 +6825,12 @@ type TaxYear struct {
 type TaxYearAccount struct {
 	AccountId openapi_types.UUID `json:"account_id"`
 
+	// AgentOverMinor A Russian broker: how much they go past agent_tax_minor; 0 otherwise
+	AgentOverMinor int64 `json:"agent_over_minor"`
+
+	// AgentShortMinor A Russian broker: how much withheld_minor and withheld_after_minor together fall short of agent_tax_minor; 0 otherwise (Р-60 Б)
+	AgentShortMinor int64 `json:"agent_short_minor"`
+
 	// AgentTaxMinor What the broker withholds for the year as a tax agent; 0 for a broker abroad
 	AgentTaxMinor int64 `json:"agent_tax_minor"`
 
@@ -6853,6 +6862,12 @@ type TaxYearAccount struct {
 	// SecuritiesMinor The papers' result as the broker reckons it: sales less the gain on pieces held long, plus coupons
 	SecuritiesMinor int64 `json:"securities_minor"`
 	Unvalued        int   `json:"unvalued"`
+
+	// WithheldAfterMinor Tax rows of the January after the year: a Russian broker withholds a year's tax at its end, often then
+	WithheldAfterMinor int64 `json:"withheld_after_minor"`
+
+	// WithheldJanuaryMinor Of withheld_minor, the rows of the year's January — at a broker, possibly the year before's tax
+	WithheldJanuaryMinor int64 `json:"withheld_january_minor"`
 
 	// WithheldMinor Tax rows of the year: what was withheld
 	WithheldMinor int64 `json:"withheld_minor"`

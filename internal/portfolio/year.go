@@ -19,12 +19,15 @@ import (
 // years; the coupons, dividends and interest paid; the taxes withheld. A
 // figure that cannot be valued — a piece with no day, a missing rate — is
 // left out and counted in Unvalued, so the caller can say the estimate is
-// short.
+// short. WithheldJanuary is the part of Withheld taken in the year's
+// January, WithheldAfter the taxes withheld in the January after it: a
+// Russian broker withholds a year's tax at its end, often in January
+// (decision Р-60 Б).
 type YearFacts struct {
-	Sales, SalesLong             int64
-	Coupons, Dividends, Interest int64
-	Withheld                     int64
-	Unvalued                     int
+	Sales, SalesLong                         int64
+	Coupons, Dividends, Interest             int64
+	Withheld, WithheldJanuary, WithheldAfter int64
+	Unvalued                                 int
 }
 
 // YearFacts reads the account's journal for year.
@@ -71,7 +74,8 @@ func (s *Service) YearFacts(ctx context.Context, spaceID, accountID uuid.UUID, y
 		}
 	}
 	for _, o := range ops {
-		if !in(o.OccurredOn) {
+		after := o.Type == TypeTax && o.OccurredOn.Year() == year+1 && o.OccurredOn.Month() == time.January
+		if !in(o.OccurredOn) && !after {
 			continue
 		}
 		var into *int64
@@ -99,6 +103,12 @@ func (s *Service) YearFacts(ctx context.Context, spaceID, accountID uuid.UUID, y
 		if o.Type == TypeTax {
 			// A tax row takes money: withheld is what it took.
 			minor = -minor
+			switch {
+			case after:
+				into = &out.WithheldAfter
+			case o.OccurredOn.Month() == time.January:
+				out.WithheldJanuary += minor
+			}
 		}
 		*into += minor
 	}

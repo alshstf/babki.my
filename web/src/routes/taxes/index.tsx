@@ -15,7 +15,7 @@ import { useTaxYear, useWageEntry, type TaxYear, type TaxYearAccount, type TaxYe
 import { QueryGate } from "@/components/query-notice";
 import { queryState } from "@/lib/query-state";
 import { formatMinor, minorToInput, parseToMinor } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
+import { formatDate, localToday } from "@/lib/dates";
 import { ForeignReturn } from "./foreign";
 import { ForeignReport } from "./report";
 
@@ -265,8 +265,71 @@ function PersonCard({ year, person: p }: { year: TaxYear; person: TaxYearPerson 
             </TableBody>
           </Table>
         </div>
+        <AgentCheck year={year} accounts={p.accounts} />
       </CardContent>
     </Card>
+  );
+}
+
+// AgentCheck sets each Russian broker's tax rows against what the program
+// reckons it withholds for the year (decision Р-60 Б): the gap, and when a
+// gap is to be expected — before the year's end, and in the January after
+// it, when the brokers withhold the year's tax — or what to look at when it
+// stays.
+function AgentCheck({ year, accounts }: { year: TaxYear; accounts: TaxYearAccount[] }) {
+  const { t } = useTranslation();
+  const c = year.currency;
+  const brokers = accounts.filter(
+    (a) => !a.bank && !a.foreign_broker && (a.agent_tax_minor > 0 || a.withheld_minor > 0 || a.withheld_after_minor > 0),
+  );
+  if (brokers.length === 0) return null;
+  const today = localToday();
+  const open = today <= `${year.year}-12-31`;
+  const settling = !open && today <= year.agents_by;
+  const apart = brokers.some((a) => a.agent_short_minor > 0 || a.agent_over_minor > 0);
+  return (
+    <div className="grid gap-2 text-sm" data-testid="tax-agent-check">
+      <h3 className="font-semibold">{t("taxes.agentCheck.title")}</h3>
+      <ul className="grid gap-1">
+        {brokers.map((a) => (
+          <li key={a.account_id} data-testid="tax-agent-row">
+            {t("taxes.agentCheck.row", { name: a.name, agent: formatMinor(a.agent_tax_minor, c), withheld: formatMinor(a.withheld_minor, c) })}
+            {a.withheld_after_minor > 0 && ` · ${t("taxes.agentCheck.after", { year: year.year + 1, amount: formatMinor(a.withheld_after_minor, c) })}`}
+            {" — "}
+            {a.agent_short_minor > 0
+              ? t("taxes.agentCheck.short", { amount: formatMinor(a.agent_short_minor, c) })
+              : a.agent_over_minor > 0
+                ? t("taxes.agentCheck.over", { amount: formatMinor(a.agent_over_minor, c) })
+                : t("taxes.agentCheck.even")}
+            {a.withheld_january_minor > 0 && (
+              <div className="text-xs text-muted-foreground">
+                {t("taxes.agentCheck.january", { amount: formatMinor(a.withheld_january_minor, c), year: year.year, prev: year.year - 1 })}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {open ? (
+        <p className="text-xs text-muted-foreground">{t("taxes.agentCheck.open")}</p>
+      ) : settling ? (
+        <p className="text-xs text-muted-foreground">{t("taxes.agentCheck.settling", { date: formatDate(year.agents_by) })}</p>
+      ) : (
+        apart && (
+          <div className="grid gap-1 text-xs text-muted-foreground" data-testid="tax-agent-hints">
+            <p>{t("taxes.agentCheck.apart")}</p>
+            <ul className="list-disc pl-5">
+              <li>{t("taxes.agentCheck.checks.rows")}</li>
+              <li>{t("taxes.agentCheck.checks.dividends")}</li>
+              <li>{t("taxes.agentCheck.checks.long")}</li>
+              <li>{t("taxes.agentCheck.checks.accounts")}</li>
+              <li>{t("taxes.agentCheck.checks.iis")}</li>
+              <li>{t("taxes.agentCheck.checks.costs")}</li>
+            </ul>
+            {brokers.some((a) => a.agent_over_minor > 0) && <p>{t("taxes.agentCheck.overBack")}</p>}
+          </div>
+        )
+      )}
+    </div>
   );
 }
 
