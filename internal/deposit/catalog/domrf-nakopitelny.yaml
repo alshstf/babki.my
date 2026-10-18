@@ -6,6 +6,346 @@ watch:
   - https://domrfbank.ru/deposits/savings-account/
   - https://domrfbank.ru/deposits/docs/
 editions:
+  - from: 2025-12-26
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/bed/ccojdhkdvphnreiifgrnyl0f4jrrbqhy/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2026.12.2025.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 26.12.2025», действовали по 13.01.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 15,4 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 15,5 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "15.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-01-14
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/2f5/5y9fd6tz3b73nr0vvezgllcjrsp2fjlb/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2014.01.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 14.01.2026», действовали по 19.02.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 15,1 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 15,2 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "15.1" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-02-20
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/422/io4p135not75ljwhac6bir6in61datjw/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2020.02.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 20.02.2026», действовали по 15.03.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 14,9 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 15 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "14.9" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-03-16
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/c8b/fbo3t4n1x5ko7f4e9iy5mv8wr49wwx65/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2016.03.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 16.03.2026», действовали по 20.03.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 14,7 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 14,8 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "14.7" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-03-21
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/799/5h7t9w3u6erdig9wsnqka19nsqj7spbe/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2021.03.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 21.03.2026», действовали по 30.03.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 14,5 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 14,6 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "14.5" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-03-31
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/2ed/w1ltejg963ry93g45iw01iun1vki0dtz/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2031.03.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 31.03.2026», действовали по 09.04.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 14,3 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 14,4 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "14.3" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-04-10
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/622/4magvs0jhoq0cc630k1bma3uvb22j98k/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2010.04.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 10.04.2026», действовали по 24.04.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 14 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 14,1 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "14" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-04-25
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/e03/rpoglu4z2meo0nj663gkysiyou7bppjv/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2025.04.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 25.04.2026», действовали по 28.04.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 13,8 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 13,9 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "13.8" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-04-29
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/5d4/ryxuvegql763jkq3xsj3810m1uk5wbdv/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2029.04.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 29.04.2026», действовали по 29.05.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 13,6 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 13,7 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "13.6" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
+  - from: 2026-05-30
+    checked_on: 2026-10-19
+    sources:
+      - https://domrfbank.ru/upload/iblock/447/gq2jzjou0gzd30s5dpr5omliujjcetjx/%D0%9F%D1%80%D0%BE%D1%86%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B5%20%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B8%20%D1%81%2030.05.2026.pdf
+    notes: >-
+      Архив банка: «Процентные ставки с 30.05.2026», действовали по 08.10.2026 (банк выпускает таблицы часто,
+      здесь — те, где менялся накопительный счёт). В месяц открытия и следующий — 13,4 %, потом 4 %. Зарплатным и
+      премиальным клиентам — 13,5 % и 4,5 %. В юанях — 0,4 % и 0,2 % (зарплатным и премиальным — 0,5 и 0,3).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "4" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "13.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
+      - id: cny
+        name: В юанях
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        currency: CNY
+        grid:
+          - { percent: "0.2" }
+        schedule:
+          - { name: Первые два месяца, months: 2, grid: [{ percent: "0.4" }] }
+        bonuses:
+          - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.1", check: manual }
   - from: 2026-10-09
     checked_on: 2026-10-16
     sources:
