@@ -5,6 +5,154 @@ kind: savings
 watch:
   - https://www.psbank.ru/personal/savingsaccount
 editions:
+  - from: 2025-12-30
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_30122025.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 30.12.2025, действовали по 15.01.2026. Способ начисления выбирается при открытии. Ставка — от 10 000 ₽ на счёте, меньше — 0,01 %.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "14" }
+      - id: daily
+        name: На ежедневный остаток
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "12" }
+  - from: 2026-01-16
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns-16012026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 16.01.2026, действовали по 18.02.2026. Способ начисления выбирается при открытии. Ставка — от 10 000 ₽ на счёте, меньше — 0,01 %.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "13" }
+      - id: daily
+        name: На ежедневный остаток
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "11.5" }
+  - from: 2026-02-19
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_19022026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 19.02.2026, действовали по 31.03.2026. Способ начисления выбирается при открытии. Ставка — от 10 000 ₽ на счёте, меньше — 0,01 %.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "12.5" }
+      - id: daily
+        name: На ежедневный остаток
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "11.5" }
+  - from: 2026-04-01
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_01042026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 01.04.2026, действовали по 30.04.2026. Способ начисления выбирается при открытии. Ставка — от 10 000 ₽ на счёте, меньше — 0,01 %.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "12" }
+      - id: daily
+        name: На ежедневный остаток
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "11" }
+  - from: 2026-05-01
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_01052026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 01.05.2026, действовали по 02.06.2026. Способ начисления выбирается при открытии. Ставка — от 10 000 ₽ на счёте, меньше — 0,01 %.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "11" }
+      - id: daily
+        name: На ежедневный остаток
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "0.01" }
+          - { amount_from: 1000000, percent: "10" }
+  - from: 2026-06-03
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_03062026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 03.06.2026, действовали по 13.08.2026. Способ начисления выбирается при открытии.
+    variants:
+      - id: minimum
+        name: На минимальный остаток
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "10.5" }
+      - id: daily
+        name: На ежедневный остаток
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "9.5" }
   - from: 2026-08-14
     checked_on: 2026-10-16
     sources:
