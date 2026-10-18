@@ -102,7 +102,7 @@ func conditionsAPI(v deposit.Variant, term *int, tell func(id string, month time
 		}
 		seen[s.Requires] = true
 		c := apitypes.ProgrammeCondition{
-			Id: s.Requires, Name: deposit.Requirements[s.Requires], Kind: apitypes.Requirement, Check: apitypes.ProgrammeConditionCheckManual,
+			Id: s.Requires, Name: deposit.Requirements[s.Requires], Kind: apitypes.ProgrammeConditionKindRequirement, Check: apitypes.ProgrammeConditionCheckManual,
 			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{},
 		}
 		state(&c)
@@ -120,7 +120,7 @@ func conditionsAPI(v deposit.Variant, term *int, tell func(id string, month time
 			}
 		}
 		c := apitypes.ProgrammeCondition{
-			Id: b.ID, Name: b.Name, Kind: apitypes.Bonus, Check: apitypes.ProgrammeConditionCheck(b.Check),
+			Id: b.ID, Name: b.Name, Kind: apitypes.ProgrammeConditionKindBonus, Check: apitypes.ProgrammeConditionCheck(b.Check),
 			Group: nullable.NewNullNullable[string](), Plus: nullable.NewNullNullable[string](), Levels: []apitypes.BonusLevel{},
 		}
 		if b.Group != "" {

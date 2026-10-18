@@ -23,6 +23,7 @@ import (
 	"babki.my/babki/internal/budget"
 	"babki.my/babki/internal/cashflow"
 	"babki.my/babki/internal/category"
+	"babki.my/babki/internal/compare"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/creditcard"
 	"babki.my/babki/internal/depositcheck"
@@ -172,6 +173,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		WithProperty(valuablesSvc).WithEntries(r.pool, opStore).WithForeign(positions, instStore).WithReport(positions, converter).
 		WithInterest(accStore, mdStore, depositChecks, positions)
 	taxyear.NewHandler(taxSvc, famAuth, famSM).Mount(srv)
+	// The deposits compared on a sum over a horizon (decision Р-57 Б).
+	compare.NewHandler(compare.NewService(mdStore, depositChecks, accStore, structureSvc, taxSvc, famStore, famStore), famAuth, famSM).Mount(srv)
 	loanSvc := loan.NewService(r.pool, accStore, opSvc, category.NewStore(r.pool))
 	cardSvc := creditcard.NewService(r.pool, accStore, opStore, category.NewStore(r.pool))
 	loan.NewHandler(loanSvc, famAuth, famSM).Mount(srv)
