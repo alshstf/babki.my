@@ -5,6 +5,61 @@ kind: savings
 watch:
   - https://www.sberbank.ru/ru/person/contributions/deposits/nakopi
 editions:
+  - from: 2025-07-31
+    checked_on: 2026-10-19
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/archive
+      - https://www.sberbank.ru/proxy/services/deposit/archive/valQvbGroupList?terrBankCode=038&csCode=0&currencyCode=643&groupCodeList[]=468
+    notes: >-
+      Архив процентных ставок Сбера: действовали по 04.01.2026. Базовая 9 % на любую сумму; надбавок архив за этот период не показывает.
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "9" }
+  - from: 2026-01-05
+    checked_on: 2026-10-19
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/archive
+      - https://www.sberbank.ru/proxy/services/deposit/archive/valQvbGroupList?terrBankCode=038&csCode=0&currencyCode=643&groupCodeList[]=468
+    notes: >-
+      Архив процентных ставок Сбера: действовали по 19.02.2026. Базовая 8 %; за первое открытие накопительного счёта +5,5 (как в нынешней редакции — первые два месячных периода).
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "8" }
+        schedule:
+          - { name: Приветственная, days: 61, plus: "5.5", requires: new_client }
+  - from: 2026-02-20
+    until: 2026-03-16
+    checked_on: 2026-10-19
+    sources:
+      - https://www.sberbank.ru/ru/person/contributions/archive
+      - https://www.sberbank.ru/proxy/services/deposit/archive/valQvbGroupList?terrBankCode=038&csCode=0&currencyCode=643&groupCodeList[]=468
+    notes: >-
+      Архив процентных ставок Сбера: действовали по 16.03.2026. Базовая 7,5 %; за первое открытие +6, за оборот покупок у партнёров (ECOM) +1,5. С 17.03 по 29.04.2026 архив ставок не показывает (по странице счёта базовая тогда была 7 %, надбавки неизвестны) — эти дни вписываются ручной ставкой «с … по …».
+    variants:
+      - id: daily
+        name: Накопительный счёт
+        audience: [all]
+        accrual: daily
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "7.5" }
+        schedule:
+          - { name: Приветственная, days: 61, plus: "6", requires: new_client }
+        bonuses:
+          - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц, plus: "1.5", check: manual, next_month: true }
   - from: 2026-04-30
     checked_on: 2026-10-16
     sources:

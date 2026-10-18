@@ -162,12 +162,16 @@ func (p Programme) Quote(h Holding, day time.Time, balance int64, keyOn KeyOn, m
 	return out, nil
 }
 
-// EditionOn is the edition in force on day: the last from it or before.
+// EditionOn is the edition in force on day: the last from it or before,
+// unless its last day is past.
 func (p Programme) EditionOn(day time.Time) (Edition, bool) {
 	at := day.Format(time.DateOnly)
 	for i := len(p.Editions) - 1; i >= 0; i-- {
-		if p.Editions[i].From <= at {
-			return p.Editions[i], true
+		if e := p.Editions[i]; e.From <= at {
+			if e.Until != "" && at > e.Until {
+				return Edition{}, false
+			}
+			return e, true
 		}
 	}
 	return Edition{}, false

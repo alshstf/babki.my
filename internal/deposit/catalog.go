@@ -53,7 +53,11 @@ type Programme struct {
 // prolonged from that day keeps them for its term; a savings account has
 // them every day from that day, until the next edition.
 type Edition struct {
-	From      string    `yaml:"from"`
+	From string `yaml:"from"`
+	// Until, if set, is the edition's last day: from the next day to the next
+	// edition the catalog knows no terms — a bank's archive that skips days
+	// (Р-59 Б); those are written in by hand.
+	Until     string    `yaml:"until"`
 	CheckedOn string    `yaml:"checked_on"`
 	Sources   []string  `yaml:"sources"`
 	Notes     string    `yaml:"notes"`
@@ -472,11 +476,17 @@ func (p Programme) check(banks intermediary.Catalog) error {
 		return fmt.Errorf("%s: no editions", p.ID)
 	}
 	prev := ""
-	for _, e := range p.Editions {
+	for i, e := range p.Editions {
 		if _, err := time.Parse(time.DateOnly, e.From); err != nil || e.From <= prev {
 			return fmt.Errorf("%s: edition from %q: dates go up, YYYY-MM-DD", p.ID, e.From)
 		}
 		prev = e.From
+		if e.Until != "" {
+			_, err := time.Parse(time.DateOnly, e.Until)
+			if err != nil || e.Until < e.From || (i+1 < len(p.Editions) && e.Until >= p.Editions[i+1].From) {
+				return fmt.Errorf("%s: edition from %s until %q: within the edition and before the next one", p.ID, e.From, e.Until)
+			}
+		}
 		if _, err := time.Parse(time.DateOnly, e.CheckedOn); err != nil || len(e.Sources) == 0 {
 			return fmt.Errorf("%s %s: checked_on and sources are required", p.ID, e.From)
 		}
