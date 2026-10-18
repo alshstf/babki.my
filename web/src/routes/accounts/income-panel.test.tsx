@@ -112,4 +112,12 @@ describe("IncomePanel", () => {
       "Строки дохода не посчитать: нет ставки на все нужные дни или не известно, как банк платит проценты. Не известно, как банк платит проценты: у вклада нет программы банка или не указан способ выплаты.",
     );
   });
+
+  // Р-59 А: a day with money and no rate — say where to write one in.
+  it("says where to write in the rate of a day the year lacks", async () => {
+    show({ ...none, estimate: { ...estimate, missing: "rate", missing_on: "2026-02-01" } });
+    expect(norm((await screen.findByTestId("account-income-notes")).textContent)).toContain(
+      "Проценты за год не оценить: 01.02.2026 на счёте были деньги, а ставки на этот день нет. Ставку на этот день можно вписать выше, в «Ставка вручную», — с последним днём, если дальше ставка по программе банка.",
+    );
+  });
 });

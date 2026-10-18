@@ -30,10 +30,10 @@ const stated: AccountRates = {
   ...bare,
   source: "by_hand",
   rates: [
-    { from_on: "2026-01-01", kind: "fixed", percent: "16.000", by_hand: true },
-    { from_on: "2026-09-01", kind: "key", percent: "-1.500", by_hand: true },
+    { from_on: "2026-01-01", until_on: null, kind: "fixed", percent: "16.000", by_hand: true },
+    { from_on: "2026-09-01", until_on: null, kind: "key", percent: "-1.500", by_hand: true },
   ],
-  current: { percent: "15.500", from_on: "2026-09-01", kind: "key", by_hand: true },
+  current: { percent: "15.500", from_on: "2026-09-01", until_on: null, kind: "key", by_hand: true },
   key_rate: "17",
 };
 
@@ -155,7 +155,47 @@ describe("RatePanel", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([r]) => (r as Request).method === "PUT")).toBe(true));
     const put = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "PUT")!;
     expect(new URL(put.url).pathname).toBe("/api/v1/accounts/dep-1/rates");
-    expect(await put.json()).toEqual({ from_on: "2026-09-01", kind: "key", percent: "-1.5" });
+    expect(await put.json()).toEqual({ from_on: "2026-09-01", until_on: null, kind: "key", percent: "-1.5" });
+  });
+
+  // Р-59 А: a rate for the months before the bank's programme is known, to
+  // its last day; a last day before the first is not saved.
+  it("states a rate to its last day", async () => {
+    answer({ ...bare, rates: [], current: null, key_rate: "17" });
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Указать ставку" }));
+    const dialog = await screen.findByTestId("account-rate-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Ставка, % годовых"), { target: { value: "18" } });
+    fireEvent.change(within(dialog).getByLabelText("Действует с"), { target: { value: "2026-01-01" } });
+    fireEvent.change(within(dialog).getByLabelText("Действует по (необязательно)"), { target: { value: "2025-12-31" } });
+    expect(dialog.textContent).toContain("Последний день не раньше первого.");
+    expect((within(dialog).getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("Действует по (необязательно)"), { target: { value: "2026-09-30" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+    const put = await sent("PUT", "/api/v1/accounts/dep-1/rates");
+    expect(await put.json()).toEqual({ from_on: "2026-01-01", until_on: "2026-09-30", kind: "fixed", percent: "18" });
+  });
+
+  it("shows a rate's last day in the history and under the rate", async () => {
+    answer({
+      ...stated,
+      rates: [{ from_on: "2026-01-01", until_on: "2099-03-31", kind: "fixed", percent: "18.000", by_hand: true }],
+      current: { percent: "18.000", from_on: "2026-01-01", until_on: "2099-03-31", kind: "fixed", by_hand: true },
+    });
+    show();
+    expect(norm((await screen.findByTestId("account-rate-history")).textContent)).toContain("с 01.01.2026 по 31.03.2099 — 18 % годовых");
+    expect(norm(screen.getByTestId("account-rate").textContent)).toContain("с 01.01.2026 по 31.03.2099 · указана вручную");
+  });
+
+  it("does not wait for the key rate on a key-tied rate that has ended", async () => {
+    answer({
+      ...bare,
+      rates: [{ from_on: "2026-01-01", until_on: "2026-03-31", kind: "key", percent: "-1.000", by_hand: true }],
+      current: null,
+      key_rate: null,
+    });
+    show();
+    expect(norm((await screen.findByTestId("account-rate")).textContent)).toContain("Ставки пока нет");
   });
 
   it("shows the rate by the bank's terms: the bonuses that counted, the parts of the balance, the marks", async () => {

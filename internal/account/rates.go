@@ -24,9 +24,11 @@ const (
 // Rate is a savings account's or a deposit's rate from From on (decision
 // Р-51 А): Percent a year when fixed, the margin over the key rate when tied
 // to it. ByHand: the family wrote it in — over anything the program would
-// learn of the bank by itself.
+// learn of the bank by itself. Until, if set, is its last day (Р-59 А): after
+// it the programme's terms hold again, till the next rate.
 type Rate struct {
 	From    time.Time
+	Until   *time.Time
 	Kind    RateKind
 	Percent decimal.Decimal
 	ByHand  bool
@@ -40,6 +42,7 @@ var (
 	hundred  = decimal.NewFromInt(100)
 	fifty    = decimal.NewFromInt(50)
 	errRate  = fmt.Errorf("%w: a rate is fixed from 0 to under 100 %% a year, or the key rate plus a margin within ±50, to thousandths", family.ErrValidation)
+	errUntil = fmt.Errorf("%w: a rate's last day is not before its first", family.ErrValidation)
 	errEarns = fmt.Errorf("%w: only a savings account or a deposit holds a rate", family.ErrValidation)
 )
 
@@ -58,7 +61,7 @@ func (s *Store) AllRates(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID]
 }
 
 func (s *Store) rates(ctx context.Context, where string, args ...any) (map[uuid.UUID][]Rate, error) {
-	rows, err := s.db.Query(ctx, `SELECT account_id, from_on, kind, percent, by_hand FROM account_rates `+where+` ORDER BY account_id, from_on`, args...)
+	rows, err := s.db.Query(ctx, `SELECT account_id, from_on, until_on, kind, percent, by_hand FROM account_rates `+where+` ORDER BY account_id, from_on`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("account: rates: %w", err)
 	}
@@ -67,7 +70,7 @@ func (s *Store) rates(ctx context.Context, where string, args ...any) (map[uuid.
 	for rows.Next() {
 		var id uuid.UUID
 		var r Rate
-		if err := rows.Scan(&id, &r.From, &r.Kind, &r.Percent, &r.ByHand); err != nil {
+		if err := rows.Scan(&id, &r.From, &r.Until, &r.Kind, &r.Percent, &r.ByHand); err != nil {
 			return nil, fmt.Errorf("account: rates: %w", err)
 		}
 		out[id] = append(out[id], r)
@@ -93,6 +96,9 @@ func (s *Store) SetRate(ctx context.Context, spaceID, accountID uuid.UUID, r Rat
 	if !r.Percent.Equal(r.Percent.Truncate(3)) || r.From.IsZero() {
 		return errRate
 	}
+	if r.Until != nil && r.Until.Before(r.From) {
+		return errUntil
+	}
 	a, err := s.ByID(ctx, spaceID, accountID)
 	if err != nil {
 		return err
@@ -101,9 +107,9 @@ func (s *Store) SetRate(ctx context.Context, spaceID, accountID uuid.UUID, r Rat
 		return errEarns
 	}
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO account_rates (account_id, space_id, from_on, kind, percent, by_hand) VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (account_id, from_on) DO UPDATE SET kind = EXCLUDED.kind, percent = EXCLUDED.percent, by_hand = EXCLUDED.by_hand`,
-		accountID, spaceID, r.From, r.Kind, r.Percent, r.ByHand)
+		INSERT INTO account_rates (account_id, space_id, from_on, until_on, kind, percent, by_hand) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (account_id, from_on) DO UPDATE SET until_on = EXCLUDED.until_on, kind = EXCLUDED.kind, percent = EXCLUDED.percent, by_hand = EXCLUDED.by_hand`,
+		accountID, spaceID, r.From, r.Until, r.Kind, r.Percent, r.ByHand)
 	if err != nil {
 		return fmt.Errorf("account: set rate: %w", err)
 	}
@@ -122,9 +128,11 @@ func (s *Store) DeleteRate(ctx context.Context, spaceID, accountID uuid.UUID, da
 	return nil
 }
 
-// RateOn is the rate in force on day — the last one from day or before — as
-// a percent a year, and that row; a rate tied to the key rate adds its margin
-// to keyOn(day). ok is false without a rate by then, or without the key rate.
+// RateOn is the rate in force on day — the last one from day or before,
+// unless its last day is past — as a percent a year, and that row; a rate
+// tied to the key rate adds its margin to keyOn(day). ok is false without a
+// rate in force, or without the key rate. A later rate replaces an earlier
+// one even when that one's last day is ahead: the bank changed it.
 func RateOn(rates []Rate, day time.Time, keyOn func(time.Time) (decimal.Decimal, bool, error)) (decimal.Decimal, *Rate, bool, error) {
 	var in *Rate
 	for i := range rates {
@@ -133,7 +141,7 @@ func RateOn(rates []Rate, day time.Time, keyOn func(time.Time) (decimal.Decimal,
 		}
 		in = &rates[i]
 	}
-	if in == nil {
+	if in == nil || (in.Until != nil && day.After(*in.Until)) {
 		return decimal.Zero, nil, false, nil
 	}
 	if in.Kind == RateFixed {

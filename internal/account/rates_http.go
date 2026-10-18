@@ -74,7 +74,16 @@ func (h *Handler) handleSetRate(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "percent must be a decimal")
 		return
 	}
-	if err := h.store.SetRate(r.Context(), p.SpaceID, id, Rate{From: from, Kind: RateKind(req.Kind), Percent: pct, ByHand: true}); err != nil {
+	rate := Rate{From: from, Kind: RateKind(req.Kind), Percent: pct, ByHand: true}
+	if raw, err := req.UntilOn.Get(); err == nil {
+		until, err := time.Parse(time.DateOnly, raw)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, "until_on must be YYYY-MM-DD")
+			return
+		}
+		rate.Until = &until
+	}
+	if err := h.store.SetRate(r.Context(), p.SpaceID, id, rate); err != nil {
 		family.WriteError(w, err)
 		return
 	}
@@ -146,7 +155,7 @@ func (h *Handler) writeRates(w http.ResponseWriter, r *http.Request, spaceID, id
 	if ok {
 		out.Source = apitypes.AccountRatesSourceByHand
 		out.Current = nullable.NewNullableWithValue(apitypes.AccountRateNow{
-			Percent: pct.StringFixed(3), FromOn: row.From.Format(time.DateOnly), Kind: apitypes.AccountRateNowKind(row.Kind), ByHand: row.ByHand,
+			Percent: pct.StringFixed(3), FromOn: row.From.Format(time.DateOnly), UntilOn: until(row), Kind: apitypes.AccountRateNowKind(row.Kind), ByHand: row.ByHand,
 		})
 	}
 	if binding != nil {
@@ -236,7 +245,14 @@ func (h *Handler) writeProgramme(ctx context.Context, out *apitypes.AccountRates
 func RatesAPI(list []Rate) []apitypes.AccountRate {
 	out := make([]apitypes.AccountRate, 0, len(list))
 	for _, r := range list {
-		out = append(out, apitypes.AccountRate{FromOn: r.From.Format(time.DateOnly), Kind: apitypes.AccountRateKind(r.Kind), Percent: r.Percent.StringFixed(3), ByHand: r.ByHand})
+		out = append(out, apitypes.AccountRate{FromOn: r.From.Format(time.DateOnly), UntilOn: until(&r), Kind: apitypes.AccountRateKind(r.Kind), Percent: r.Percent.StringFixed(3), ByHand: r.ByHand})
 	}
 	return out
+}
+
+func until(r *Rate) nullable.Nullable[string] {
+	if r.Until == nil {
+		return nullable.NewNullNullable[string]()
+	}
+	return nullable.NewNullableWithValue(r.Until.Format(time.DateOnly))
 }

@@ -3890,22 +3890,25 @@ components:
       required: [from_on, kind, percent]
       properties:
         from_on: { type: string, description: "Date YYYY-MM-DD the rate holds from" }
+        until_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the rate's last day, not before from_on (Р-59 А): after it the account's programme gives the rate again, till the next rate. Null or absent: until the next rate" }
         kind: { type: string, enum: [fixed, key] }
         percent: { type: string, description: "Decimal: a year when fixed; the margin over the key rate when tied to it, may be negative" }
     AccountRate:
       type: object
-      required: [from_on, kind, percent, by_hand]
+      required: [from_on, until_on, kind, percent, by_hand]
       properties:
         from_on: { type: string }
+        until_on: { type: string, nullable: true, description: "The rate's last day; null — until the next rate" }
         kind: { type: string, enum: [fixed, key] }
         percent: { type: string }
         by_hand: { type: boolean }
     AccountRateNow:
       type: object
-      required: [percent, from_on, kind, by_hand]
+      required: [percent, from_on, until_on, kind, by_hand]
       properties:
         percent: { type: string, description: "The rate in force today, a year; a key-tied one with today's key rate" }
         from_on: { type: string }
+        until_on: { type: string, nullable: true }
         kind: { type: string, enum: [fixed, key] }
         by_hand: { type: boolean }
     AccountRates:

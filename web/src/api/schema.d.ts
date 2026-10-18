@@ -2853,6 +2853,8 @@ export interface components {
         AccountRateInput: {
             /** @description Date YYYY-MM-DD the rate holds from */
             from_on: string;
+            /** @description Date YYYY-MM-DD of the rate's last day, not before from_on (Р-59 А): after it the account's programme gives the rate again, till the next rate. Null or absent: until the next rate */
+            until_on?: string | null;
             /** @enum {string} */
             kind: "fixed" | "key";
             /** @description Decimal: a year when fixed; the margin over the key rate when tied to it, may be negative */
@@ -2860,6 +2862,8 @@ export interface components {
         };
         AccountRate: {
             from_on: string;
+            /** @description The rate's last day; null — until the next rate */
+            until_on: string | null;
             /** @enum {string} */
             kind: "fixed" | "key";
             percent: string;
@@ -2869,6 +2873,7 @@ export interface components {
             /** @description The rate in force today, a year; a key-tied one with today's key rate */
             percent: string;
             from_on: string;
+            until_on: string | null;
             /** @enum {string} */
             kind: "fixed" | "key";
             by_hand: boolean;

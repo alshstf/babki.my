@@ -42,3 +42,34 @@ func TestRateOn(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// Decision Р-59 А: 16 % from January to March 31, 18 % from June — March's
+// last day is in, April and May have no rate written in, June has 18. A
+// later rate replaces an earlier one whose last day is ahead: the bank
+// changed it.
+func TestRateOnUntil(t *testing.T) {
+	day := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+	march := day("2026-03-31")
+	rates := []Rate{
+		{From: day("2026-01-01"), Until: &march, Kind: RateFixed, Percent: decimal.NewFromInt(16)},
+		{From: day("2026-06-01"), Kind: RateFixed, Percent: decimal.NewFromInt(18)},
+	}
+	keyOn := func(time.Time) (decimal.Decimal, bool, error) { return decimal.Zero, false, nil }
+	for _, c := range []struct {
+		on   string
+		want string
+	}{{"2026-03-31", "16"}, {"2026-04-01", ""}, {"2026-05-31", ""}, {"2026-06-01", "18"}} {
+		pct, row, ok, err := RateOn(rates, day(c.on), keyOn)
+		if err != nil || ok != (c.want != "") || (ok && pct.String() != c.want) || (!ok && row != nil) {
+			t.Errorf("%s = %v %+v %v %v, want %q", c.on, pct, row, ok, err, c.want)
+		}
+	}
+	year := day("2026-12-31")
+	nested := []Rate{
+		{From: day("2026-01-01"), Until: &year, Kind: RateFixed, Percent: decimal.NewFromInt(16)},
+		{From: day("2026-02-01"), Until: &march, Kind: RateFixed, Percent: decimal.NewFromInt(20)},
+	}
+	if _, _, ok, _ := RateOn(nested, day("2026-04-01"), keyOn); ok {
+		t.Error("the year's rate came back after the later one ended")
+	}
+}
