@@ -15,6 +15,7 @@ editions:
     variants:
       - id: daily
         name: Накопительный счёт
+        audience: [all]
         accrual: daily
         payouts: [daily]
         ops: topup_withdraw

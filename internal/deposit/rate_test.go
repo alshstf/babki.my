@@ -2,6 +2,7 @@ package deposit
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -89,7 +90,7 @@ editions:
     checked_on: 2026-01-02
     sources: [https://example.ru]
     variants:
-      - { id: a, payouts: [end], ops: none, term_unit: days, grid: [{ from: 1, to: 30, percent: "10" }] }
+      - { id: a, audience: [all], payouts: [end], ops: none, term_unit: days, grid: [{ from: 1, to: 30, percent: "10" }] }
 `
 	if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(good)}}); err != nil {
 		t.Fatalf("a good file: %v", err)
@@ -98,7 +99,7 @@ editions:
     checked_on: 2026-01-02
     sources: [https://example.ru]
     variants:
-      - { id: a, payouts: [end], ops: none, term_unit: days, grid: [{ from: 1, to: 30, percent: "10" }] }
+      - { id: a, audience: [all], payouts: [end], ops: none, term_unit: days, grid: [{ from: 1, to: 30, percent: "10" }] }
 `
 	for name, text := range map[string]string{
 		"no bank":       replace(good, "bank: vtb", "bank: nobank"),
@@ -109,6 +110,9 @@ editions:
 		"no plus":       replace(good, "grid:", `bonuses: [{ id: b, check: manual, terms: [{ from: 1, to: 30 }] }], grid:`),
 		"terms upside":  replace(good, "grid:", `bonuses: [{ id: b, plus: "1", check: manual, terms: [{ from: 30, to: 1 }] }], grid:`),
 		"currency":      replace(good, "grid:", `currency: yuan, grid:`),
+		"no audience":   replace(good, "audience: [all], ", ""),
+		"all and more":  replace(good, "audience: [all]", "audience: [all, pensioner]"),
+		"who":           replace(good, "audience: [all]", "audience: [martians]"),
 	} {
 		if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(text)}}); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -433,5 +437,30 @@ func TestAFloatingDepositFollowsTheEditions(t *testing.T) {
 	}
 	if money, _ := p.VariantMoney("social"); money != "RUB" {
 		t.Errorf("a variant without a currency is in %s, want roubles", money)
+	}
+}
+
+// Whom the variants are open to (Р-57 Б, the comparison's filter): a few
+// written out, so that a slip in the catalog shows.
+func TestWhomTheVariantsAreOpenTo(t *testing.T) {
+	for _, c := range []struct {
+		programme, variant string
+		want               []Audience
+	}{
+		{"sber-sbervklad", "end", []Audience{AudienceAll}},
+		{"sber-socialny", "main", []Audience{AudienceSocial}},
+		{"psb-narodny", "pensioner", []Audience{AudienceNew, AudiencePensioner}},
+		{"vtb-vklad", "privilege-online-end", []Audience{AudiencePremium}},
+		{"vtb-vklad", "online-end", []Audience{AudienceAll}},
+		{"novikom-kapital", "salary-online", []Audience{AudienceSalary}},
+		{"uralsib-dohod-maksimum", "end", []Audience{AudienceBundle}},
+		{"gazprombank-premium-ns", "minimum", []Audience{AudienceClosed}},
+		{"sber-molodezhny", "y18-end", []Audience{AudienceYouth}},
+	} {
+		p := programme(t, c.programme)
+		v, ok := p.Editions[len(p.Editions)-1].Variant(c.variant)
+		if !ok || !slices.Equal(v.Audience, c.want) {
+			t.Errorf("%s %s: %v, want %v", c.programme, c.variant, v.Audience, c.want)
+		}
 	}
 }

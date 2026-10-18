@@ -16,6 +16,7 @@ editions:
     variants:
       - id: end
         name: «Доход Плюс»
+        audience: [new]
         payouts: [end]
         ops: none
         term_unit: days
@@ -23,6 +24,7 @@ editions:
           - { from: 181, to: 181, amount_from: 250000000, percent: "14.5" }
       - id: premium
         name: «Доход Плюс. Премиум»
+        audience: [new, premium]
         payouts: [end]
         ops: none
         term_unit: days

@@ -19,6 +19,7 @@ editions:
     variants:
       - id: klyuchevoy
         name: «Ключевой VIP»
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -31,6 +32,7 @@ editions:
           - { from: 367, to: 545, amount_from: 5000000000, key_plus: "-0.7" }
       - id: upravlyaemy-5m
         name: «VIP Управляемый», совокупный остаток от 5 до 10 млн ₽
+        audience: [all]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days
@@ -39,6 +41,7 @@ editions:
           - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
       - id: upravlyaemy-10m
         name: «VIP Управляемый», совокупный остаток от 10 до 50 млн ₽
+        audience: [all]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days
@@ -47,6 +50,7 @@ editions:
           - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
       - id: upravlyaemy-50m
         name: «VIP Управляемый», совокупный остаток от 50 до 100 млн ₽
+        audience: [all]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days
@@ -55,6 +59,7 @@ editions:
           - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
       - id: upravlyaemy-100m
         name: «VIP Управляемый», совокупный остаток от 100 до 200 млн ₽
+        audience: [all]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days
@@ -63,6 +68,7 @@ editions:
           - { from: 366, to: 366, amount_from: 5000000000, key_times: "0.5" }
       - id: upravlyaemy-200m
         name: «VIP Управляемый», совокупный остаток от 200 млн ₽
+        audience: [all]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days

@@ -14,6 +14,7 @@ editions:
     variants:
       - id: main
         name: Социальный вклад
+        audience: [social]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days

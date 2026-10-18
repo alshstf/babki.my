@@ -18,6 +18,7 @@ editions:
     variants:
       - id: remote-end
         name: Дистанционно, без пополнения и снятия, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -35,6 +36,7 @@ editions:
           - { id: new_saver, name: Новый сберегатель (30 дней без вкладов и накопительных в банке), check: manual, terms: [{ from: 2, to: 2, plus: "0.2" }, { from: 3, to: 3, plus: "0.4" }, { from: 4, to: 4, plus: "0.2" }, { from: 6, to: 6, plus: "0.2" }, { from: 9, to: 9, plus: "0.2" }, { from: 13, to: 13, plus: "0.2" }, { from: 18, to: 18, plus: "0.2" }, { from: 24, to: 24, plus: "0.2" }, { from: 36, to: 36, plus: "0.2" }] }
       - id: remote-monthly
         name: Дистанционно, без пополнения и снятия, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -50,6 +52,7 @@ editions:
           - { from: 36, to: 36, amount_from: 500000, percent: "7.2" }
       - id: office-end
         name: В офисе, без пополнения и снятия, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -67,6 +70,7 @@ editions:
           - { id: new_saver, name: Новый сберегатель (30 дней без вкладов и накопительных в банке), check: manual, terms: [{ from: 2, to: 2, plus: "0.2" }, { from: 3, to: 3, plus: "0.4" }, { from: 4, to: 4, plus: "0.2" }, { from: 6, to: 6, plus: "0.2" }, { from: 9, to: 9, plus: "0.2" }, { from: 13, to: 13, plus: "0.2" }, { from: 18, to: 18, plus: "0.2" }, { from: 24, to: 24, plus: "0.2" }, { from: 36, to: 36, plus: "0.2" }] }
       - id: office-monthly
         name: В офисе, без пополнения и снятия, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -82,6 +86,7 @@ editions:
           - { from: 36, to: 36, amount_from: 500000, percent: "6.85" }
       - id: remote-topup
         name: Дистанционно, с пополнением
+        audience: [all]
         payouts: [end, monthly]
         ops: topup
         term_unit: months
@@ -102,6 +107,7 @@ editions:
           - { from: 36, to: 36, amount_from: 70000100, percent: "6" }
       - id: remote-topup-withdraw
         name: Дистанционно, с пополнением и снятием
+        audience: [all]
         payouts: [end, monthly]
         ops: topup_withdraw
         term_unit: months

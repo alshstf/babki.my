@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: Социальный счёт
+        audience: [social]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

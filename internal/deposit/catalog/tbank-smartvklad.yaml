@@ -17,6 +17,7 @@ editions:
     variants:
       - id: fixed
         name: Непополняемый
+        audience: [all]
         payouts: [capitalize, monthly]
         ops: topup
         term_unit: months
@@ -31,6 +32,7 @@ editions:
           - { from: 19, to: 24, amount_from: 5000000, percent: "10.5" }
       - id: topup
         name: Пополняемый
+        audience: [all]
         payouts: [capitalize, monthly]
         ops: topup_withdraw
         term_unit: months
@@ -44,6 +46,7 @@ editions:
           - { from: 19, to: 24, amount_from: 5000000, percent: "7" }
       - id: fixed-cny
         name: Непополняемый, в юанях
+        audience: [all]
         payouts: [capitalize, monthly]
         ops: topup
         term_unit: months
@@ -59,6 +62,7 @@ editions:
           - { from: 13, to: 24, amount_from: 500000, percent: "6" }
       - id: topup-cny
         name: Пополняемый, в юанях
+        audience: [all]
         payouts: [capitalize, monthly]
         ops: topup_withdraw
         term_unit: months

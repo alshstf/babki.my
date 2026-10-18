@@ -17,6 +17,7 @@ editions:
     variants:
       - id: monthly
         name: Без пополнения и снятия, проценты ежемесячно
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: days
@@ -38,6 +39,7 @@ editions:
           - { from: 1095, to: 1095, amount_from: 1500000000, key_plus: "-1.4" }
       - id: end
         name: Без пополнения и снятия, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -59,6 +61,7 @@ editions:
           - { from: 1095, to: 1095, amount_from: 1500000000, key_plus: "0.5" }
       - id: topup
         name: С пополнением
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: topup
         term_unit: days
@@ -80,6 +83,7 @@ editions:
           - { from: 1095, to: 1095, amount_from: 1500000000, key_plus: "-1.4" }
       - id: topup-withdraw
         name: С пополнением и снятием
+        audience: [all]
         payouts: [monthly, capitalize]
         ops: topup_withdraw
         term_unit: days

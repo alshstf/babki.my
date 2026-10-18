@@ -18,6 +18,7 @@ editions:
     variants:
       - id: online-end
         name: Online, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -30,6 +31,7 @@ editions:
           - { from: 1097, to: 1097, amount_from: 1000000, percent: "10" }
       - id: online-monthly
         name: Online, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -42,6 +44,7 @@ editions:
           - { from: 1097, to: 1097, amount_from: 1000000, percent: "7.5" }
       - id: office-end
         name: В офисе, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -54,6 +57,7 @@ editions:
           - { from: 1097, to: 1097, amount_from: 1000000, percent: "9.5" }
       - id: office-monthly
         name: В офисе, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -66,6 +70,7 @@ editions:
           - { from: 1097, to: 1097, amount_from: 1000000, percent: "7" }
       - id: usd-end
         name: В долларах, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -77,6 +82,7 @@ editions:
         currency: USD
       - id: usd-monthly
         name: В долларах, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -88,6 +94,7 @@ editions:
         currency: USD
       - id: eur-end
         name: В евро, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -99,6 +106,7 @@ editions:
         currency: EUR
       - id: eur-monthly
         name: В евро, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months
@@ -110,6 +118,7 @@ editions:
         currency: EUR
       - id: cny-end
         name: В юанях, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: months
@@ -122,6 +131,7 @@ editions:
         currency: CNY
       - id: cny-monthly
         name: В юанях, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: months

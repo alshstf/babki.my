@@ -17,6 +17,7 @@ editions:
     variants:
       - id: daily
         name: Накопительный счёт
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -28,6 +29,7 @@ editions:
           - { id: salary, name: Зарплатный или премиальный клиент, plus: "0.5", check: manual }
       - id: cny
         name: В юанях
+        audience: [all]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: «Пенсионный плюс»
+        audience: [pensioner]
         payouts: [capitalize, monthly]
         ops: topup
         term_unit: months

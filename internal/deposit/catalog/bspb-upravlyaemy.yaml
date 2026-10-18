@@ -16,6 +16,7 @@ editions:
     variants:
       - id: monthly
         name: Проценты ежемесячно
+        audience: [all]
         payouts: [capitalize]
         ops: topup_withdraw
         term_unit: days

@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: «Детский»
+        audience: [youth]
         payouts: [capitalize]
         ops: topup
         term_unit: days

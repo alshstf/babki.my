@@ -17,6 +17,7 @@ editions:
     variants:
       - id: main
         name: «Привилегия»
+        audience: [premium]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -55,6 +56,7 @@ editions:
           - { from: 1110, to: 1110, amount_from: 10000000000, percent: "11.64" }
       - id: managed
         name: «Привилегия (Управляемый)»
+        audience: [premium]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days

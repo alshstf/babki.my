@@ -19,6 +19,7 @@ editions:
     variants:
       - id: minimum
         name: На минимальный остаток
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw

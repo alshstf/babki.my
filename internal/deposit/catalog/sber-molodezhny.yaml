@@ -20,6 +20,7 @@ editions:
     variants:
       - id: y14-end
         name: 14–17 лет, проценты в конце срока
+        audience: [youth]
         payouts: [end]
         ops: none
         term_unit: months
@@ -46,6 +47,7 @@ editions:
           - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц от 2 000 ₽, plus: "0.5", check: manual, next_month: true, terms: [{ from: 1, to: 12 }] }
       - id: y14-monthly
         name: 14–17 лет, проценты ежемесячно
+        audience: [youth]
         payouts: [monthly, capitalize]
         ops: none
         term_unit: months
@@ -72,6 +74,7 @@ editions:
           - { id: partners, name: Покупки у партнёров Сбера за прошлый месяц от 2 000 ₽, plus: "0.5", check: manual, next_month: true, terms: [{ from: 1, to: 12 }] }
       - id: y18-end
         name: 18–24 лет, проценты в конце срока
+        audience: [youth]
         payouts: [end]
         ops: none
         term_unit: months

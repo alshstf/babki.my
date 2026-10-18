@@ -19,6 +19,7 @@ editions:
     variants:
       - id: none-end
         name: Без пополнения и снятия, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -56,6 +57,7 @@ editions:
             terms: [{ from: 61, to: 61, plus: "0.1" }, { from: 91, to: 91, plus: "0.7" }, { from: 122, to: 1100, plus: "0.1" }]
       - id: none-monthly
         name: Без пополнения и снятия, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -93,6 +95,7 @@ editions:
             terms: [{ from: 61, to: 61, plus: "0.1" }, { from: 91, to: 91, plus: "0.7" }, { from: 122, to: 1100, plus: "0.1" }]
       - id: topup-end
         name: С пополнением, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: topup
         term_unit: days
@@ -123,6 +126,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "6.8" }
       - id: topup-monthly
         name: С пополнением, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: topup
         term_unit: days
@@ -153,6 +157,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "4.6" }
       - id: topup-withdraw-end
         name: С пополнением и снятием, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: topup_withdraw
         term_unit: days
@@ -183,6 +188,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "4.1" }
       - id: topup-withdraw-monthly
         name: С пополнением и снятием, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: topup_withdraw
         term_unit: days
@@ -213,6 +219,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "1.9" }
       - id: cny
         name: В юанях, без пополнения и снятия
+        audience: [all]
         payouts: [end, monthly]
         ops: none
         term_unit: days
@@ -226,6 +233,7 @@ editions:
         currency: CNY
       - id: usd
         name: В долларах, без пополнения и снятия
+        audience: [all]
         payouts: [end, monthly]
         ops: none
         term_unit: days

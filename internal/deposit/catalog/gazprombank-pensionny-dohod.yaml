@@ -16,6 +16,7 @@ editions:
     variants:
       - id: main
         name: «Пенсионный доход»
+        audience: [pensioner]
         payouts: [quarterly]
         ops: topup_withdraw
         term_unit: days

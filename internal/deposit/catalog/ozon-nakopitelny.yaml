@@ -17,6 +17,7 @@ editions:
     variants:
       - id: minimum
         name: Накопительный счёт
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw

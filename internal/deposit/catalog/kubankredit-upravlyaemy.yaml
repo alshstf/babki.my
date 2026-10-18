@@ -16,6 +16,7 @@ editions:
     variants:
       - id: capitalize
         name: С капитализацией
+        audience: [all]
         payouts: [capitalize]
         ops: topup_withdraw
         term_unit: days

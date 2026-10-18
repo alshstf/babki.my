@@ -22,6 +22,7 @@ editions:
     variants:
       - id: online
         name: Онлайн
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -41,6 +42,7 @@ editions:
           - { id: prolongation, name: Вклад продлён (за пролонгацию), plus: "0.8", check: manual }
       - id: office
         name: В отделении
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days

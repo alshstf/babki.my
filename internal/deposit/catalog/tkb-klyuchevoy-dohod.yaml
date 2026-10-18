@@ -17,6 +17,7 @@ editions:
     variants:
       - id: d105
         name: 105 дней
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -28,6 +29,7 @@ editions:
           - { name: Третий период, days: 35, grid: [{ from: 105, to: 105, amount_from: 5000000, key_plus: "-0.3", floor: "0.01" }] }
       - id: longer
         name: 195 или 375 дней
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days

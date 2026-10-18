@@ -18,6 +18,7 @@ editions:
     variants:
       - id: none
         name: Без уровня
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -40,6 +41,7 @@ editions:
               - { from: 10000000, plus: "3.75" }
       - id: levels1-3
         name: Уровни 1–3 (ставка с надбавкой за пакет)
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw
@@ -62,6 +64,7 @@ editions:
               - { from: 10000000, plus: "3.75" }
       - id: levels4-6
         name: Уровни 4–6 (ставка с надбавкой за пакет)
+        audience: [premium]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

@@ -136,6 +136,35 @@ type Variant struct {
 	// instead of the one of its opening — the social deposit, whose rate is by
 	// law the bank's highest on deposits of up to a year.
 	Floating bool `yaml:"floating"`
+	// Audience is whom the bank opens the variant to: anyone, or only those
+	// of every group listed (a new depositor who is a pensioner).
+	Audience []Audience `yaml:"audience"`
+}
+
+// Audience is whom a variant is open to.
+type Audience string
+
+const (
+	AudienceAll       Audience = "all"
+	AudienceNew       Audience = "new"       // new depositors or clients of the bank
+	AudiencePensioner Audience = "pensioner" // pensioners
+	AudienceYouth     Audience = "youth"     // children and the young
+	AudienceSocial    Audience = "social"    // recipients of social support: the social deposit
+	AudienceSalary    Audience = "salary"    // the bank's salary clients
+	AudiencePremium   Audience = "premium"   // holders of a premium package or status
+	AudienceBundle    Audience = "bundle"    // with a long-term savings, insurance, fund or metals contract
+	AudienceRegional  Audience = "regional"  // holders of a region's resident card
+	AudienceClosed    Audience = "closed"    // no longer opened: for the accounts opened before
+)
+
+var audiences = []Audience{
+	AudienceAll, AudienceNew, AudiencePensioner, AudienceYouth, AudienceSocial, AudienceSalary,
+	AudiencePremium, AudienceBundle, AudienceRegional, AudienceClosed,
+}
+
+// OpenToAll says anyone may open the variant.
+func (v Variant) OpenToAll() bool {
+	return len(v.Audience) == 1 && v.Audience[0] == AudienceAll
 }
 
 // currencyCode is a currency's code as ISO 4217 writes it.
@@ -478,6 +507,13 @@ func (v Variant) check(kind Kind) error {
 		return fmt.Errorf("ops %q", v.Ops)
 	case len(v.Payouts) == 0:
 		return fmt.Errorf("no payouts")
+	case len(v.Audience) == 0 || slices.Contains(v.Audience, AudienceAll) && len(v.Audience) > 1:
+		return fmt.Errorf("audience: all alone, or the groups the variant is open to")
+	}
+	for _, a := range v.Audience {
+		if !slices.Contains(audiences, a) {
+			return fmt.Errorf("audience %q", a)
+		}
 	}
 	for _, p := range v.Payouts {
 		if !slices.Contains([]Payout{PayoutEnd, PayoutMonthly, PayoutCapitalize, PayoutDaily, PayoutQuarterly}, p) {

@@ -16,6 +16,7 @@ editions:
     variants:
       - id: rub-monthly
         name: В рублях, проценты ежемесячно
+        audience: [all]
         payouts: [monthly]
         ops: none
         term_unit: days
@@ -34,6 +35,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "5.9" }
       - id: rub-end
         name: В рублях, проценты в конце срока
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -52,6 +54,7 @@ editions:
           - { from: 1100, to: 1100, amount_from: 150000000, percent: "8.1" }
       - id: cny
         name: В юанях
+        audience: [all]
         payouts: [end, monthly]
         ops: none
         term_unit: days
@@ -65,6 +68,7 @@ editions:
         currency: CNY
       - id: usd
         name: В долларах
+        audience: [all]
         payouts: [end, monthly]
         ops: none
         term_unit: days
@@ -78,6 +82,7 @@ editions:
         currency: USD
       - id: eur
         name: В евро
+        audience: [all]
         payouts: [end, monthly]
         ops: none
         term_unit: days

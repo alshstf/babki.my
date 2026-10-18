@@ -20,6 +20,7 @@ editions:
     variants:
       - id: office
         name: В офисе
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -34,6 +35,7 @@ editions:
             terms: [{ from: 91, to: 91, plus: "5.5" }, { from: 181, to: 181, plus: "4" }, { from: 367, to: 367, plus: "3.5" }]
       - id: online
         name: Онлайн
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days

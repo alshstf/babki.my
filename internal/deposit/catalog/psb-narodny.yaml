@@ -15,6 +15,7 @@ editions:
     variants:
       - id: main
         name: Новый вкладчик
+        audience: [new]
         payouts: [end]
         ops: none
         term_unit: days
@@ -24,6 +25,7 @@ editions:
           - { from: 122, to: 122, amount_from: 1000000, percent: "20" }
       - id: pensioner
         name: Новый вкладчик — пенсионер
+        audience: [new, pensioner]
         payouts: [end]
         ops: none
         term_unit: days

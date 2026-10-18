@@ -17,6 +17,7 @@ editions:
     variants:
       - id: fixed
         name: Непополняемый
+        audience: [all]
         payouts: [capitalize]
         ops: none
         term_unit: months
@@ -36,6 +37,7 @@ editions:
           - { from: 24, to: 24, amount_from: 1000000, percent: "10.65" }
       - id: topup
         name: Пополняемый
+        audience: [all]
         payouts: [capitalize]
         ops: topup
         term_unit: months

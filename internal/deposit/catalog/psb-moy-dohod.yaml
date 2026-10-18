@@ -18,6 +18,7 @@ editions:
     variants:
       - id: online
         name: В PSB-Retail
+        audience: [all]
         payouts: [end]
         ops: topup
         term_unit: days
@@ -30,6 +31,7 @@ editions:
           - { from: 731, to: 731, amount_from: 5000000, percent: "12" }
       - id: office
         name: В офисе
+        audience: [all]
         payouts: [end]
         ops: topup
         term_unit: days

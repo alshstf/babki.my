@@ -18,6 +18,7 @@ editions:
     variants:
       - id: main
         name: «Пенсионный Плюс»
+        audience: [pensioner]
         payouts: [capitalize]
         ops: topup_withdraw
         term_unit: days

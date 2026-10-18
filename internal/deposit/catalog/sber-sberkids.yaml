@@ -17,6 +17,7 @@ editions:
     variants:
       - id: main
         name: «СберKids+»
+        audience: [youth]
         payouts: [capitalize]
         ops: topup
         term_unit: months

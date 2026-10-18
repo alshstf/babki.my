@@ -17,6 +17,7 @@ editions:
     variants:
       - id: online
         name: В интернет-банке
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days
@@ -48,6 +49,7 @@ editions:
           - { from: 367, to: 367, amount_from: 1000000000, percent: "11.6" }
       - id: office
         name: В офисе
+        audience: [all]
         payouts: [end]
         ops: none
         term_unit: days

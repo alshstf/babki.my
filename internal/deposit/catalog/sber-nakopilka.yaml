@@ -18,6 +18,7 @@ editions:
     variants:
       - id: daily
         name: «Накопилка»
+        audience: [youth]
         accrual: daily
         payouts: [capitalize]
         ops: topup_withdraw

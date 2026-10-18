@@ -16,6 +16,7 @@ editions:
     variants:
       - id: minimum
         name: «Про запас»
+        audience: [all]
         accrual: minimum
         payouts: [capitalize]
         ops: topup_withdraw
