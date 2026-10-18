@@ -18,11 +18,13 @@ const (
 	maxKey      = 256
 )
 
-// Handler lets a member turn reminders on and off for a device.
+// Handler lets a member turn reminders on and off for a device, choose them,
+// and tie a Telegram chat.
 type Handler struct {
 	store  *Store
 	keys   *Keys
 	sender Sender
+	tg     *Telegram
 	auth   *family.Auth
 	sm     *scs.SessionManager
 	log    *slog.Logger
@@ -44,6 +46,21 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/push/test", member(h.handleTest))
 	srv.Mount("GET /api/v1/push/settings", member(h.handleSettings))
 	srv.Mount("PUT /api/v1/push/settings", member(h.handleSetSettings))
+	owner := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleOwner, fn)))
+	}
+	srv.Mount("GET /api/v1/telegram", member(h.handleTelegram))
+	srv.Mount("PUT /api/v1/telegram/bot", owner(h.handleSetBot))
+	srv.Mount("DELETE /api/v1/telegram/bot", owner(h.handleDeleteBot))
+	srv.Mount("POST /api/v1/telegram/link", member(h.handleLink))
+	srv.Mount("DELETE /api/v1/telegram/link", member(h.handleUnlink))
+}
+
+// WithTelegram lets members tie Telegram chats; without it (no encryption
+// key) the space can have no bot.
+func (h *Handler) WithTelegram(tg *Telegram) *Handler {
+	h.tg = tg
+	return h
 }
 
 func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -62,9 +79,12 @@ func (h *Handler) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	prefs := Prefs{QuietFrom: req.QuietFrom, QuietTo: req.QuietTo}
+	prefs := Prefs{Amounts: req.Amounts, QuietFrom: req.QuietFrom, QuietTo: req.QuietTo}
 	for _, k := range req.Off {
 		prefs.Off = append(prefs.Off, Kind(k))
+	}
+	for _, k := range req.TelegramOff {
+		prefs.TelegramOff = append(prefs.TelegramOff, Kind(k))
 	}
 	if err := h.store.SetPrefs(r.Context(), p.UserID, prefs); err != nil {
 		family.WriteError(w, err)
@@ -74,9 +94,9 @@ func (h *Handler) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func settingsAPI(p Prefs) apitypes.PushSettings {
-	out := apitypes.PushSettings{QuietFrom: p.QuietFrom, QuietTo: p.QuietTo, Kinds: make([]apitypes.PushKindSetting, 0, len(Kinds))}
+	out := apitypes.PushSettings{Amounts: p.Amounts, QuietFrom: p.QuietFrom, QuietTo: p.QuietTo, Kinds: make([]apitypes.PushKindSetting, 0, len(Kinds))}
 	for _, k := range Kinds {
-		out.Kinds = append(out.Kinds, apitypes.PushKindSetting{Kind: apitypes.PushKind(k), On: p.Wants(k)})
+		out.Kinds = append(out.Kinds, apitypes.PushKindSetting{Kind: apitypes.PushKind(k), On: p.Wants(k), Telegram: p.WantsTelegram(k)})
 	}
 	return out
 }

@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,6 +50,7 @@ type remindersWorker struct {
 	storages   storages
 	goals      savings
 	events     EventSource
+	telegram   *Telegram
 	sender     Sender
 	log        *slog.Logger
 	now        func() time.Time
@@ -80,6 +82,14 @@ func WithGoals(w river.Worker[SendRemindersArgs], g savings) river.Worker[SendRe
 // its broker connections, its sources of prices and rates, its payouts.
 type EventSource interface {
 	Reminders(ctx context.Context, spaceID uuid.UUID, today, now time.Time) ([]Reminder, error)
+}
+
+// WithTelegram sends the reminders to the members' Telegram chats too.
+func WithTelegram(w river.Worker[SendRemindersArgs], tg *Telegram) river.Worker[SendRemindersArgs] {
+	if r, ok := w.(*remindersWorker); ok {
+		r.telegram = tg
+	}
+	return w
 }
 
 // WithEvents adds what happened to the family's data to what is reminded of.
@@ -141,7 +151,11 @@ func (w *remindersWorker) Work(ctx context.Context, _ *river.Job[SendRemindersAr
 				more = append(more, list...)
 			}
 		}
-		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, append(reminders, more...), now); err != nil {
+		all := slices.Concat(reminders, more)
+		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, all, now); err != nil {
+			return err
+		}
+		if err := DeliverTelegram(ctx, w.store, w.telegram, w.log, spaceID, all, now); err != nil {
 			return err
 		}
 	}

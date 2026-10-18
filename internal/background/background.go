@@ -52,6 +52,8 @@ const (
 	// pushRemindersInterval is how often the reminders due are pushed: each
 	// goes once, in the day, so an hour is soon enough.
 	pushRemindersInterval = time.Hour
+	// A chat is tied by the code a member sends the bot: within a minute.
+	telegramUpdatesInterval = time.Minute
 	// mailboxInterval is how often the receipts' mailboxes are read: a
 	// receipt is wanted the day it came, not the minute.
 	mailboxInterval = time.Hour
@@ -185,13 +187,18 @@ func NewWorkers(
 	// Push reminders (decision Р-27): the keys come from the encryption key,
 	// so without one the worker is registered but sends nothing.
 	var sender notify.Sender
+	var telegram *notify.Telegram
 	if tinvestDeps.Box != nil {
 		if keys, err := notify.KeysFrom(tinvestDeps.Box); err == nil {
 			sender = notify.NewWebPush(keys)
 		} else {
 			log.Error("push keys", "error", err)
 		}
+		// Telegram as the second channel (decision Р-61 Б): the bots' tokens
+		// open with the same key.
+		telegram = &notify.Telegram{API: notify.NewBotAPI(), Box: tinvestDeps.Box}
 	}
+	river.AddWorker(workers, notify.NewTelegramUpdatesWorker(notify.NewStore(pool), telegram, log))
 	// Receipts' letters (decision Р-35): every space's mailbox, hourly.
 	receipts := receipt.NewService(pool, operations, accounts, category.NewStore(pool), operation.NewService(operations))
 	river.AddWorker(workers, mailbox.NewWorker(mailbox.NewService(pool, tinvestDeps.Box, mailbox.IMAP{}, receipts, log), log))
@@ -206,6 +213,7 @@ func NewWorkers(
 	reminders := notify.WithStorages(notify.NewRemindersWorker(notify.NewStore(pool),
 		creditcard.NewService(pool, accounts, operations, category.NewStore(pool)),
 		budget.NewService(pool, report, category.NewStore(pool)), category.NewStore(pool), sender, log), worth)
+	reminders = notify.WithTelegram(reminders, telegram)
 	reminders = notify.WithEvents(reminders, &events{
 		pool: pool, tinvest: tinvestDeps.Store, accounts: accounts, instruments: instruments,
 		payouts: payouts.NewService(operations, accounts, mdStore, spaces, converter),
@@ -260,6 +268,7 @@ func Schedule() []jobs.Periodic {
 		{Every: referencePricesInterval, Args: marketdata.RefreshCryptoPricesArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshBondSchedulesArgs{}},
 		{Every: pushRemindersInterval, Args: notify.SendRemindersArgs{}},
+		{Every: telegramUpdatesInterval, Args: notify.TelegramUpdatesArgs{}},
 		{Every: mailboxInterval, Args: mailbox.CheckArgs{}},
 		{Every: tinvestDividendsInterval, Args: marketdata.RefreshIndexesArgs{}},
 	}

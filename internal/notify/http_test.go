@@ -3,9 +3,12 @@ package notify_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -194,5 +197,153 @@ func TestTheMemberChoosesTheirReminders(t *testing.T) {
 	}
 	if g := sender.got[bobPhone]; len(g) != 2 {
 		t.Errorf("bob got %v at noon, want both", g)
+	}
+}
+
+// fakeTelegram is a Telegram that knows one bot, hands over the updates
+// queued for it and notes the messages sent; a chat in gone was left.
+type fakeTelegram struct {
+	mu      sync.Mutex
+	updates []notify.Update
+	sent    map[int64][]string
+	gone    map[int64]bool
+}
+
+func (f *fakeTelegram) GetMe(_ context.Context, token string) (string, error) {
+	if token != "123456:the-family-bot-token-0000" {
+		return "", notify.ErrBadToken
+	}
+	return "babki_family_bot", nil
+}
+
+func (f *fakeTelegram) GetUpdates(context.Context, string, int64) ([]notify.Update, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.updates
+	f.updates = nil
+	return out, nil
+}
+
+func (f *fakeTelegram) SendMessage(_ context.Context, _ string, chatID int64, text string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.gone[chatID] {
+		return true, errors.New("blocked")
+	}
+	f.sent[chatID] = append(f.sent[chatID], text)
+	return false, nil
+}
+
+// Decision Р-61 Б: the owner gives the space a bot — a token Telegram does
+// not know is refused, an editor may not; a member takes a code, sends it to
+// the bot and their chat is tied, a stale code is not; the reminders reach
+// the chat as the member chose — a kind off, without the sums — once; a chat
+// the person left is forgotten.
+func TestTelegramAsTheSecondChannel(t *testing.T) {
+	pool := testdb.New(t)
+	famStore := family.NewStore(pool)
+	famSvc := family.NewService(famStore)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+	store := notify.NewStore(pool)
+	box, _ := secretbox.New(bytes.Repeat([]byte{3}, secretbox.KeySize))
+	api := &fakeTelegram{sent: map[int64][]string{}, gone: map[int64]bool{}}
+	tg := &notify.Telegram{API: api, Box: box}
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
+	notify.NewHandler(store, nil, nil, auth, sm, slog.Default()).WithTelegram(tg).Mount(srv)
+	base, c := apitest.Serve(t, srv.Handler())
+
+	var st apitypes.TelegramStatus
+	apitest.Decode(t, apitest.Do(t, c, "GET", base+"/api/v1/telegram", ""), &st)
+	if !st.Available || !st.CanManage || !st.Bot.IsNull() || st.Linked {
+		t.Fatalf("before = %+v", st)
+	}
+	if r := apitest.Do(t, c, "POST", base+"/api/v1/telegram/link", ""); r.StatusCode != http.StatusConflict {
+		t.Errorf("a code without a bot = %d, want 409", r.StatusCode)
+	}
+	for _, bad := range []string{`{"token":"123456:not-the-token-at-all-0000"}`, `{"token":"12/../x:yyyyyyyyyyyyyyyyyyyy"}`} {
+		if r := apitest.Do(t, c, "PUT", base+"/api/v1/telegram/bot", bad); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, r.StatusCode)
+		}
+	}
+	apitest.Decode(t, apitest.Do(t, c, "PUT", base+"/api/v1/telegram/bot", `{"token":"123456:the-family-bot-token-0000"}`), &st)
+	if b := st.Bot.MustGet(); b.Username != "babki_family_bot" || b.TokenLast4 != "0000" {
+		t.Fatalf("bot = %+v", b)
+	}
+	var sealed []byte
+	if err := pool.QueryRow(t.Context(), `SELECT token_ciphertext FROM telegram_bots`).Scan(&sealed); err != nil || bytes.Contains(sealed, []byte("the-family-bot")) {
+		t.Errorf("the token is kept as it is: %v", err)
+	}
+
+	var link apitypes.TelegramLink
+	apitest.Decode(t, apitest.Do(t, c, "POST", base+"/api/v1/telegram/link", ""), &link)
+	if link.Url != "https://t.me/babki_family_bot?start="+link.Code || len(link.Code) < 16 {
+		t.Fatalf("link = %+v", link)
+	}
+	api.updates = []notify.Update{{ID: 7, ChatID: 555, Text: "/start nonsense"}, {ID: 8, ChatID: 100, Text: "/start " + link.Code}, {ID: 9, ChatID: 200, Text: "привет"}}
+	bots, err := store.Bots(t.Context())
+	if err != nil || len(bots) != 1 {
+		t.Fatalf("bots = %v, %v", bots, err)
+	}
+	if err := notify.ReadUpdates(t.Context(), store, tg, slog.Default(), bots[0], time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", base+"/api/v1/telegram", ""), &st)
+	if !st.Linked || !strings.HasPrefix(api.sent[100][0], "Готово") || !strings.HasPrefix(api.sent[555][0], "Код не подошёл") || !strings.HasPrefix(api.sent[200][0], "Это бот") {
+		t.Errorf("linked %v, answers %v", st.Linked, api.sent)
+	}
+	if bots, _ := store.Bots(t.Context()); bots[0].Offset != 10 {
+		t.Errorf("offset = %d, want past the last update", bots[0].Offset)
+	}
+
+	var alex family.Principal
+	if err := pool.QueryRow(t.Context(), `SELECT u.id, s.id FROM users u, spaces s WHERE u.username = 'alex'`).Scan(&alex.UserID, &alex.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	alex.Role = family.RoleOwner
+	var got apitypes.PushSettings
+	apitest.Decode(t, apitest.Do(t, c, "PUT", base+"/api/v1/push/settings", `{"off":[],"telegram_off":["budget"],"amounts":false,"quiet_from":0,"quiet_to":0}`), &got)
+	if got.Amounts || got.Kinds[1].Telegram || !got.Kinds[1].On || !got.Kinds[0].Telegram {
+		t.Fatalf("settings = %+v", got)
+	}
+	reminders := []notify.Reminder{
+		{Kind: notify.KindBudget, Key: "budget", Title: "Бюджет", Body: "Лимит превышен."},
+		{Kind: notify.KindPayout, Key: "payout", Title: "Пришли выплаты 18.10", Body: "Сбербанк — дивиденды 1 234,56 ₽."},
+	}
+	for range 2 {
+		if err := notify.DeliverTelegram(t.Context(), store, tg, slog.Default(), alex.SpaceID, reminders, noon); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if msgs := api.sent[100]; len(msgs) != 2 || msgs[1] != "Пришли выплаты 18.10\nСбербанк — дивиденды …." {
+		t.Errorf("chat = %q, want the payouts alone, once, without the sum", msgs)
+	}
+
+	api.gone[100] = true
+	if err := notify.DeliverTelegram(t.Context(), store, tg, slog.Default(), alex.SpaceID, []notify.Reminder{{Kind: notify.KindCard, Key: "card"}}, noon); err != nil {
+		t.Fatal(err)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "GET", base+"/api/v1/telegram", ""), &st)
+	if st.Linked {
+		t.Error("a chat the person left is still tied")
+	}
+
+	if _, err := famSvc.CreateMember(t.Context(), alex, "bob", "Боб", "secret123", family.RoleEditor); err != nil {
+		t.Fatal(err)
+	}
+	jar, _ := cookiejar.New(nil)
+	bc := &http.Client{Jar: jar}
+	login, err := bc.Post(base+"/api/v1/auth/login", "application/json", strings.NewReader(`{"username":"bob","password":"secret123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = login.Body.Close()
+	if r := apitest.Do(t, bc, "PUT", base+"/api/v1/telegram/bot", `{"token":"123456:the-family-bot-token-0000"}`); r.StatusCode != http.StatusForbidden {
+		t.Errorf("an editor gives a bot = %d, want 403", r.StatusCode)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "DELETE", base+"/api/v1/telegram/bot", ""), &st)
+	if !st.Bot.IsNull() {
+		t.Errorf("after taking the bot away = %+v", st)
 	}
 }

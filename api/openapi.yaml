@@ -850,6 +850,80 @@ paths:
               schema: { $ref: "#/components/schemas/PushSettings" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/telegram:
+    get:
+      tags: [push]
+      operationId: getTelegram
+      description: >-
+        Telegram as the reminders' second channel (decision Р-61 Б): whether the server can keep a bot's token (it
+        needs the encryption key), the space's bot, and whether the member's chat is tied to it.
+      responses:
+        "200":
+          description: The space's bot and the member's chat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramStatus" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/telegram/bot:
+    put:
+      tags: [push]
+      operationId: setTelegramBot
+      description: >-
+        The owner gives the space a bot by its token from @BotFather. Telegram is asked the bot's name first; the token
+        is kept sealed with the encryption key and never shown again, only its last four characters. A new bot unties
+        the chats tied to the one before.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TelegramBotInput" } } } }
+      responses:
+        "200":
+          description: The space's bot as kept
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramStatus" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [push]
+      operationId: deleteTelegramBot
+      description: The owner takes the space's bot away, and with it every chat tied to it.
+      responses:
+        "200":
+          description: The space without a bot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramStatus" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/telegram/link:
+    post:
+      tags: [push]
+      operationId: linkTelegram
+      description: >-
+        A code to tie the member's chat with: opened as the link, Telegram sends the bot «/start <code>», and the
+        program ties the chat within a minute. The code lasts a quarter of an hour; a new one replaces it.
+      responses:
+        "200":
+          description: The code and the link to open
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramLink" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [push]
+      operationId: unlinkTelegram
+      description: Unties the member's chat.
+      responses:
+        "200":
+          description: The member without a chat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramStatus" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/recurring/hidden:
     put:
       tags: [recurring]
@@ -5493,8 +5567,9 @@ components:
         apart from its broker; stale — prices or rates not loading
     PushSettings:
       type: object
-      required: [kinds, quiet_from, quiet_to]
+      required: [kinds, amounts, quiet_from, quiet_to]
       properties:
+        amounts: { type: boolean, description: "Telegram's messages carry the sums; without them a sum shows as «…»" }
         kinds:
           type: array
           description: Every kind, in the order to show them, with whether the member takes it
@@ -5503,15 +5578,47 @@ components:
         quiet_to: { type: integer, description: "Hour 0–23 from which reminders go again; equal to quiet_from — never quiet" }
     PushKindSetting:
       type: object
-      required: [kind, on]
+      required: [kind, on, telegram]
       properties:
         kind: { $ref: "#/components/schemas/PushKind" }
-        on: { type: boolean }
+        on: { type: boolean, description: "The member takes it on their devices" }
+        telegram: { type: boolean, description: "The member takes it in Telegram" }
+    TelegramStatus:
+      type: object
+      required: [available, can_manage, bot, linked]
+      properties:
+        available: { type: boolean, description: "The server can keep a bot's token: it has the encryption key" }
+        can_manage: { type: boolean, description: "The member may give or take the space's bot: the owner" }
+        bot:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TelegramBot"
+        linked: { type: boolean, description: "The member's chat is tied to the space's bot" }
+    TelegramBot:
+      type: object
+      required: [username, token_last4]
+      properties:
+        username: { type: string, description: "The bot's name in Telegram, without @" }
+        token_last4: { type: string }
+    TelegramBotInput:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, description: "The bot's token from @BotFather" }
+    TelegramLink:
+      type: object
+      required: [code, url, expires_at]
+      properties:
+        code: { type: string }
+        url: { type: string, description: "https://t.me/<bot>?start=<code>" }
+        expires_at: { type: string, format: date-time }
     PushSettingsInput:
       type: object
-      required: [off, quiet_from, quiet_to]
+      required: [off, telegram_off, amounts, quiet_from, quiet_to]
       properties:
-        off: { type: array, items: { $ref: "#/components/schemas/PushKind" }, description: "The kinds the member does not take" }
+        off: { type: array, items: { $ref: "#/components/schemas/PushKind" }, description: "The kinds the member does not take on their devices" }
+        telegram_off: { type: array, items: { $ref: "#/components/schemas/PushKind" }, description: "The kinds the member does not take in Telegram" }
+        amounts: { type: boolean }
         quiet_from: { type: integer, minimum: 0, maximum: 23 }
         quiet_to: { type: integer, minimum: 0, maximum: 23 }
     ReceiptKind:
