@@ -81,7 +81,10 @@ function Notes({ income: d }: { income: AccountIncome }) {
   const e = d.estimate;
   if (e !== null) {
     if (e.from !== null) notes.push(t("taxes.deposit.from", { date: formatDate(e.from) }));
-    if (e.missing === "rate" && e.missing_on !== null) notes.push(t("taxes.deposit.missingRate", { date: formatDate(e.missing_on) }));
+    if (e.missing === "rate" && e.missing_on !== null) {
+      notes.push(t("taxes.deposit.missingRate", { date: formatDate(e.missing_on) }));
+      notes.push(t("depositIncome.missingRateHint"));
+    }
     if (e.missing === "how_paid") notes.push(t("taxes.deposit.missingHowPaid"));
     if (e.missing === "currency") notes.push(t("taxes.deposit.missingCurrency"));
     if (e.pays_on !== null) notes.push(t("taxes.deposit.paysOn", { date: formatDate(e.pays_on) }));

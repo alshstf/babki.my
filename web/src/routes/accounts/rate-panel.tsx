@@ -44,8 +44,13 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
   if (!data) return null;
   const now = data.source === "by_hand" ? data.current : null;
   const quote = data.quote;
+  // The rate written in that holds today: the last one begun, unless its
+  // last day is past (Р-59 А).
+  const today = localToday();
+  const begun = data.rates.filter((r) => r.from_on <= today).at(-1);
+  const holds = begun && (begun.until_on === null || begun.until_on >= today) ? begun : undefined;
   // A key-tied rate in force, but no key rate to strike it with yet.
-  const waitsForKey = !now && !quote && data.rates.some((r) => r.from_on <= localToday());
+  const waitsForKey = !now && !quote && holds?.kind === "key";
   return (
     <div className="grid gap-4" data-testid="account-rate">
       {now ? (
@@ -55,7 +60,9 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
           </div>
           <div className="text-sm text-muted-foreground">
             {now.kind === "key" && data.key_rate !== null && `${t("rates.byKey", { key: rate(data.key_rate), margin: margin(data.rates.find((r) => r.from_on === now.from_on)?.percent ?? "0") })} · `}
-            {t("rates.since", { date: formatDate(now.from_on) })}
+            {now.until_on !== null
+              ? t("rates.sinceUntil", { from: formatDate(now.from_on), until: formatDate(now.until_on) })
+              : t("rates.since", { date: formatDate(now.from_on) })}
             {now.by_hand && ` · ${t("rates.byHand")}`}
           </div>
           {quote && <div className="text-sm text-muted-foreground">{t("programme.wouldBe", { percent: rate(quote.percent) })}</div>}
@@ -85,7 +92,12 @@ export function RatePanel({ account, canEdit }: { account: AccountWithBalance; c
           {[...data.rates].reverse().map((r) => (
             <li key={r.from_on} className="flex items-center justify-between gap-2">
               <span>
-                <span className="tabular-nums text-muted-foreground">{t("rates.from", { date: formatDate(r.from_on) })}</span> — {terms(t, r)}
+                <span className="tabular-nums text-muted-foreground">
+                  {r.until_on !== null
+                    ? t("rates.sinceUntil", { from: formatDate(r.from_on), until: formatDate(r.until_on) })
+                    : t("rates.from", { date: formatDate(r.from_on) })}
+                </span>{" "}
+                — {terms(t, r)}
                 {r.by_hand && <span className="text-muted-foreground"> · {t("rates.byHandShort")}</span>}
               </span>
               {canEdit && (
@@ -124,15 +136,23 @@ function RateDialog({ account, keyRate, onClose }: { account: AccountWithBalance
   const { t } = useTranslation();
   const save = useSetAccountRate(account.id);
   const [fromOn, setFromOn] = useState(localToday);
+  // The rate's last day, optional (Р-59 А): a rate for the months before the
+  // bank's programme is known, or a bank's offer for a while.
+  const [untilOn, setUntilOn] = useState("");
   const [kind, setKind] = useState<"fixed" | "key">("fixed");
   const [text, setText] = useState("");
   // Typed with a comma or a point, a minus only for a margin, to thousandths.
   const value = text.trim().replace(/\s/g, "").replace(",", ".").replace("−", "-");
   const ok = (kind === "fixed" ? /^\d{1,2}(\.\d{1,3})?$/ : /^[-+]?\d{1,2}(\.\d{1,3})?$/).test(value);
-  const valid = /^\d{4}-\d{2}-\d{2}$/.test(fromOn) && ok;
+  const date = /^\d{4}-\d{2}-\d{2}$/;
+  const untilBad = untilOn !== "" && (!date.test(untilOn) || untilOn < fromOn);
+  const valid = date.test(fromOn) && ok && !untilBad;
   const submit = () => {
     if (!valid) return;
-    save.mutate({ from_on: fromOn, kind, percent: value.replace("+", "") }, { onSuccess: onClose });
+    save.mutate(
+      { from_on: fromOn, until_on: untilOn === "" ? null : untilOn, kind, percent: value.replace("+", "") },
+      { onSuccess: onClose },
+    );
   };
   const example = keyRate !== null && ok && kind === "key" ? Math.max(Number(keyRate) + Number(value), 0) : null;
   return (
@@ -169,6 +189,20 @@ function RateDialog({ account, keyRate, onClose }: { account: AccountWithBalance
               <Label htmlFor="rate-from">{t("rates.fromOn")}</Label>
               <Input id="rate-from" type="date" value={fromOn} onChange={(e) => setFromOn(e.target.value)} />
             </div>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="rate-until">{t("rates.untilOn")}</Label>
+            <Input
+              id="rate-until"
+              type="date"
+              value={untilOn}
+              min={fromOn}
+              aria-invalid={untilBad}
+              onChange={(e) => setUntilOn(e.target.value)}
+            />
+            <p className={untilBad ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+              {untilBad ? t("rates.untilBad") : t("rates.untilHint")}
+            </p>
           </div>
           <p className="text-xs text-muted-foreground">
             {kind === "key"

@@ -2927,6 +2927,9 @@ type AccountRate struct {
 	FromOn  string          `json:"from_on"`
 	Kind    AccountRateKind `json:"kind"`
 	Percent string          `json:"percent"`
+
+	// UntilOn The rate's last day; null — until the next rate
+	UntilOn nullable.Nullable[string] `json:"until_on"`
 }
 
 // AccountRateKind defines model for AccountRate.Kind.
@@ -2940,6 +2943,9 @@ type AccountRateInput struct {
 
 	// Percent Decimal: a year when fixed; the margin over the key rate when tied to it, may be negative
 	Percent string `json:"percent"`
+
+	// UntilOn Date YYYY-MM-DD of the rate's last day, not before from_on (Р-59 А): after it the account's programme gives the rate again, till the next rate. Null or absent: until the next rate
+	UntilOn nullable.Nullable[string] `json:"until_on,omitempty"`
 }
 
 // AccountRateInputKind defines model for AccountRateInput.Kind.
@@ -2952,7 +2958,8 @@ type AccountRateNow struct {
 	Kind   AccountRateNowKind `json:"kind"`
 
 	// Percent The rate in force today, a year; a key-tied one with today's key rate
-	Percent string `json:"percent"`
+	Percent string                    `json:"percent"`
+	UntilOn nullable.Nullable[string] `json:"until_on"`
 }
 
 // AccountRateNowKind defines model for AccountRateNow.Kind.

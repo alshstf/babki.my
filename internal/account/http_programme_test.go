@@ -80,6 +80,30 @@ func TestADepositTiedToItsProgramme(t *testing.T) {
 		t.Errorf("the hand's rate taken away: source %s", got.Source)
 	}
 
+	// Р-59 А: a rate by hand with its last day past gives the programme back;
+	// one to a day ahead stands over it till then.
+	apitest.Decode(t, apitest.Do(t, c, "PUT", rates+"/rates", `{"from_on":"2026-10-05","until_on":"2026-10-06","kind":"fixed","percent":"15"}`), &got)
+	if got.Source != apitypes.AccountRatesSourceProgramme || !got.Current.IsNull() || got.Rates[0].UntilOn.MustGet() != "2026-10-06" {
+		t.Errorf("ended by hand = %+v", got)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "PUT", rates+"/rates", `{"from_on":"2026-10-05","until_on":"2099-12-31","kind":"fixed","percent":"15"}`), &got)
+	if got.Source != apitypes.AccountRatesSourceByHand || got.Current.MustGet().UntilOn.MustGet() != "2099-12-31" {
+		t.Errorf("by hand to a day ahead = %+v", got)
+	}
+	apitest.Decode(t, apitest.Do(t, c, "PUT", rates+"/rates", `{"from_on":"2026-10-05","until_on":null,"kind":"fixed","percent":"15"}`), &got)
+	if !got.Rates[0].UntilOn.IsNull() {
+		t.Errorf("the last day taken away = %+v", got.Rates[0])
+	}
+	for _, bad := range []string{
+		`{"from_on":"2026-10-05","until_on":"2026-10-04","kind":"fixed","percent":"15"}`,
+		`{"from_on":"2026-10-05","until_on":"06.10.2026","kind":"fixed","percent":"15"}`,
+	} {
+		if r := apitest.Do(t, c, "PUT", rates+"/rates", bad); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, r.StatusCode)
+		}
+	}
+	apitest.Decode(t, apitest.Do(t, c, "DELETE", rates+"/rates/2026-10-05", ""), &got)
+
 	savings := newAccount(t, url, c, "savings", 0)
 	card := newAccount(t, url, c, "checking", 0)
 	var cny struct {
