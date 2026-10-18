@@ -550,3 +550,54 @@ func TestDomRFSavingsBeforeTheCatalog(t *testing.T) {
 	q, err := programme(t, "domrf-ultra").Quote(Holding{Variant: "ultra", OpenedOn: day("2025-06-01")}, day("2026-01-10"), 1_000_000_00, keys("2025-10-27", "16.5", "2025-12-22", "16"), nil)
 	pct(t, q, err, "14")
 }
+
+// Decision Р-59 Б: Сбер's savings account by the bank's archive of rates —
+// 9 % in the first days of January, 8 % from 05.01 (and 13,5 the first two
+// months of a new client's account), 7,5 % from 20.02; from 17.03 to 29.04
+// the archive shows none, so those days have no rate by the catalog.
+func TestSberSavingsBeforeTheCatalog(t *testing.T) {
+	p := programme(t, "sber-nakopitelny")
+	old := Holding{Variant: "daily", OpenedOn: day("2025-05-01")}
+	for _, c := range []struct{ on, want string }{{"2026-01-03", "9"}, {"2026-02-01", "8"}, {"2026-03-01", "7.5"}} {
+		q, err := p.Quote(old, day(c.on), 100_000_00, nil, nil)
+		pct(t, q, err, c.want)
+	}
+	fresh := Holding{Variant: "daily", OpenedOn: day("2026-01-10")}
+	q, err := p.Quote(fresh, day("2026-01-20"), 100_000_00, nil, marks(map[string]int{"new_client": 0}))
+	pct(t, q, err, "13.5")
+	if _, err := p.Quote(old, day("2026-04-01"), 100_000_00, nil, nil); err == nil {
+		t.Error("a rate between the archive and the catalog")
+	}
+}
+
+// An edition's last day is within it and before the next edition.
+func TestAnEditionsLastDayIsChecked(t *testing.T) {
+	file := func(until string) string {
+		return `
+id: x
+bank: vtb
+name: X
+kind: savings
+editions:
+  - from: 2026-01-01
+    until: ` + until + `
+    checked_on: 2026-01-02
+    sources: [https://example.ru]
+    variants:
+      - { id: a, audience: [all], accrual: daily, payouts: [capitalize], ops: topup_withdraw, grid: [{ percent: "10" }] }
+  - from: 2026-03-01
+    checked_on: 2026-03-02
+    sources: [https://example.ru]
+    variants:
+      - { id: a, audience: [all], accrual: daily, payouts: [capitalize], ops: topup_withdraw, grid: [{ percent: "9" }] }
+`
+	}
+	if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(file("2026-02-15"))}}); err != nil {
+		t.Fatalf("a good last day: %v", err)
+	}
+	for _, bad := range []string{"2025-12-31", "2026-03-01", "15.02.2026"} {
+		if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(file(bad))}}); err == nil {
+			t.Errorf("until %s: read", bad)
+		}
+	}
+}
