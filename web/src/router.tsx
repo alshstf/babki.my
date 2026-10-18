@@ -57,6 +57,7 @@ const MoneyPage = lazyRouteComponent(() => import("@/routes/money"), "MoneyPage"
 const StructurePage = lazyRouteComponent(() => import("@/routes/structure"), "StructurePage");
 const PayoutsPage = lazyRouteComponent(() => import("@/routes/payouts"), "PayoutsPage");
 const TaxesPage = lazyRouteComponent(() => import("@/routes/taxes"), "TaxesPage");
+const DepositsPage = lazyRouteComponent(() => import("@/routes/deposits"), "DepositsPage");
 const CategoriesPage = lazyRouteComponent(
   () => import("@/routes/settings/categories"),
   "CategoriesPage",
@@ -241,6 +242,13 @@ const taxesRoute = createRoute({
   component: TaxesPage,
 });
 
+// The deposits compared on a sum over a horizon (decision Р-57 Б).
+const depositsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/deposits",
+  component: DepositsPage,
+});
+
 // The family's worth taken apart (#400).
 const structureRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -337,6 +345,7 @@ export const routeTree = rootRoute.addChildren([
     structureRoute,
     payoutsRoute,
     taxesRoute,
+    depositsRoute,
     connectWizardRoute,
     connectionDetailRoute,
   ]),

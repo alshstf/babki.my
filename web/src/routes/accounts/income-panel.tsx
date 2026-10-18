@@ -41,6 +41,11 @@ export function IncomePanel({ account }: { account: AccountWithBalance }) {
       )}
       <Notes income={d} />
       <TaxShare income={d} />
+      <p className="text-xs">
+        <Link to="/deposits" className="underline" data-testid="account-income-compare">
+          {t("depositIncome.compare")}
+        </Link>
+      </p>
     </div>
   );
 }
