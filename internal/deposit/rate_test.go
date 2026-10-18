@@ -482,3 +482,51 @@ func TestTheKeyRateForecast(t *testing.T) {
 		t.Error("2025: a forecast")
 	}
 }
+
+// Decision Р-59 Б: ПСБ's savings accounts by the bank's archive of their
+// terms from 30.12.2025 — a year's estimate needs every day of it.
+// «Акцент на процент» with purchases of 250 000 ₽ a month: 10 + 7 in
+// January, 10 + 6 from 16.01, 8 + 3,5 for 10 000 ₽ in April, the base 7 in
+// July, 5 from 14.08. «Хранитель» on the minimum balance: 0,01 % under
+// 10 000 ₽ till June, 14 above it in January, 12,5 from 19.02, 10,5 for any
+// sum from 03.06. «Про запас» to a new client opened in May: 13,5 for two
+// months, then 5.
+func TestPSBSavingsBeforeTheCatalog(t *testing.T) {
+	akcent := programme(t, "psb-akcent")
+	h := Holding{Variant: "daily", OpenedOn: day("2025-06-01")}
+	for _, c := range []struct {
+		on    string
+		level map[string]int
+		want  string
+	}{
+		{"2026-01-10", map[string]int{"spend": 4}, "17"},
+		{"2026-02-10", map[string]int{"spend": 4}, "16"},
+		{"2026-04-10", map[string]int{"spend": 0}, "11.5"},
+		{"2026-07-10", nil, "7"},
+		{"2026-09-10", nil, "5"},
+	} {
+		q, err := akcent.Quote(h, day(c.on), 500_000_00, nil, marks(c.level))
+		pct(t, q, err, c.want)
+	}
+	keeper := programme(t, "psb-hranitel")
+	minimum := Holding{Variant: "minimum", OpenedOn: day("2025-01-01")}
+	for _, c := range []struct {
+		on      string
+		balance int64
+		want    string
+	}{
+		{"2026-01-10", 5_000_00, "0.01"},
+		{"2026-01-10", 100_000_00, "14"},
+		{"2026-02-20", 100_000_00, "12.5"},
+		{"2026-06-10", 5_000_00, "10.5"},
+	} {
+		q, err := keeper.Quote(minimum, day(c.on), c.balance, nil, nil)
+		pct(t, q, err, c.want)
+	}
+	zapas := programme(t, "psb-pro-zapas")
+	fresh := Holding{Variant: "minimum", OpenedOn: day("2026-05-10")}
+	q, err := zapas.Quote(fresh, day("2026-05-20"), 300_000_00, nil, marks(map[string]int{"new_client": 0}))
+	pct(t, q, err, "13.5")
+	q, err = zapas.Quote(fresh, day("2026-07-20"), 300_000_00, nil, marks(map[string]int{"new_client": 0}))
+	pct(t, q, err, "5")
+}

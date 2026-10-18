@@ -5,6 +5,74 @@ kind: savings
 watch:
   - https://www.psbank.ru/personal/savingsaccount
 editions:
+  - from: 2025-12-30
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_30122025.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 30.12.2025, действовали по 01.03.2026. Проценты — на минимальный остаток месяца. Новому клиенту (90 дней без накопительных счетов и вкладов в ПСБ) — 14 % первые два месяца на сумму до 5 млн ₽, один такой счёт; потом базовая 5 %.
+    variants:
+      - id: minimum
+        name: «Про запас»
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "5" }
+        schedule:
+          - { name: Для новых клиентов, days: 61, grid: [{ percent: "14" }], cap: 500000000, requires: new_client }
+  - from: 2026-03-02
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_02032026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 02.03.2026, действовали по 30.04.2026. Проценты — на минимальный остаток месяца. Новому клиенту (180 дней без накопительных счетов и вкладов в ПСБ) — 14 % первые два месяца на сумму до 5 млн ₽, один такой счёт; потом базовая 5 %.
+    variants:
+      - id: minimum
+        name: «Про запас»
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "5" }
+        schedule:
+          - { name: Для новых клиентов, days: 61, grid: [{ percent: "14" }], cap: 500000000, requires: new_client }
+  - from: 2026-05-01
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_01052026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 01.05.2026, действовали по 02.06.2026. Проценты — на минимальный остаток месяца. Новому клиенту (180 дней без накопительных счетов и вкладов в ПСБ) — 13,5 % первые два месяца на сумму до 5 млн ₽, один такой счёт; потом базовая 5 %.
+    variants:
+      - id: minimum
+        name: «Про запас»
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "5" }
+        schedule:
+          - { name: Для новых клиентов, days: 61, grid: [{ percent: "13.5" }], cap: 500000000, requires: new_client }
+  - from: 2026-06-03
+    checked_on: 2026-10-19
+    sources:
+      - https://www.psbank.ru/qpstorage/psb/images/personal/savingsaccount/full_terms_ns_03062026.pdf
+    notes: >-
+      Архив банка: условия накопительных счетов с 03.06.2026, действовали по 13.08.2026. Проценты — на минимальный остаток месяца. Новому клиенту (180 дней без накопительных счетов и вкладов в ПСБ) — 13 % первые два месяца на сумму до 5 млн ₽, один такой счёт; потом базовая 5 %.
+    variants:
+      - id: minimum
+        name: «Про запас»
+        audience: [all]
+        accrual: minimum
+        payouts: [capitalize]
+        ops: topup_withdraw
+        grid:
+          - { percent: "5" }
+        schedule:
+          - { name: Для новых клиентов, days: 61, grid: [{ percent: "13" }], cap: 500000000, requires: new_client }
   - from: 2026-08-14
     checked_on: 2026-10-16
     sources:
