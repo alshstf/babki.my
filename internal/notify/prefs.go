@@ -26,10 +26,11 @@ const (
 	KindStale     Kind = "stale"
 	KindPayout    Kind = "payout"
 	KindDeclared  Kind = "declared"
+	KindLoyalty   Kind = "loyalty"
 )
 
 // Kinds are every kind, in the order the settings show them.
-var Kinds = []Kind{KindCard, KindBudget, KindGoal, KindStorage, KindPayout, KindDeclared, KindSync, KindReconcile, KindStale}
+var Kinds = []Kind{KindCard, KindLoyalty, KindBudget, KindGoal, KindStorage, KindPayout, KindDeclared, KindSync, KindReconcile, KindStale}
 
 // Prefs are a member's choice: the kinds turned off on the devices and in
 // Telegram, whether Telegram's messages carry the sums, and the hours from

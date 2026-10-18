@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/cashback"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
@@ -41,6 +42,7 @@ type events struct {
 	accounts    *account.Store
 	instruments *instrument.Store
 	payouts     *payouts.Service
+	cashback    *cashback.Service
 }
 
 var _ notify.EventSource = (*events)(nil)
@@ -68,7 +70,20 @@ func (e *events) Reminders(ctx context.Context, spaceID uuid.UUID, today, now ti
 	if err != nil {
 		return nil, err
 	}
-	return append(out, more...), nil
+	out = append(out, more...)
+	// A card's categories of cashback for the new period (Р-58).
+	if e.cashback != nil {
+		due, err := e.cashback.Due(ctx, spaceID, today)
+		if err != nil {
+			return nil, err
+		}
+		list := make([]notify.PickDue, 0, len(due))
+		for _, d := range due {
+			list = append(list, notify.PickDue{AccountID: d.AccountID, Name: d.Name, Owner: d.Owner, From: d.From, To: d.To})
+		}
+		out = append(out, notify.LoyaltyReminders(list)...)
+	}
+	return out, nil
 }
 
 // brokers are the space's T-Invest connections as their syncs left them,

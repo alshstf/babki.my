@@ -681,6 +681,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loyalty-programmes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The catalog of the banks' loyalty programmes (decision Р-58), each by its latest edition — what a card can be tied to. */
+        get: operations["listLoyaltyProgrammes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/cashback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A card's bank loyalty programme for the period a day falls in (today by default): the categories the family picked with the bank's percents, and what the period's purchases earn by their merchant codes — an estimate. */
+        get: operations["getCardCashback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/cashback/programme": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Ties a rouble card (a current account or a credit card) to a programme and variant of the catalog. */
+        put: operations["setCardLoyalty"];
+        post?: never;
+        /** @description Unties the card, its picks with it. */
+        delete: operations["deleteCardLoyalty"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/cashback/picks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description The categories the family picked for the period a day falls in, each at the percent the bank offered on it, in place of the period's picks before: the edition's categories, each once, at a percent above 0 and up to 100 to hundredths, as many as the variant picks and one more (a bank may offer an extra one). */
+        put: operations["setCardPicks"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recurring/hidden": {
         parameters: {
             query?: never;
@@ -3367,6 +3436,8 @@ export interface components {
             programme: components["schemas"]["AccountProgrammeInput"] | null;
             /** @description The marks of the programme's conditions (PUT /accounts/{accountId}/marks) */
             condition_marks: components["schemas"]["ConditionMark"][];
+            /** @description A card's bank loyalty programme and the categories picked for each period (PUT /accounts/{accountId}/cashback/…, decision Р-58); absent without one */
+            loyalty?: components["schemas"]["ExportLoyalty"];
             /** @description What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated */
             credit_card_bank_figures: components["schemas"]["CreditCardBankFigures"] | null;
             /** @description A loan account's terms (PUT /accounts/{accountId}/loan); null on every other account */
@@ -3411,6 +3482,16 @@ export interface components {
              * @description What it sold for in roubles' minor units; null while kept
              */
             sold_minor: number | null;
+        };
+        ExportLoyalty: {
+            programme_id: string;
+            variant_id: string;
+            picks: components["schemas"]["ExportLoyaltyPick"][];
+        };
+        ExportLoyaltyPick: {
+            period_from: string;
+            category_id: string;
+            percent: string;
         };
         ExportOperation: {
             /** Format: uuid */
@@ -5355,6 +5436,107 @@ export interface components {
             endpoint: string;
             p256dh: string;
             auth: string;
+        };
+        /** @description How long a pick of categories holds: month, two_months (from an odd month), quarter, or none — the bank picks nothing for the cardholder */
+        LoyaltyPeriod: string;
+        LoyaltyCategory: {
+            id: string;
+            name: string;
+            /** @description The bank names the shops, not codes: a purchase cannot be told into it by its code */
+            by_merchant: boolean;
+        };
+        LoyaltyVariant: {
+            id: string;
+            name: string;
+            /** @description How many categories the holder picks at once; 0 without a choice */
+            pick: number;
+            /** @description Of how many the bank offers; 0 when not said */
+            of: number;
+            /**
+             * Format: int64
+             * @description The most the bank pays a period, roubles' minor units; 0 when the documents set none
+             */
+            cap_minor: number;
+        };
+        LoyaltyProgramme: {
+            id: string;
+            bank_id: string;
+            bank_name: string;
+            name: string;
+            edition_from: string;
+            period: components["schemas"]["LoyaltyPeriod"];
+            variants: components["schemas"]["LoyaltyVariant"][];
+            categories: components["schemas"]["LoyaltyCategory"][];
+            sources: string[];
+            notes: string;
+        };
+        CardCashbackLine: {
+            category_id: string;
+            name: string;
+            /** @description Decimal, the bank's percent for the period */
+            percent: string;
+            /**
+             * Format: int64
+             * @description The period's purchases told into the category by their codes
+             */
+            spent_minor: number;
+            /**
+             * Format: int64
+             * @description spent × percent, to the kopeck down — an estimate
+             */
+            bonus_minor: number;
+            purchases: number;
+        };
+        CardCashback: {
+            /** @description The card's programme by the edition of the period; null without one */
+            programme: components["schemas"]["CardLoyalty"] | null;
+            period_from: string | null;
+            period_to: string | null;
+            /** @description The picked categories, the bank's highest percent first */
+            lines: components["schemas"]["CardCashbackLine"][];
+            /**
+             * Format: int64
+             * @description The lines' bonus, held to the variant's cap
+             */
+            bonus_minor: number;
+            capped: boolean;
+            /**
+             * Format: int64
+             * @description The period's purchases without a merchant code — not told into any category
+             */
+            uncoded_minor: number;
+            uncoded_count: number;
+        };
+        CardLoyalty: {
+            programme_id: string;
+            programme_name: string;
+            bank_name: string;
+            variant_id: string;
+            variant_name: string;
+            pick: number;
+            of: number;
+            /** Format: int64 */
+            cap_minor: number;
+            period: components["schemas"]["LoyaltyPeriod"];
+            edition_from: string;
+            categories: components["schemas"]["LoyaltyCategory"][];
+            sources: string[];
+            notes: string;
+            /** @description The catalog has an edition with the variant for the period; false — no terms to reckon by */
+            known: boolean;
+        };
+        CardLoyaltyInput: {
+            programme_id: string;
+            variant_id: string;
+        };
+        CardPicksInput: {
+            /** @description Date YYYY-MM-DD within the period */
+            on: string;
+            picks: {
+                category_id: string;
+                /** @description Decimal, as the bank offered */
+                percent: string;
+            }[];
         };
         PushTestResult: {
             devices: number;
@@ -8425,6 +8607,140 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listLoyaltyProgrammes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The programmes, by bank and name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoyaltyProgramme"][];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    getCardCashback: {
+        parameters: {
+            query?: {
+                /** @description Date YYYY-MM-DD of the period */
+                on?: string;
+            };
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The card's programme, or none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardCashback"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setCardLoyalty: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardLoyaltyInput"];
+            };
+        };
+        responses: {
+            /** @description The card's programme for today's period */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardCashback"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteCardLoyalty: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The card without a programme */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardCashback"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setCardPicks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardPicksInput"];
+            };
+        };
+        responses: {
+            /** @description The card's programme for the period */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardCashback"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

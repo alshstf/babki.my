@@ -41,6 +41,7 @@ var layers = map[string]int{
 	"internal/compare":         4,
 	"internal/interest":        4,
 	"internal/depositcheck":    4,
+	"internal/cashback":        4,
 	"internal/valuables":       4,
 	"internal/taxyear":         4,
 	"internal/loan":            4,

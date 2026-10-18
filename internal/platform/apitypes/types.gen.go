@@ -3586,6 +3586,80 @@ type CapitalSeries struct {
 	Points   []CapitalPoint `json:"points"`
 }
 
+// CardCashback defines model for CardCashback.
+type CardCashback struct {
+	// BonusMinor The lines' bonus, held to the variant's cap
+	BonusMinor int64 `json:"bonus_minor"`
+	Capped     bool  `json:"capped"`
+
+	// Lines The picked categories, the bank's highest percent first
+	Lines      []CardCashbackLine        `json:"lines"`
+	PeriodFrom nullable.Nullable[string] `json:"period_from"`
+	PeriodTo   nullable.Nullable[string] `json:"period_to"`
+
+	// Programme The card's programme by the edition of the period; null without one
+	Programme    nullable.Nullable[CardLoyalty] `json:"programme"`
+	UncodedCount int                            `json:"uncoded_count"`
+
+	// UncodedMinor The period's purchases without a merchant code — not told into any category
+	UncodedMinor int64 `json:"uncoded_minor"`
+}
+
+// CardCashbackLine defines model for CardCashbackLine.
+type CardCashbackLine struct {
+	// BonusMinor spent × percent, to the kopeck down — an estimate
+	BonusMinor int64  `json:"bonus_minor"`
+	CategoryId string `json:"category_id"`
+	Name       string `json:"name"`
+
+	// Percent Decimal, the bank's percent for the period
+	Percent   string `json:"percent"`
+	Purchases int    `json:"purchases"`
+
+	// SpentMinor The period's purchases told into the category by their codes
+	SpentMinor int64 `json:"spent_minor"`
+}
+
+// CardLoyalty defines model for CardLoyalty.
+type CardLoyalty struct {
+	BankName    string            `json:"bank_name"`
+	CapMinor    int64             `json:"cap_minor"`
+	Categories  []LoyaltyCategory `json:"categories"`
+	EditionFrom string            `json:"edition_from"`
+
+	// Known The catalog has an edition with the variant for the period; false — no terms to reckon by
+	Known bool   `json:"known"`
+	Notes string `json:"notes"`
+	Of    int    `json:"of"`
+
+	// Period How long a pick of categories holds: month, two_months (from an odd month), quarter, or none — the bank picks nothing for the cardholder
+	Period        LoyaltyPeriod `json:"period"`
+	Pick          int           `json:"pick"`
+	ProgrammeId   string        `json:"programme_id"`
+	ProgrammeName string        `json:"programme_name"`
+	Sources       []string      `json:"sources"`
+	VariantId     string        `json:"variant_id"`
+	VariantName   string        `json:"variant_name"`
+}
+
+// CardLoyaltyInput defines model for CardLoyaltyInput.
+type CardLoyaltyInput struct {
+	ProgrammeId string `json:"programme_id"`
+	VariantId   string `json:"variant_id"`
+}
+
+// CardPicksInput defines model for CardPicksInput.
+type CardPicksInput struct {
+	// On Date YYYY-MM-DD within the period
+	On    string `json:"on"`
+	Picks []struct {
+		CategoryId string `json:"category_id"`
+
+		// Percent Decimal, as the bank offered
+		Percent string `json:"percent"`
+	} `json:"picks"`
+}
+
 // CashGap defines model for CashGap.
 type CashGap string
 
@@ -4774,7 +4848,10 @@ type ExportAccount struct {
 
 	// LoanPrepayments A loan's prepayments (POST /accounts/{accountId}/loan/prepayments), oldest first; empty on every other account
 	LoanPrepayments []LoanPrepayment `json:"loan_prepayments"`
-	Name            string           `json:"name"`
+
+	// Loyalty A card's bank loyalty programme and the categories picked for each period (PUT /accounts/{accountId}/cashback/…, decision Р-58); absent without one
+	Loyalty *ExportLoyalty `json:"loyalty,omitempty"`
+	Name    string         `json:"name"`
 
 	// Operations The journal as stored, in the order it is folded
 	Operations []ExportOperation `json:"operations"`
@@ -4888,6 +4965,20 @@ type ExportLot struct {
 	AcquiredOn nullable.Nullable[string] `json:"acquired_on"`
 	CostMinor  int64                     `json:"cost_minor"`
 	Quantity   string                    `json:"quantity"`
+}
+
+// ExportLoyalty defines model for ExportLoyalty.
+type ExportLoyalty struct {
+	Picks       []ExportLoyaltyPick `json:"picks"`
+	ProgrammeId string              `json:"programme_id"`
+	VariantId   string              `json:"variant_id"`
+}
+
+// ExportLoyaltyPick defines model for ExportLoyaltyPick.
+type ExportLoyaltyPick struct {
+	CategoryId string `json:"category_id"`
+	Percent    string `json:"percent"`
+	PeriodFrom string `json:"period_from"`
 }
 
 // ExportManualPrice defines model for ExportManualPrice.
@@ -5687,6 +5778,47 @@ type LoanTermsKind string
 type LoginRequest struct {
 	Password string `json:"password"`
 	Username string `json:"username"`
+}
+
+// LoyaltyCategory defines model for LoyaltyCategory.
+type LoyaltyCategory struct {
+	// ByMerchant The bank names the shops, not codes: a purchase cannot be told into it by its code
+	ByMerchant bool   `json:"by_merchant"`
+	Id         string `json:"id"`
+	Name       string `json:"name"`
+}
+
+// LoyaltyPeriod How long a pick of categories holds: month, two_months (from an odd month), quarter, or none — the bank picks nothing for the cardholder
+type LoyaltyPeriod = string
+
+// LoyaltyProgramme defines model for LoyaltyProgramme.
+type LoyaltyProgramme struct {
+	BankId      string            `json:"bank_id"`
+	BankName    string            `json:"bank_name"`
+	Categories  []LoyaltyCategory `json:"categories"`
+	EditionFrom string            `json:"edition_from"`
+	Id          string            `json:"id"`
+	Name        string            `json:"name"`
+	Notes       string            `json:"notes"`
+
+	// Period How long a pick of categories holds: month, two_months (from an odd month), quarter, or none — the bank picks nothing for the cardholder
+	Period   LoyaltyPeriod    `json:"period"`
+	Sources  []string         `json:"sources"`
+	Variants []LoyaltyVariant `json:"variants"`
+}
+
+// LoyaltyVariant defines model for LoyaltyVariant.
+type LoyaltyVariant struct {
+	// CapMinor The most the bank pays a period, roubles' minor units; 0 when the documents set none
+	CapMinor int64  `json:"cap_minor"`
+	Id       string `json:"id"`
+	Name     string `json:"name"`
+
+	// Of Of how many the bank offers; 0 when not said
+	Of int `json:"of"`
+
+	// Pick How many categories the holder picks at once; 0 without a choice
+	Pick int `json:"pick"`
 }
 
 // Mailbox defines model for Mailbox.
@@ -8107,6 +8239,12 @@ type YearKeyRate struct {
 // Error defines model for Error.
 type Error = ErrorResponse
 
+// GetCardCashbackParams defines parameters for GetCardCashback.
+type GetCardCashbackParams struct {
+	// On Date YYYY-MM-DD of the period
+	On *string `form:"on,omitempty" json:"on,omitempty"`
+}
+
 // ListAccountOperationsParams defines parameters for ListAccountOperations.
 type ListAccountOperationsParams struct {
 	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -8380,6 +8518,12 @@ type UpdateAccountJSONRequestBody = UpdateAccountRequest
 
 // SetAccountBalanceJSONRequestBody defines body for SetAccountBalance for application/json ContentType.
 type SetAccountBalanceJSONRequestBody = SetBalanceRequest
+
+// SetCardPicksJSONRequestBody defines body for SetCardPicks for application/json ContentType.
+type SetCardPicksJSONRequestBody = CardPicksInput
+
+// SetCardLoyaltyJSONRequestBody defines body for SetCardLoyalty for application/json ContentType.
+type SetCardLoyaltyJSONRequestBody = CardLoyaltyInput
 
 // SetCreditCardJSONRequestBody defines body for SetCreditCard for application/json ContentType.
 type SetCreditCardJSONRequestBody = CreditCardTerms

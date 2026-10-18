@@ -18,6 +18,8 @@ var exported = map[string]string{
 	"spaces":                      "",
 	"memberships":                 "",
 	"sessions":                    "logins, nothing entered",
+	"account_loyalty":             "",
+	"account_loyalty_picks":       "",
 	"accounts":                    "",
 	"account_balances":            "",
 	"account_rates":               "",

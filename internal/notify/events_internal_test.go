@@ -91,3 +91,12 @@ func TestQuietHours(t *testing.T) {
 		}
 	}
 }
+
+// Decision Р-58: a card whose period has no picks yet is reminded once.
+func TestTheLoyaltyReminder(t *testing.T) {
+	owner := uuid.New()
+	got := LoyaltyReminders([]PickDue{{AccountID: uuid.New(), Name: "Карта ВТБ", Owner: &owner, From: on("2026-11-01"), To: on("2026-11-30")}})
+	if len(got) != 1 || got[0].Kind != KindLoyalty || !strings.HasSuffix(got[0].Key, ":2026-11-01") || !strings.Contains(got[0].Body, "с 01.11 по 30.11") || got[0].Owner != &owner {
+		t.Errorf("reminder = %+v", got)
+	}
+}

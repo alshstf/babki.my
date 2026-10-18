@@ -36,6 +36,7 @@ import { LoanPanel } from "./loan-panel";
 import { ValuablesPanel } from "./valuables-panel";
 import { CreditCardPanel } from "./credit-card-panel";
 import { IncomePanel } from "./income-panel";
+import { CashbackPanel } from "./cashback-panel";
 import { RatePanel } from "./rate-panel";
 import type { CashPosition } from "@/api/positions";
 import { editDialogOf, type Operation } from "@/api/operations";
@@ -176,6 +177,12 @@ export function AccountDetailPage() {
         <div className="grid gap-2">
           <h2 className="text-lg font-semibold">{t("card.title")}</h2>
           <CreditCardPanel account={account} canEdit={!readOnly} />
+        </div>
+      )}
+      {(account.type === "checking" || account.type === "credit_card") && account.currency === "RUB" && (
+        <div className="grid gap-2">
+          <h2 className="text-lg font-semibold">{t("cashback.title")}</h2>
+          <CashbackPanel account={account} canEdit={!readOnly} />
         </div>
       )}
       {/* Bars and coins have no holdings or operations of a broker's: the

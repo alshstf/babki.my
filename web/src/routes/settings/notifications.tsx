@@ -27,6 +27,7 @@ const HOURS = Array.from({ length: 24 }, (_, h) => h);
 function kindLabel(t: (key: string) => string, kind: string): string {
   const labels: Record<string, string> = {
     card: t("notifications.kinds.card"),
+    loyalty: t("notifications.kinds.loyalty"),
     budget: t("notifications.kinds.budget"),
     goal: t("notifications.kinds.goal"),
     storage: t("notifications.kinds.storage"),

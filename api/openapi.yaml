@@ -924,6 +924,91 @@ paths:
               schema: { $ref: "#/components/schemas/TelegramStatus" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/loyalty-programmes:
+    get:
+      tags: [accounts]
+      operationId: listLoyaltyProgrammes
+      description: The catalog of the banks' loyalty programmes (decision Р-58), each by its latest edition — what a card can be tied to.
+      responses:
+        "200":
+          description: The programmes, by bank and name
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/LoyaltyProgramme" } }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/cashback:
+    get:
+      tags: [accounts]
+      operationId: getCardCashback
+      description: >-
+        A card's bank loyalty programme for the period a day falls in (today by default): the categories the family
+        picked with the bank's percents, and what the period's purchases earn by their merchant codes — an estimate.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: "on", in: query, required: false, schema: { type: string }, description: "Date YYYY-MM-DD of the period" }
+      responses:
+        "200":
+          description: The card's programme, or none
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CardCashback" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/cashback/programme:
+    put:
+      tags: [accounts]
+      operationId: setCardLoyalty
+      description: Ties a rouble card (a current account or a credit card) to a programme and variant of the catalog.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CardLoyaltyInput" } } } }
+      responses:
+        "200":
+          description: The card's programme for today's period
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CardCashback" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [accounts]
+      operationId: deleteCardLoyalty
+      description: Unties the card, its picks with it.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The card without a programme
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CardCashback" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/cashback/picks:
+    put:
+      tags: [accounts]
+      operationId: setCardPicks
+      description: >-
+        The categories the family picked for the period a day falls in, each at the percent the bank offered on it, in
+        place of the period's picks before: the edition's categories, each once, at a percent above 0 and up to 100 to
+        hundredths, as many as the variant picks and one more (a bank may offer an extra one).
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CardPicksInput" } } } }
+      responses:
+        "200":
+          description: The card's programme for the period
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CardCashback" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/recurring/hidden:
     put:
       tags: [recurring]
@@ -4365,6 +4450,10 @@ components:
           allOf:
             - $ref: "#/components/schemas/AccountProgrammeInput"
         condition_marks: { type: array, items: { $ref: "#/components/schemas/ConditionMark" }, description: "The marks of the programme's conditions (PUT /accounts/{accountId}/marks)" }
+        loyalty:
+          description: "A card's bank loyalty programme and the categories picked for each period (PUT /accounts/{accountId}/cashback/…, decision Р-58); absent without one"
+          allOf:
+            - $ref: "#/components/schemas/ExportLoyalty"
         credit_card_bank_figures:
           nullable: true
           description: "What the bank last said is due on a credit card, as the family wrote it (PUT /accounts/{accountId}/credit-card/bank); null on every other account and when nothing is stated"
@@ -4413,6 +4502,20 @@ components:
         note: { type: string }
         sold_on: { type: string, nullable: true, description: "Date YYYY-MM-DD it was sold; null while kept" }
         sold_minor: { type: integer, format: int64, nullable: true, description: "What it sold for in roubles' minor units; null while kept" }
+    ExportLoyalty:
+      type: object
+      required: [programme_id, variant_id, picks]
+      properties:
+        programme_id: { type: string }
+        variant_id: { type: string }
+        picks: { type: array, items: { $ref: "#/components/schemas/ExportLoyaltyPick" } }
+    ExportLoyaltyPick:
+      type: object
+      required: [period_from, category_id, percent]
+      properties:
+        period_from: { type: string }
+        category_id: { type: string }
+        percent: { type: string }
     ExportOperation:
       type: object
       required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots, category_id, counterparty, member_username, parts]
@@ -5553,6 +5656,102 @@ components:
         endpoint: { type: string, maxLength: 2048 }
         p256dh: { type: string, maxLength: 256 }
         auth: { type: string, maxLength: 256 }
+    LoyaltyPeriod:
+      type: string
+      description: "How long a pick of categories holds: month, two_months (from an odd month), quarter, or none — the bank picks nothing for the cardholder"
+    LoyaltyCategory:
+      type: object
+      required: [id, name, by_merchant]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        by_merchant: { type: boolean, description: "The bank names the shops, not codes: a purchase cannot be told into it by its code" }
+    LoyaltyVariant:
+      type: object
+      required: [id, name, pick, of, cap_minor]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        pick: { type: integer, description: "How many categories the holder picks at once; 0 without a choice" }
+        of: { type: integer, description: "Of how many the bank offers; 0 when not said" }
+        cap_minor: { type: integer, format: int64, description: "The most the bank pays a period, roubles' minor units; 0 when the documents set none" }
+    LoyaltyProgramme:
+      type: object
+      required: [id, bank_id, bank_name, name, edition_from, period, variants, categories, sources, notes]
+      properties:
+        id: { type: string }
+        bank_id: { type: string }
+        bank_name: { type: string }
+        name: { type: string }
+        edition_from: { type: string }
+        period: { $ref: "#/components/schemas/LoyaltyPeriod" }
+        variants: { type: array, items: { $ref: "#/components/schemas/LoyaltyVariant" } }
+        categories: { type: array, items: { $ref: "#/components/schemas/LoyaltyCategory" } }
+        sources: { type: array, items: { type: string } }
+        notes: { type: string }
+    CardCashbackLine:
+      type: object
+      required: [category_id, name, percent, spent_minor, bonus_minor, purchases]
+      properties:
+        category_id: { type: string }
+        name: { type: string }
+        percent: { type: string, description: "Decimal, the bank's percent for the period" }
+        spent_minor: { type: integer, format: int64, description: "The period's purchases told into the category by their codes" }
+        bonus_minor: { type: integer, format: int64, description: "spent × percent, to the kopeck down — an estimate" }
+        purchases: { type: integer }
+    CardCashback:
+      type: object
+      required: [programme, period_from, period_to, lines, bonus_minor, capped, uncoded_minor, uncoded_count]
+      properties:
+        programme:
+          nullable: true
+          description: "The card's programme by the edition of the period; null without one"
+          allOf:
+            - $ref: "#/components/schemas/CardLoyalty"
+        period_from: { type: string, nullable: true }
+        period_to: { type: string, nullable: true }
+        lines: { type: array, items: { $ref: "#/components/schemas/CardCashbackLine" }, description: "The picked categories, the bank's highest percent first" }
+        bonus_minor: { type: integer, format: int64, description: "The lines' bonus, held to the variant's cap" }
+        capped: { type: boolean }
+        uncoded_minor: { type: integer, format: int64, description: "The period's purchases without a merchant code — not told into any category" }
+        uncoded_count: { type: integer }
+    CardLoyalty:
+      type: object
+      required: [programme_id, programme_name, bank_name, variant_id, variant_name, pick, of, cap_minor, period, edition_from, categories, sources, notes, known]
+      properties:
+        programme_id: { type: string }
+        programme_name: { type: string }
+        bank_name: { type: string }
+        variant_id: { type: string }
+        variant_name: { type: string }
+        pick: { type: integer }
+        of: { type: integer }
+        cap_minor: { type: integer, format: int64 }
+        period: { $ref: "#/components/schemas/LoyaltyPeriod" }
+        edition_from: { type: string }
+        categories: { type: array, items: { $ref: "#/components/schemas/LoyaltyCategory" } }
+        sources: { type: array, items: { type: string } }
+        notes: { type: string }
+        known: { type: boolean, description: "The catalog has an edition with the variant for the period; false — no terms to reckon by" }
+    CardLoyaltyInput:
+      type: object
+      required: [programme_id, variant_id]
+      properties:
+        programme_id: { type: string }
+        variant_id: { type: string }
+    CardPicksInput:
+      type: object
+      required: [on, picks]
+      properties:
+        "on": { type: string, description: "Date YYYY-MM-DD within the period" }
+        picks:
+          type: array
+          items:
+            type: object
+            required: [category_id, percent]
+            properties:
+              category_id: { type: string }
+              percent: { type: string, description: "Decimal, as the bank offered" }
     PushTestResult:
       type: object
       required: [devices, delivered]
