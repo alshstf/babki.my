@@ -15,8 +15,10 @@ import (
 )
 
 // Reminder is one push: Key names it for good, so it is sent once to each
-// member; Owner, when set, is the only member it is for (a personal card).
+// member; Owner, when set, is the only member it is for (a personal card);
+// Kind is what it is about, for the member's choice.
 type Reminder struct {
+	Kind  Kind
 	Key   string
 	Owner *uuid.UUID
 	Title string
@@ -38,7 +40,7 @@ func CardReminders(cards []creditcard.Card, today time.Time) []Reminder {
 		acc := c.Account.ID.String()
 		add := func(key, body string) {
 			out = append(out, Reminder{
-				Key: "card:" + acc + ":" + key, Owner: c.Account.OwnerUserID,
+				Kind: KindCard, Key: "card:" + acc + ":" + key, Owner: c.Account.OwnerUserID,
 				Title: name, Body: body, URL: "/accounts/" + acc,
 			})
 		}
@@ -117,13 +119,13 @@ func BudgetReminders(b budget.Month, names map[uuid.UUID]string) []Reminder {
 		switch {
 		case l.Left < 0:
 			out = append(out, Reminder{
-				Key: key + ":over", Title: "Бюджет: " + name, URL: "/money",
+				Kind: KindBudget, Key: key + ":over", Title: "Бюджет: " + name, URL: "/money",
 				Body: fmt.Sprintf("Лимит превышен на %s: потрачено %s из %s.", amount(-l.Left, b.BaseCurrency),
 					amount(l.Spent, b.BaseCurrency), amount(planned, b.BaseCurrency)),
 			})
 		case float64(l.Spent) >= near*float64(planned):
 			out = append(out, Reminder{
-				Key: key + ":near", Title: "Бюджет: " + name, URL: "/money",
+				Kind: KindBudget, Key: key + ":near", Title: "Бюджет: " + name, URL: "/money",
 				Body: fmt.Sprintf("Потрачено %s из %s — до конца месяца осталось %s.", amount(l.Spent, b.BaseCurrency),
 					amount(planned, b.BaseCurrency), amount(l.Left, b.BaseCurrency)),
 			})
@@ -148,7 +150,7 @@ func StorageReminders(list []valuables.StorageAt, today time.Time) []Reminder {
 			continue
 		}
 		acc := s.AccountID.String()
-		r := Reminder{Owner: s.Owner, Title: s.Name, URL: "/accounts/" + acc}
+		r := Reminder{Kind: KindStorage, Owner: s.Owner, Title: s.Name, URL: "/accounts/" + acc}
 		switch d := daysBetween(today, *until); {
 		case d < 0:
 			r.Key = "storage:" + acc + ":" + day(*until) + ":over"
@@ -177,12 +179,12 @@ func GoalReminders(list []goals.Valued, currency string, today time.Time) []Remi
 		switch {
 		case on.Equal(today) && p.Status == goals.Done:
 			out = append(out, Reminder{
-				Key: key + ":due:" + day(on), Title: g.Name, URL: "/money",
+				Kind: KindGoal, Key: key + ":due:" + day(on), Title: g.Name, URL: "/money",
 				Body: fmt.Sprintf("Срок цели — сегодня, и она достигнута: накоплено %s из %s.", amount(p.Saved, currency), amount(target, currency)),
 			})
 		case on.Equal(today):
 			out = append(out, Reminder{
-				Key: key + ":due:" + day(on), Title: g.Name, URL: "/money",
+				Kind: KindGoal, Key: key + ":due:" + day(on), Title: g.Name, URL: "/money",
 				Body: fmt.Sprintf("Срок цели — сегодня: накоплено %s из %s, не хватает %s. Перенесите срок или поменяйте сумму.",
 					amount(p.Saved, currency), amount(target, currency), amount(target-p.Saved, currency)),
 			})
@@ -192,7 +194,7 @@ func GoalReminders(list []goals.Valued, currency string, today time.Time) []Remi
 				plan = "при взносе " + amount(*g.Monthly, currency) + " в месяц"
 			}
 			out = append(out, Reminder{
-				Key: key + ":risk:" + today.Format("2006-01"), Title: g.Name, URL: "/money",
+				Kind: KindGoal, Key: key + ":risk:" + today.Format("2006-01"), Title: g.Name, URL: "/money",
 				Body: fmt.Sprintf("Не успеваете к %s: %s будет %s из %s. Чтобы успеть — %s в месяц.",
 					on.Format("02.01.2006"), plan, amount(*p.Projected, currency), amount(target, currency), amount(*p.Needed, currency)),
 			})

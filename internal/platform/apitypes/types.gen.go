@@ -6254,6 +6254,36 @@ type PushKey struct {
 	PublicKey string `json:"public_key"`
 }
 
+// PushKind One of card, budget, goal, storage, payout, declared, sync, reconcile, stale (a plain string: an enum's values would take the generated names of other enums). What a reminder is about: card — a credit card's payment; budget — a category near or past its limit; goal — a savings goal late or due; storage — a safe box's rent ending; payout — payouts that came; declared — dividends declared on the family's papers; sync — a broker's token refused or its sync failing; reconcile — an account apart from its broker; stale — prices or rates not loading
+type PushKind = string
+
+// PushKindSetting defines model for PushKindSetting.
+type PushKindSetting struct {
+	// Kind One of card, budget, goal, storage, payout, declared, sync, reconcile, stale (a plain string: an enum's values would take the generated names of other enums). What a reminder is about: card — a credit card's payment; budget — a category near or past its limit; goal — a savings goal late or due; storage — a safe box's rent ending; payout — payouts that came; declared — dividends declared on the family's papers; sync — a broker's token refused or its sync failing; reconcile — an account apart from its broker; stale — prices or rates not loading
+	Kind PushKind `json:"kind"`
+	On   bool     `json:"on"`
+}
+
+// PushSettings defines model for PushSettings.
+type PushSettings struct {
+	// Kinds Every kind, in the order to show them, with whether the member takes it
+	Kinds []PushKindSetting `json:"kinds"`
+
+	// QuietFrom Hour 0–23 by the server's clock from which nothing is sent
+	QuietFrom int `json:"quiet_from"`
+
+	// QuietTo Hour 0–23 from which reminders go again; equal to quiet_from — never quiet
+	QuietTo int `json:"quiet_to"`
+}
+
+// PushSettingsInput defines model for PushSettingsInput.
+type PushSettingsInput struct {
+	// Off The kinds the member does not take
+	Off       []PushKind `json:"off"`
+	QuietFrom int        `json:"quiet_from"`
+	QuietTo   int        `json:"quiet_to"`
+}
+
 // PushSubscriptionRequest defines model for PushSubscriptionRequest.
 type PushSubscriptionRequest struct {
 	Auth     string `json:"auth"`
@@ -8436,6 +8466,9 @@ type StatePurchasesJSONRequestBody = StatePurchasesRequest
 
 // StateWithheldAbroadJSONRequestBody defines body for StateWithheldAbroad for application/json ContentType.
 type StateWithheldAbroadJSONRequestBody = StateWithheldRequest
+
+// SetPushSettingsJSONRequestBody defines body for SetPushSettings for application/json ContentType.
+type SetPushSettingsJSONRequestBody = PushSettingsInput
 
 // SubscribePushJSONRequestBody defines body for SubscribePush for application/json ContentType.
 type SubscribePushJSONRequestBody = PushSubscriptionRequest

@@ -47,6 +47,7 @@ var exported = map[string]string{
 	"card_bank_figures":           "",
 	"push_subscriptions":          "devices' push keys, registered again by each device",
 	"push_sent":                   "which reminders went out, the program's",
+	"push_prefs":                  "each member's choice of reminders and quiet hours — a setting of the device's person, not the family's data",
 	"recurring_hidden":            "",
 	"instruments":                 "",
 	"quotes":                      "",

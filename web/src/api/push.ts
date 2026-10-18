@@ -1,5 +1,7 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { apiError } from "./operations";
+import type { components } from "./schema";
 
 // The browser's push support, step by step: «unsupported» where there is no
 // push at all (an iPhone's Safari outside the installed app), «denied» when
@@ -62,4 +64,32 @@ export async function turnOff(): Promise<PushState> {
     await sub.unsubscribe();
   }
   return reg ? "off" : "unsupported";
+}
+
+export type PushSettings = components["schemas"]["PushSettings"];
+export type PushSettingsInput = components["schemas"]["PushSettingsInput"];
+
+// The member's choice of reminders: each kind on or off and the quiet hours
+// (GET /api/v1/push/settings, decision Р-61 Б).
+export function usePushSettings() {
+  return useQuery({
+    queryKey: ["push-settings"],
+    queryFn: async (): Promise<PushSettings> => {
+      const { data, error, response } = await api.GET("/api/v1/push/settings");
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
+
+export function useSetPushSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: PushSettingsInput): Promise<PushSettings> => {
+      const { data, error, response } = await api.PUT("/api/v1/push/settings", { body });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (data) => queryClient.setQueryData(["push-settings"], data),
+  });
 }

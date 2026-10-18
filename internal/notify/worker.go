@@ -20,12 +20,6 @@ type SendRemindersArgs struct{}
 
 func (SendRemindersArgs) Kind() string { return "notify.send_reminders" }
 
-// Pushes go out in the day only, by the server's clock (TZ).
-const (
-	fromHour = 9
-	toHour   = 21
-)
-
 type cards interface {
 	All(ctx context.Context, spaceID uuid.UUID) ([]creditcard.Card, error)
 }
@@ -54,6 +48,7 @@ type remindersWorker struct {
 	categories categories
 	storages   storages
 	goals      savings
+	events     EventSource
 	sender     Sender
 	log        *slog.Logger
 	now        func() time.Time
@@ -81,13 +76,27 @@ func WithGoals(w river.Worker[SendRemindersArgs], g savings) river.Worker[SendRe
 	return w
 }
 
+// EventSource tells the reminders of what happened to the family's data:
+// its broker connections, its sources of prices and rates, its payouts.
+type EventSource interface {
+	Reminders(ctx context.Context, spaceID uuid.UUID, today, now time.Time) ([]Reminder, error)
+}
+
+// WithEvents adds what happened to the family's data to what is reminded of.
+func WithEvents(w river.Worker[SendRemindersArgs], e EventSource) river.Worker[SendRemindersArgs] {
+	if r, ok := w.(*remindersWorker); ok {
+		r.events = e
+	}
+	return w
+}
+
 func (w *remindersWorker) Timeout(*river.Job[SendRemindersArgs]) time.Duration {
 	return 10 * time.Minute
 }
 
 func (w *remindersWorker) Work(ctx context.Context, _ *river.Job[SendRemindersArgs]) error {
 	now := w.now()
-	if w.sender == nil || now.Hour() < fromHour || now.Hour() >= toHour {
+	if w.sender == nil {
 		return nil
 	}
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
@@ -122,7 +131,17 @@ func (w *remindersWorker) Work(ctx context.Context, _ *river.Job[SendRemindersAr
 				more = append(more, GoalReminders(list, currency, today)...)
 			}
 		}
-		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, append(reminders, more...)); err != nil {
+		// The family's broker connections, its data and its payouts (Р-61 Б);
+		// a failure there keeps the other reminders going too.
+		if w.events != nil {
+			list, err := w.events.Reminders(ctx, spaceID, today, now)
+			if err != nil {
+				w.log.Error("event reminders", "space", spaceID, "error", err)
+			} else {
+				more = append(more, list...)
+			}
+		}
+		if err := Deliver(ctx, w.store, w.sender, w.log, spaceID, append(reminders, more...), now); err != nil {
 			return err
 		}
 	}
@@ -146,10 +165,11 @@ func (w *remindersWorker) budgetReminders(ctx context.Context, spaceID uuid.UUID
 	return BudgetReminders(b, names), nil
 }
 
-// Deliver sends each reminder to every member it is for who has a device and
-// has not had it yet, and notes it sent once a device took it. A device whose
-// push service says it is gone is forgotten.
-func Deliver(ctx context.Context, store *Store, sender Sender, log *slog.Logger, spaceID uuid.UUID, reminders []Reminder) error {
+// Deliver sends each reminder to every member it is for who has a device,
+// takes its kind and has not had it yet, and notes it sent once a device took
+// it; a member's quiet hours at now hold everything back till they end. A
+// device whose push service says it is gone is forgotten.
+func Deliver(ctx context.Context, store *Store, sender Sender, log *slog.Logger, spaceID uuid.UUID, reminders []Reminder, now time.Time) error {
 	if len(reminders) == 0 {
 		return nil
 	}
@@ -158,13 +178,24 @@ func Deliver(ctx context.Context, store *Store, sender Sender, log *slog.Logger,
 		return err
 	}
 	byUser := map[uuid.UUID][]Subscription{}
+	prefs := map[uuid.UUID]Prefs{}
 	for _, d := range devices {
+		if _, ok := prefs[d.UserID]; !ok {
+			p, err := store.Prefs(ctx, d.UserID)
+			if err != nil {
+				return err
+			}
+			prefs[d.UserID] = p
+		}
+		if prefs[d.UserID].Quiet(now.Hour()) {
+			continue
+		}
 		byUser[d.UserID] = append(byUser[d.UserID], d)
 	}
 	forgotten := map[string]bool{}
 	for _, r := range reminders {
 		for user, subs := range byUser {
-			if r.Owner != nil && *r.Owner != user {
+			if (r.Owner != nil && *r.Owner != user) || !prefs[user].Wants(r.Kind) {
 				continue
 			}
 			sent, err := store.Sent(ctx, user, r.Key)
