@@ -115,3 +115,26 @@ func TestThePeriodOfAPick(t *testing.T) {
 		t.Errorf("February's two months begin in %s", from.Month())
 	}
 }
+
+// Новикомбанк's favourite categories hold for two months from September:
+// four of ten, the supermarkets' list taking 5300 too.
+func TestNovikomsFavouriteCategories(t *testing.T) {
+	p, ok := ByID("novikom-cashback")
+	if !ok {
+		t.Fatal("no Новикомбанк")
+	}
+	e, ok := p.EditionOn(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC))
+	if !ok || e.Period != PeriodTwoMonths || e.Variants[0].Pick != 4 || len(e.Categories) != 10 {
+		t.Fatalf("edition = %+v", e)
+	}
+	if got := names(e.CategoriesOf("5300")); got != "Супермаркеты и онлайн-супермаркеты" {
+		t.Errorf("5300 = %q", got)
+	}
+	if !e.Excludes("4829") {
+		t.Error("transfers earn no cashback")
+	}
+	from, to := e.Period.PeriodOf(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC))
+	if from.Format(time.DateOnly) != "2026-09-01" || to.Format(time.DateOnly) != "2026-10-31" {
+		t.Errorf("period %s – %s, want the list's", from, to)
+	}
+}
