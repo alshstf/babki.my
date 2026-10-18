@@ -209,7 +209,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 		loanSvc, cardSvc, budgetSvc, converter).WithStorages(valuablesSvc).WithGoals(goalsSvc).
 		WithInterest(accStore, mdStore, depositChecks), famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
-		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)), instStore, famAuth, famSM).Mount(srv)
+		moex.New(newMoexHTTPClient(), "", r.log), category.NewStore(r.pool)).WithMCCs(opStore), instStore, famAuth, famSM).Mount(srv)
 
 	newClient, err := newTinvestClientFactory(r)
 	if err != nil {

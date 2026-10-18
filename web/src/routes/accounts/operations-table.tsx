@@ -592,9 +592,9 @@ export function OperationsTable({
                   {receipts.data?.get(operation.id) && (
                     <ReceiptLine receipt={receipts.data.get(operation.id)!} categories={categoryList} canEdit={canDelete} />
                   )}
-                  {operation.counterparty && (
+                  {(operation.counterparty || operation.mcc) && (
                     <div className="text-xs text-muted-foreground" data-testid="operation-counterparty">
-                      {operation.counterparty}
+                      {[operation.counterparty, operation.mcc && t("operations.mcc", { code: operation.mcc })].filter(Boolean).join(" · ")}
                     </div>
                   )}
                   {narrow && (

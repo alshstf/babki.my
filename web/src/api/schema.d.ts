@@ -2683,10 +2683,10 @@ export interface components {
             net_minor: number;
         };
         /**
-         * @description `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled.
+         * @description `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it.
          * @enum {string}
          */
-        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note" | "counterparty" | "category";
+        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note" | "counterparty" | "category" | "mcc";
         ImportMapping: {
             /** @description Whether the table's first line is a header rather than an operation */
             has_header: boolean;
@@ -2734,6 +2734,8 @@ export interface components {
             fee_minor: number;
             note: string;
             counterparty: string;
+            /** @description The merchant category code the table gives, or the one the counterparty's earlier rows had (decision Р-58); absent when neither */
+            mcc?: string;
             /**
              * Format: uuid
              * @description The family's category the row will be filed under: named by the table, or found by the family's rules (an everyday account only); null when neither
@@ -3449,6 +3451,8 @@ export interface components {
              */
             category_id: string | null;
             counterparty: string;
+            /** @description A card purchase's merchant category code; absent when not known */
+            mcc?: string;
             /** @description The row split across categories (Operation.parts); empty when it is its one category's */
             parts: components["schemas"]["OperationPart"][];
             /** @description Whose the row is (Operation.member_id), by the member's username; null for the account owner's */
@@ -6142,6 +6146,8 @@ export interface components {
             category_id?: string | null;
             /** @description Who the money came from or went to, as typed or as the source named them; empty when unknown */
             counterparty: string;
+            /** @description A card purchase's merchant category code, four digits, as the bank's statement gave it or the family wrote it in (decision Р-58); absent when not known */
+            mcc?: string;
             /**
              * Format: uuid
              * @description Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account
@@ -6318,6 +6324,8 @@ export interface components {
             category_id?: string | null;
             /** @description Who the money came from or went to. On an update, omitting it clears it. */
             counterparty?: string;
+            /** @description A card purchase's merchant category code, four digits (decision Р-58). On an update, omitting it clears it. */
+            mcc?: string;
             /**
              * Format: uuid
              * @description Whose the row is (Operation.member_id): a member of the family, on a row that can take a category. On an update, omitting it clears it.

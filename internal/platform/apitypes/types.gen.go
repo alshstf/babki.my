@@ -1213,6 +1213,7 @@ const (
 	ImportFieldDate         ImportField = "date"
 	ImportFieldFee          ImportField = "fee"
 	ImportFieldInstrument   ImportField = "instrument"
+	ImportFieldMcc          ImportField = "mcc"
 	ImportFieldNote         ImportField = "note"
 	ImportFieldPrice        ImportField = "price"
 	ImportFieldQuantity     ImportField = "quantity"
@@ -1235,6 +1236,8 @@ func (e ImportField) Valid() bool {
 	case ImportFieldFee:
 		return true
 	case ImportFieldInstrument:
+		return true
+	case ImportFieldMcc:
 		return true
 	case ImportFieldNote:
 		return true
@@ -3929,6 +3932,9 @@ type CreateOperationRequest struct {
 	FeeMinor     *int64                                `json:"fee_minor,omitempty"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
 
+	// Mcc A card purchase's merchant category code, four digits (decision Р-58). On an update, omitting it clears it.
+	Mcc *string `json:"mcc,omitempty"`
+
 	// MemberId Whose the row is (Operation.member_id): a member of the family, on a row that can take a category. On an update, omitting it clears it.
 	MemberId nullable.Nullable[openapi_types.UUID] `json:"member_id,omitempty"`
 	Note     *string                               `json:"note,omitempty"`
@@ -4923,6 +4929,9 @@ type ExportOperation struct {
 	// Lots The purchases a move carried — quantity, cost and day bought — when it carried any
 	Lots []ExportLot `json:"lots"`
 
+	// Mcc A card purchase's merchant category code; absent when not known
+	Mcc *string `json:"mcc,omitempty"`
+
 	// MemberUsername Whose the row is (Operation.member_id), by the member's username; null for the account owner's
 	MemberUsername nullable.Nullable[string] `json:"member_username"`
 	Note           string                    `json:"note"`
@@ -5252,7 +5261,7 @@ type ImportAddedPaper struct {
 	Ticker       string             `json:"ticker"`
 }
 
-// ImportField `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled.
+// ImportField `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it.
 type ImportField string
 
 // ImportFileFormat How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
@@ -5357,7 +5366,10 @@ type ImportedOperation struct {
 	Currency     string                                `json:"currency"`
 	FeeMinor     int64                                 `json:"fee_minor"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
-	Note         string                                `json:"note"`
+
+	// Mcc The merchant category code the table gives, or the one the counterparty's earlier rows had (decision Р-58); absent when neither
+	Mcc  *string `json:"mcc,omitempty"`
+	Note string  `json:"note"`
 
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string                    `json:"occurred_on"`
@@ -5801,6 +5813,9 @@ type Operation struct {
 	// InBaseGap Which term stopped `in_base`. Set exactly when `in_base` is null and `currency` differs from the base currency; null when `in_base` is present or there was nothing to convert. Published wherever `in_base` is: on the journal listing only.
 	InBaseGap    nullable.Nullable[OperationInBaseGap] `json:"in_base_gap,omitempty"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
+
+	// Mcc A card purchase's merchant category code, four digits, as the bank's statement gave it or the family wrote it in (decision Р-58); absent when not known
+	Mcc *string `json:"mcc,omitempty"`
 
 	// MemberId Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account
 	MemberId nullable.Nullable[openapi_types.UUID] `json:"member_id,omitempty"`

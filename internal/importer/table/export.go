@@ -19,7 +19,7 @@ import (
 
 // exportHeader is the header a journal is written out under: the words the
 // import recognizes (see Guess), so a file written here reads back as it is.
-var exportHeader = []string{"Дата", "Тип", "Бумага", "Количество", "Цена", "Сумма", "Валюта", "Комиссия", "Заметка", "Контрагент", "Категория"}
+var exportHeader = []string{"Дата", "Тип", "Бумага", "Количество", "Цена", "Сумма", "Валюта", "Комиссия", "Заметка", "Контрагент", "Категория", "MCC"}
 
 // exportWords names each type in the file. The ones a table may hold are the
 // words the import knows; the rest are named for the person reading the file
@@ -89,7 +89,7 @@ func (s *Service) Export(ctx context.Context, spaceID, accountID uuid.UUID, pape
 			o.OccurredOn.Format("02.01.2006"), word, paper,
 			decimalCell(o.Quantity), decimalCell(o.Price),
 			minorCell(o.AmountMinor), o.Currency, feeCell(o.FeeMinor), o.Note,
-			o.Counterparty, categoryCell(cats, o.CategoryID),
+			o.Counterparty, categoryCell(cats, o.CategoryID), o.MCC,
 		}
 		if err := w.Write(record); err != nil {
 			return nil, err

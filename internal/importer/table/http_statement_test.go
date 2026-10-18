@@ -147,3 +147,46 @@ func TestAJournalKeepsItsFilingThroughATable(t *testing.T) {
 		t.Errorf("the imported journal = %+v", journal.Operations)
 	}
 }
+
+// Decision Р-58: Т-Банк's statement has an MCC column — each purchase keeps
+// its code, «742» as a spreadsheet left it is 0742, a cell that is no code
+// gives none, and a shop's purchase without one takes the code its earlier
+// row in the table had. The next statement, without the column, gives a
+// known shop's purchase the code the journal has; the journal's file
+// carries the codes out.
+func TestAStatementsMerchantCodes(t *testing.T) {
+	url, c := newAPI(t)
+	var card struct {
+		ID string `json:"id"`
+	}
+	call(t, c, "POST", url+"/api/v1/accounts", `{"name":"Карта","type":"checking","currency":"RUB"}`, 201, &card)
+	file := "Дата операции;Сумма операции;Валюта операции;Описание;MCC\n" +
+		"01.09.2026;-1 200,00;RUB;Пятёрочка;5411\n" +
+		"02.09.2026;-500,00;RUB;Ветклиника;742\n" +
+		"03.09.2026;-300,00;RUB;Пятёрочка;\n" +
+		"04.09.2026;-100,00;RUB;Кофейня;кофе\n"
+	got := previewOf(t, url, c, card.ID, file)
+	if got.Mapping.Columns["mcc"] != 4 || got.Mapping.Columns["note"] != 3 {
+		t.Fatalf("mapping = %+v", got.Mapping.Columns)
+	}
+	for i, want := range []string{"5411", "0742", "5411", ""} {
+		if op := got.Rows[i].Operation; op == nil || op.MCC != want {
+			t.Errorf("row %d = %+v, want mcc %q", i, op, want)
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"content": file, "mapping": got.Mapping, "file_name": "tbank.csv"})
+	call(t, c, "POST", url+"/api/v1/accounts/"+card.ID+"/imports", string(body), 200, nil)
+
+	next := previewOf(t, url, c, card.ID, "Дата операции;Сумма операции;Валюта операции;Описание\n05.09.2026;-800,00;RUB;ПЯТЁРОЧКА\n")
+	if op := next.Rows[0].Operation; op == nil || op.MCC != "5411" {
+		t.Errorf("the next statement's purchase = %+v, want the shop's 5411", op)
+	}
+	resp, err := c.Get(url + "/api/v1/accounts/" + card.ID + "/journal.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(raw), ";Категория;MCC") || !strings.Contains(string(raw), ";0742") {
+		t.Errorf("the journal's file lacks the codes:\n%s", raw)
+	}
+}

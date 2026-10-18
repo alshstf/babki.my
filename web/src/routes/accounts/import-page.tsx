@@ -63,6 +63,7 @@ const FIELDS: ImportField[] = [
   "note",
   "counterparty",
   "category",
+  "mcc",
 ];
 
 // The operations a table may hold (the server refuses any other).

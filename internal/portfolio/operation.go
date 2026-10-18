@@ -154,6 +154,9 @@ type Operation struct {
 	// category. The engine never reads them.
 	CategoryID   *uuid.UUID
 	Counterparty string
+	// MCC is a card purchase's merchant category code, four digits, empty
+	// when not known (decision Р-58). The engine never reads it.
+	MCC string
 	// MemberID is whose the row is when not the account's owner's: the member
 	// who spent or earned it. The engine never reads it.
 	MemberID *uuid.UUID

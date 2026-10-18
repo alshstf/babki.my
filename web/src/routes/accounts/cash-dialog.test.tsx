@@ -138,3 +138,34 @@ describe("CashDialog: Enter", () => {
     expect(posts()).toBe(0);
   });
 });
+
+// Decision Р-58: a purchase takes its merchant category code — four digits,
+// else nothing is saved; a deposit has no such field.
+describe("CashDialog: merchant code", () => {
+  function openSpending() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <CashDialog open onOpenChange={() => {}} account={account} preset="expense" />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("sends the code of a purchase", async () => {
+    openSpending();
+    typeAmount("250");
+    fireEvent.change(screen.getByLabelText("Код покупки (MCC), необязательно"), { target: { value: "54a1" } });
+    expect(screen.getByText("Код покупки — четыре цифры.")).toBeTruthy();
+    expect(saveButton()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Код покупки (MCC), необязательно"), { target: { value: "5411" } });
+    fireEvent.click(saveButton());
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([r]) => r instanceof Request && r.method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
+    expect(await post.json()).toMatchObject({ type: "withdrawal", mcc: "5411" });
+  });
+
+  it("asks no code of a deposit", () => {
+    open();
+    expect(screen.queryByLabelText("Код покупки (MCC), необязательно")).toBeNull();
+  });
+});

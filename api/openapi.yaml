@@ -3708,8 +3708,8 @@ components:
         net_minor: { type: integer, format: int64 }
     ImportField:
       type: string
-      enum: [date, type, instrument, quantity, price, amount, currency, fee, note, counterparty, category]
-      description: "`counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled."
+      enum: [date, type, instrument, quantity, price, amount, currency, fee, note, counterparty, category, mcc]
+      description: "`counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it."
     ImportMapping:
       type: object
       required: [has_header, columns, types]
@@ -3756,6 +3756,7 @@ components:
         fee_minor: { type: integer, format: int64 }
         note: { type: string }
         counterparty: { type: string }
+        mcc: { type: string, description: "The merchant category code the table gives, or the one the counterparty's earlier rows had (decision Р-58); absent when neither" }
         category_id: { type: string, format: uuid, nullable: true, description: "The family's category the row will be filed under: named by the table, or found by the family's rules (an everyday account only); null when neither" }
     ImportRow:
       type: object
@@ -4436,6 +4437,7 @@ components:
         created_at: { type: string, format: date-time }
         category_id: { type: string, format: uuid, nullable: true, description: "One of the document's categories" }
         counterparty: { type: string }
+        mcc: { type: string, description: "A card purchase's merchant category code; absent when not known" }
         parts:
           type: array
           items: { $ref: "#/components/schemas/OperationPart" }
@@ -6308,6 +6310,7 @@ components:
         categorizable: { type: boolean, description: "Whether the row can take a category: a deposit, withdrawal, interest, fee or tax that is not half of a transfer between the family's accounts" }
         category_id: { type: string, format: uuid, nullable: true, description: "The family's category the row is filed under (GET /api/v1/categories); null when none" }
         counterparty: { type: string, description: "Who the money came from or went to, as typed or as the source named them; empty when unknown" }
+        mcc: { type: string, description: "A card purchase's merchant category code, four digits, as the bank's statement gave it or the family wrote it in (decision Р-58); absent when not known" }
         member_id: { type: string, format: uuid, nullable: true, description: "Whose the row is when not the account owner's: the member who spent or earned it; null for the owner's, or the family's on a shared account" }
         parts:
           type: array
@@ -6458,6 +6461,7 @@ components:
         note: { type: string, maxLength: 1000 }
         category_id: { type: string, format: uuid, nullable: true, description: "A category of the family's, on a row that can take one (Operation.categorizable): an income category on a deposit or interest, an expense one on a withdrawal, fee or tax; not an archived one unless the row already has it. On an update, omitting it takes the row out of its category." }
         counterparty: { type: string, maxLength: 200, description: "Who the money came from or went to. On an update, omitting it clears it." }
+        mcc: { type: string, pattern: "^[0-9]{4}$", description: "A card purchase's merchant category code, four digits (decision Р-58). On an update, omitting it clears it." }
         member_id: { type: string, format: uuid, nullable: true, description: "Whose the row is (Operation.member_id): a member of the family, on a row that can take a category. On an update, omitting it clears it." }
         split_ratio: { type: string, nullable: true, description: "Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow." }
         face_before_minor:

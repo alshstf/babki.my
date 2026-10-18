@@ -299,6 +299,7 @@ func previewToAPI(p Preview) apitypes.ImportPreview {
 				FeeMinor:     op.FeeMinor,
 				Note:         op.Note,
 				Counterparty: op.Counterparty,
+				Mcc:          mccPtr(op.MCC),
 				CategoryId:   nullable.NewNullNullable[uuid.UUID](),
 				InstrumentId: nullable.NewNullNullable[uuid.UUID](),
 				Quantity:     nullable.NewNullNullable[string](),
@@ -321,4 +322,11 @@ func previewToAPI(p Preview) apitypes.ImportPreview {
 		out.Rows = append(out.Rows, item)
 	}
 	return out
+}
+
+func mccPtr(mcc string) *string {
+	if mcc == "" {
+		return nil
+	}
+	return &mcc
 }

@@ -164,6 +164,7 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	}
 	op.Note = r.cell(line, FieldNote)
 	op.Counterparty = clip(strings.TrimSpace(r.cell(line, FieldCounterparty)), operation.MaxCounterpartyRunes)
+	op.MCC = mccOf(r.cell(line, FieldMCC))
 	if c := strings.TrimSpace(r.cell(line, FieldCategory)); c != "" && operation.Categorizable(op) {
 		op.CategoryID = categoryNamed(r.categories, c, operation.CategoryKindOf(op.Type))
 		// A bank's own category the family has no match for («Супермаркеты»)
@@ -449,3 +450,14 @@ func fingerprint(op operation.Operation, seen map[string]int) string {
 
 // typeAllowed reports whether a table may hold op's type.
 func typeAllowed(t operation.Type) bool { return slices.Contains(Types, t) }
+
+// mccOf is a cell's merchant category code: four digits, a shorter code
+// padded with zeros as a spreadsheet loses them («742» is 0742); anything
+// else is no code.
+func mccOf(cell string) string {
+	c := strings.TrimSuffix(strings.TrimSpace(cell), ".0")
+	if c == "" || len(c) > 4 || strings.Trim(c, "0123456789") != "" {
+		return ""
+	}
+	return strings.Repeat("0", 4-len(c)) + c
+}

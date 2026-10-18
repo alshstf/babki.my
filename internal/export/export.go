@@ -618,6 +618,10 @@ func exportOperation(o operation.Operation, usernames map[uuid.UUID]string) apit
 		CategoryId: nullable.NewNullNullable[uuid.UUID](), Counterparty: o.Counterparty,
 		MemberUsername: nullable.NewNullNullable[string](),
 	}
+	if o.MCC != "" {
+		mcc := o.MCC
+		out.Mcc = &mcc
+	}
 	if o.MemberID != nil {
 		if name, ok := usernames[*o.MemberID]; ok {
 			out.MemberUsername = nullable.NewNullableWithValue(name)

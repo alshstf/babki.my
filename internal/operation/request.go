@@ -88,6 +88,10 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 	if req.Counterparty != nil {
 		counterparty = strings.TrimSpace(*req.Counterparty)
 	}
+	mcc := ""
+	if req.Mcc != nil {
+		mcc = strings.TrimSpace(*req.Mcc)
+	}
 
 	return Operation{
 		AccountID:       req.AccountId,
@@ -105,6 +109,7 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		FaceBeforeMinor: faceBefore,
 		CategoryID:      categoryID,
 		Counterparty:    counterparty,
+		MCC:             mcc,
 		MemberID:        memberID,
 	}, nil
 }
