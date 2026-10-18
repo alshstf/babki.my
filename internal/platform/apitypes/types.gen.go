@@ -820,6 +820,27 @@ func (e DepositComparisonInputAudiences) Valid() bool {
 	}
 }
 
+// Defines values for DepositComparisonInputKeyScenario.
+const (
+	DepositComparisonInputKeyScenarioCustom   DepositComparisonInputKeyScenario = "custom"
+	DepositComparisonInputKeyScenarioForecast DepositComparisonInputKeyScenario = "forecast"
+	DepositComparisonInputKeyScenarioToday    DepositComparisonInputKeyScenario = "today"
+)
+
+// Valid indicates whether the value is a known member of the DepositComparisonInputKeyScenario enum.
+func (e DepositComparisonInputKeyScenario) Valid() bool {
+	switch e {
+	case DepositComparisonInputKeyScenarioCustom:
+		return true
+	case DepositComparisonInputKeyScenarioForecast:
+		return true
+	case DepositComparisonInputKeyScenarioToday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DepositComparisonInputPreset.
 const (
 	DepositComparisonInputPresetNo  DepositComparisonInputPreset = "no"
@@ -4470,7 +4491,13 @@ type DepositComparison struct {
 	// EndOn Date YYYY-MM-DD: the horizon's end
 	EndOn string `json:"end_on"`
 
-	// KeyPercent Decimal: the key rate taken all along
+	// Forecast With key_scenario forecast: the Bank of Russia's forecast taken
+	Forecast nullable.Nullable[KeyForecastInfo] `json:"forecast"`
+
+	// KeyPath The scenario's highest key rate in each year of the horizon: the rates the deposits tied to it earn by, and the year's interest free of tax
+	KeyPath []YearKeyRate `json:"key_path"`
+
+	// KeyPercent Decimal: today's key rate, or the one set
 	KeyPercent string `json:"key_percent"`
 
 	// Person Whose tax and insurance, by name
@@ -4538,8 +4565,11 @@ type DepositComparisonInput struct {
 	// Choices Conditions chosen one by one, over the preset
 	Choices *[]DepositConditionChoice `json:"choices,omitempty"`
 
-	// KeyPercent Decimal, 0 to 100: the key rate all along the horizon; today's when absent
+	// KeyPercent Decimal, 0 to 100: the key rate all along the horizon, with key_scenario custom or absent; today's when absent
 	KeyPercent nullable.Nullable[string] `json:"key_percent,omitempty"`
+
+	// KeyScenario today — today's key rate all along; forecast — the Bank of Russia's forecast, the middle of each year's range (today's before it begins); custom — key_percent. Absent: custom with key_percent, else today
+	KeyScenario *DepositComparisonInputKeyScenario `json:"key_scenario,omitempty"`
 
 	// Months The horizon from today, 1 to 60 months
 	Months int `json:"months"`
@@ -4553,6 +4583,9 @@ type DepositComparisonInput struct {
 
 // DepositComparisonInputAudiences defines model for DepositComparisonInput.Audiences.
 type DepositComparisonInputAudiences string
+
+// DepositComparisonInputKeyScenario today — today's key rate all along; forecast — the Bank of Russia's forecast, the middle of each year's range (today's before it begins); custom — key_percent. Absent: custom with key_percent, else today
+type DepositComparisonInputKeyScenario string
 
 // DepositComparisonInputPreset How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent
 type DepositComparisonInputPreset string
@@ -5531,6 +5564,15 @@ type Intermediary struct {
 
 // IntermediaryKind defines model for Intermediary.Kind.
 type IntermediaryKind string
+
+// KeyForecastInfo defines model for KeyForecastInfo.
+type KeyForecastInfo struct {
+	// PublishedOn Date YYYY-MM-DD the forecast was published
+	PublishedOn string `json:"published_on"`
+
+	// Source The Bank of Russia's document
+	Source string `json:"source"`
+}
 
 // Loan defines model for Loan.
 type Loan struct {
@@ -7938,6 +7980,13 @@ type WithheldAbroadState string
 
 // WithheldAbroadUnknownReason Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`.
 type WithheldAbroadUnknownReason string
+
+// YearKeyRate defines model for YearKeyRate.
+type YearKeyRate struct {
+	// Percent Decimal
+	Percent string `json:"percent"`
+	Year    int    `json:"year"`
+}
 
 // Error defines model for Error.
 type Error = ErrorResponse

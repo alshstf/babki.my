@@ -1,0 +1,16 @@
+# The Bank of Russia's medium-term forecast of the average key rate, by year
+# (the base scenario), for the comparison's scenario «по прогнозу ЦБ» (decision
+# Р-57 Б). A new forecast follows the board's meetings of February, April, July
+# and October; the year's range in force is the latest published.
+published: 2026-07-24
+source: https://www.cbr.ru/Content/Document/File/194258/forecast_260724.pdf
+years:
+  - year: 2026
+    from: "14.5"
+    to: "14.6"
+    # From 27 July to the year's end the average is forecast at 13,7–14,0 %:
+    # the year's average holds the months already gone.
+    rest: { since: 2026-07-27, from: "13.7", to: "14.0" }
+  - { year: 2027, from: "10.5", to: "12.5" }
+  - { year: 2028, from: "8.0", to: "9.0" }
+  - { year: 2029, from: "7.5", to: "8.5" }

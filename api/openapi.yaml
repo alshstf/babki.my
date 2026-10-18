@@ -4050,7 +4050,8 @@ components:
         amount_minor: { type: integer, format: int64, description: "The sum in roubles, kopecks: 1 to 1 billion roubles" }
         months: { type: integer, description: "The horizon from today, 1 to 60 months" }
         person_id: { type: string, format: uuid, nullable: true, description: "Whose tax and insurance; the user asking when absent" }
-        key_percent: { type: string, nullable: true, description: "Decimal, 0 to 100: the key rate all along the horizon; today's when absent" }
+        key_percent: { type: string, nullable: true, description: "Decimal, 0 to 100: the key rate all along the horizon, with key_scenario custom or absent; today's when absent" }
+        key_scenario: { type: string, enum: [today, forecast, custom], description: "today — today's key rate all along; forecast — the Bank of Russia's forecast, the middle of each year's range (today's before it begins); custom — key_percent. Absent: custom with key_percent, else today" }
         preset: { type: string, enum: [now, yes, no], description: "How a condition is taken when not chosen one by one: as the family's data tell it today, met, not met; now when absent" }
         choices:
           type: array
@@ -4071,14 +4072,35 @@ components:
         level: { type: integer, nullable: true, description: "With yes, the step of a stepped bonus, from 0; its highest when absent" }
     DepositComparison:
       type: object
-      required: [start_on, end_on, key_percent, person, skipped, rows]
+      required: [start_on, end_on, key_percent, key_path, forecast, person, skipped, rows]
       properties:
         start_on: { type: string, description: "Date YYYY-MM-DD: today, the day the sum is put in" }
         end_on: { type: string, description: "Date YYYY-MM-DD: the horizon's end" }
-        key_percent: { type: string, description: "Decimal: the key rate taken all along" }
+        key_percent: { type: string, description: "Decimal: today's key rate, or the one set" }
+        key_path:
+          type: array
+          items: { $ref: "#/components/schemas/YearKeyRate" }
+          description: "The scenario's highest key rate in each year of the horizon: the rates the deposits tied to it earn by, and the year's interest free of tax"
+        forecast:
+          nullable: true
+          description: "With key_scenario forecast: the Bank of Russia's forecast taken"
+          allOf:
+            - $ref: "#/components/schemas/KeyForecastInfo"
         person: { type: string, description: "Whose tax and insurance, by name" }
         skipped: { type: integer, description: "Variants open to the groups left out: in another currency, a sum the bank has no rate for, a day without a rate" }
         rows: { type: array, items: { $ref: "#/components/schemas/DepositComparisonRow" } }
+    YearKeyRate:
+      type: object
+      required: [year, percent]
+      properties:
+        year: { type: integer }
+        percent: { type: string, description: "Decimal" }
+    KeyForecastInfo:
+      type: object
+      required: [published_on, source]
+      properties:
+        published_on: { type: string, description: "Date YYYY-MM-DD the forecast was published" }
+        source: { type: string, description: "The Bank of Russia's document" }
     DepositComparisonRow:
       type: object
       required: [programme_id, programme_name, bank_id, bank_name, kind, variant_id, variant_name, audience, term, term_unit, payout, prolonged, days, income_minor, yearly_percent, tax_minor, net_minor, insured_minor, conditions, edition_from, sources]

@@ -27,6 +27,7 @@ const spend = {
 
 const result: DepositComparison = {
   start_on: "2026-10-19", end_on: "2027-10-19", key_percent: "14", person: "Мария", skipped: 3,
+  key_path: [{ year: 2026, percent: "14" }, { year: 2027, percent: "14" }], forecast: null,
   rows: [
     {
       programme_id: "novikom-kapital-sezonny", programme_name: "Вклад «Капитал Сезонный»", bank_id: "novikom", bank_name: "Новикомбанк", kind: "deposit",
@@ -84,7 +85,7 @@ describe("DepositsPage", () => {
     expect(norm(rows[0].textContent)).toMatch(/14,88 %.*146 937,00 ₽/);
     expect(norm(rows[1].textContent)).toMatch(/На минимальный остаток · накопительный · условий выполнено: 1 из 2/);
     const first = (await asked())[0];
-    expect(first).toMatchObject({ amount_minor: 100_000_000, months: 12, preset: "now", key_percent: null, choices: [], audiences: [] });
+    expect(first).toMatchObject({ amount_minor: 100_000_000, months: 12, preset: "now", key_percent: null, key_scenario: "today", choices: [], audiences: [] });
     expect(norm(screen.getByTestId("deposits-notes").textContent)).toMatch(/Ключевая ставка 14 % — на весь срок/);
     expect(norm(screen.getByTestId("deposits-notes").textContent)).toMatch(/Не вошли: 3/);
   });

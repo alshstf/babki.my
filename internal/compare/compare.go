@@ -39,10 +39,19 @@ type Choice struct {
 // CondKey names a condition of a programme's variant.
 type CondKey struct{ Programme, Variant, Condition string }
 
-// Scenario is the key rate over the horizon: today's all along, or a rate
-// the family sets.
+// Scenario is the key rate over the horizon: today's all along, a rate the
+// family sets, or the Bank of Russia's forecast — the middle of each year's
+// range.
 type Scenario struct {
-	Custom  bool
+	Custom   bool
+	Forecast bool
+	Percent  decimal.Decimal
+}
+
+// YearKey is the scenario's key rate in a year: the highest of it, for the
+// year's interest free of tax.
+type YearKey struct {
+	Year    int
 	Percent decimal.Decimal
 }
 
@@ -107,6 +116,8 @@ type Row struct {
 type Result struct {
 	Rows       []Row
 	KeyPercent decimal.Decimal
+	KeyPath    []YearKey
+	Forecast   *deposit.KeyForecast
 	Start, End time.Time
 	Person     string
 	Skipped    int
@@ -190,6 +201,33 @@ func (s *Service) Compare(ctx context.Context, spaceID uuid.UUID, ask Ask) (Resu
 	}
 	out.KeyPercent = key
 	keyOn := func(time.Time) (decimal.Decimal, bool, error) { return key, true, nil }
+	if ask.Key.Forecast {
+		f, err := deposit.Forecast()
+		if err != nil {
+			return Result{}, err
+		}
+		out.Forecast = &f
+		keyOn = func(day time.Time) (decimal.Decimal, bool, error) {
+			if k, ok := f.On(day); ok {
+				return k, true, nil
+			}
+			return key, true, nil
+		}
+	}
+	// The year's highest key rate as the scenario has it — its rates change
+	// only at a year's start or, this year, after today.
+	yearKey := func(year int) decimal.Decimal {
+		first, _, _ := keyOn(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC))
+		last, _, _ := keyOn(time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC))
+		k := decimal.Max(first, last)
+		if year == today.Year() {
+			k = decimal.Max(k, key)
+		}
+		return k
+	}
+	for y := today.Year(); y <= out.End.AddDate(0, 0, overshoot).Year(); y++ {
+		out.KeyPath = append(out.KeyPath, YearKey{Year: y, Percent: yearKey(y)})
+	}
 
 	sp, err := s.spaces.SpaceByID(ctx, spaceID)
 	if err != nil {
@@ -205,7 +243,7 @@ func (s *Service) Compare(ctx context.Context, spaceID uuid.UUID, ask Ask) (Resu
 	if err != nil {
 		return Result{}, err
 	}
-	tx, err := s.taxOf(ctx, spaceID, ask.Person, today, key, sp.CostBasisRules())
+	tx, err := s.taxOf(ctx, spaceID, ask.Person, today, yearKey, sp.CostBasisRules())
 	if err != nil {
 		return Result{}, err
 	}
