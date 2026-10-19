@@ -138,3 +138,19 @@ func TestNovikomsFavouriteCategories(t *testing.T) {
 		t.Errorf("period %s – %s, want the list's", from, to)
 	}
 }
+
+// СберСпасибо: a month's three categories of a СберКарта, a code with its
+// leading zero in «Товары для дома».
+func TestSberSpasibo(t *testing.T) {
+	p, ok := ByID("sber-spasibo")
+	if !ok {
+		t.Fatal("no СберСпасибо")
+	}
+	e, ok := p.EditionOn(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC))
+	if !ok || e.Period != PeriodMonth || e.Variants[0].Pick != 3 || len(e.Categories) != 17 {
+		t.Fatalf("edition = %+v", e)
+	}
+	if got := names(e.CategoriesOf("0780")); got != "Товары для дома" {
+		t.Errorf("0780 = %q", got)
+	}
+}
