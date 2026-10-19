@@ -74,13 +74,25 @@ type Variant struct {
 
 // Category is a set of merchant category codes under the bank's name for it:
 // a code «5411» or a range «3000-3303». ByMerchant: the bank names the shops
-// rather than codes, so a purchase cannot be told into it by its code.
+// rather than codes, so a purchase cannot be told into it by its code. All
+// is a category of many: «every» purchase with a code but the edition's
+// exclusions (Т-Банк's «1 % на все покупки»), or every purchase with a code
+// «listed» in the edition's other categories (ВТБ's «Все покупки»).
 type Category struct {
 	ID         string   `yaml:"id"`
 	Name       string   `yaml:"name"`
 	MCC        []string `yaml:"mcc"`
 	ByMerchant bool     `yaml:"by_merchant"`
+	All        AllOf    `yaml:"all"`
 }
+
+// AllOf is what a category of many takes.
+type AllOf string
+
+const (
+	AllEvery  AllOf = "every"
+	AllListed AllOf = "listed"
+)
 
 var catalog struct {
 	once  sync.Once
@@ -123,15 +135,34 @@ func (p Programme) EditionOn(day time.Time) (Edition, bool) {
 	return out, found
 }
 
-// CategoriesOf are the edition's categories a purchase with mcc falls into.
+// CategoriesOf are the edition's categories a purchase with mcc falls into:
+// those naming its code, and those of many that take it — unless the code is
+// excluded.
 func (e Edition) CategoriesOf(mcc string) []Category {
 	var out []Category
+	listed := false
 	for _, c := range e.Categories {
-		if Matches(c.MCC, mcc) {
+		if c.All == "" && Matches(c.MCC, mcc) {
 			out = append(out, c)
+			listed = true
 		}
 	}
-	return out
+	if !span4(mcc) || e.Excludes(mcc) {
+		return out
+	}
+	var many []Category
+	for _, c := range e.Categories {
+		if c.All == AllEvery || (c.All == AllListed && listed) {
+			many = append(many, c)
+		}
+	}
+	return append(many, out...)
+}
+
+// span4 says mcc is four digits.
+func span4(mcc string) bool {
+	_, _, ok := span(mcc)
+	return ok && !strings.Contains(mcc, "-")
 }
 
 // Excludes says a purchase with mcc earns no bonus outside the categories
@@ -265,8 +296,14 @@ func (e Edition) check() error {
 			return fmt.Errorf("category %q: empty or twice", c.ID)
 		}
 		cats[c.ID] = true
-		if len(c.MCC) == 0 && !c.ByMerchant {
-			return fmt.Errorf("category %s: no codes, and not by merchant", c.ID)
+		if c.All != "" && c.All != AllEvery && c.All != AllListed {
+			return fmt.Errorf("category %s: all %q, every or listed", c.ID, c.All)
+		}
+		if len(c.MCC) == 0 && !c.ByMerchant && c.All == "" {
+			return fmt.Errorf("category %s: no codes, and not by merchant nor of many", c.ID)
+		}
+		if c.All != "" && len(c.MCC) > 0 {
+			return fmt.Errorf("category %s: of many, yet with codes of its own", c.ID)
 		}
 		for _, code := range c.MCC {
 			if _, _, ok := span(code); !ok {

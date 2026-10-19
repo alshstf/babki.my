@@ -116,8 +116,11 @@ func TestACardsCashback(t *testing.T) {
 
 	apitest.Decode(t, apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+black+"/cashback/programme", `{"programme_id":"tbank-black","variant_id":"black"}`), &got)
 	spend(black, "2026-10-03", -1_500_000, "5411")
-	apitest.Decode(t, apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+black+"/cashback/picks", `{"on":"2026-10-03","picks":[{"category_id":"supermarkets","percent":"30"}]}`), &got)
-	if got.BonusMinor != 300_000 || !got.Capped || got.Lines[0].BonusMinor != 450_000 {
+	spend(black, "2026-10-04", -100_000, "5999")
+	apitest.Decode(t, apitest.Do(t, c, "PUT", url+"/api/v1/accounts/"+black+"/cashback/picks", `{"on":"2026-10-03","picks":[{"category_id":"supermarkets","percent":"30"},{"category_id":"all","percent":"1"}]}`), &got)
+	// The supermarket's purchase goes where it earns the most; one of no
+	// category of its own — to «1 % на все покупки».
+	if got.BonusMinor != 300_000 || !got.Capped || got.Lines[0].BonusMinor != 450_000 || got.Lines[1].SpentMinor != 100_000 || got.Lines[1].BonusMinor != 1_000 {
 		t.Errorf("Black past its cap = %+v", got)
 	}
 
