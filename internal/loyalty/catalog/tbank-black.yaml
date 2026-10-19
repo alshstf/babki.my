@@ -24,6 +24,7 @@ editions:
       - { id: black-premium, name: Black Premium, pick: 4 }
       - { id: black-private, name: Black Private, pick: 4 }
     categories:
+      - { id: all, name: 1 % на все покупки, all: every }
       - { id: auto-service, name: Автоуслуги, mcc: ["5013", "5531", "5532", "5533", "5571", "7523", "7531", "7534", "7535", "7538", "7542", "7549"] }
       - { id: fuel, name: Заправки, mcc: ["5172", "5541", "5542", "5552", "5983"] }
       - { id: toll-roads, name: Платные дороги, mcc: ["4784"] }

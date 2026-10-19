@@ -33,13 +33,16 @@ func TestTheLoyaltyCatalog(t *testing.T) {
 	if !ok || e.Period != PeriodMonth || len(e.Variants) != 6 {
 		t.Fatalf("edition = %+v", e)
 	}
+	// ВТБ's «Все покупки» are the codes of its table, ЖКХ excluded from them.
+	many := "Все покупки, Все остальные покупки, "
 	for mcc, want := range map[string]string{
-		"5411": "Супермаркеты",
-		"3100": "Авиабилеты",
-		"3600": "Отели",
-		"0742": "Зоотовары",
+		"5411": many + "Супермаркеты",
+		"3100": many + "Авиабилеты",
+		"3600": many + "Отели",
+		"0742": many + "Зоотовары",
 		"4900": "Услуги ЖКХ",
 		"6011": "",
+		"5999": "",
 		"742":  "",
 	} {
 		if got := names(e.CategoriesOf(mcc)); got != want {
@@ -51,11 +54,12 @@ func TestTheLoyaltyCatalog(t *testing.T) {
 	}
 	tb, _ := ByID("tbank-black")
 	te, _ := tb.EditionOn(on)
-	if got := names(te.CategoriesOf("5977")); got != "Косметика, Красота" {
+	// Т-Банк's «1 % на все покупки» is every code.
+	if got := names(te.CategoriesOf("5977")); got != "1 % на все покупки, Косметика, Красота" {
 		t.Errorf("Т-Банк 5977 = %q: a code in two categories is in both", got)
 	}
-	if got := names(te.CategoriesOf("3304")); got != "" {
-		t.Errorf("Т-Банк 3304 = %q: past the range of flights", got)
+	if got := names(te.CategoriesOf("3304")); got != "1 % на все покупки" {
+		t.Errorf("Т-Банк 3304 = %q: past the range of flights, yet a purchase", got)
 	}
 	if v := te.Variants[0]; v.Pick != 4 || v.Cap != 300000 {
 		t.Errorf("Black = %+v", v)
@@ -90,6 +94,8 @@ editions:
 		"a pick without a choice":  strings.Replace(good, "period: month", "period: none", 1),
 		"an unknown period":        strings.Replace(good, "period: month", "period: week", 1),
 		"an unknown bank":          strings.Replace(good, "bank: tbank", "bank: nobank", 1),
+		"all of something else":    strings.Replace(good, `mcc: ["5411", "3000-3301"]`, "all: some", 1),
+		"all with codes":           strings.Replace(good, `mcc: ["5411", "3000-3301"]`, `all: every, mcc: ["5411"]`, 1),
 	} {
 		if _, err := readCatalog(fstest.MapFS{"catalog/x.yaml": {Data: []byte(broken)}}); err == nil {
 			t.Errorf("%s: read", name)
@@ -147,10 +153,25 @@ func TestSberSpasibo(t *testing.T) {
 		t.Fatal("no СберСпасибо")
 	}
 	e, ok := p.EditionOn(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC))
-	if !ok || e.Period != PeriodMonth || e.Variants[0].Pick != 3 || len(e.Categories) != 17 {
+	if !ok || e.Period != PeriodMonth || e.Variants[0].Pick != 3 || len(e.Categories) != 18 {
 		t.Fatalf("edition = %+v", e)
 	}
-	if got := names(e.CategoriesOf("0780")); got != "Товары для дома" {
+	if got := names(e.CategoriesOf("0780")); got != "На все покупки, Товары для дома" {
 		t.Errorf("0780 = %q", got)
+	}
+}
+
+// «На все покупки» at Сбер: a transfer's code is excluded, a supermarket's is in.
+func TestEveryPurchaseButTheExcluded(t *testing.T) {
+	p, _ := ByID("sber-spasibo")
+	e, _ := p.EditionOn(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC))
+	if got := names(e.CategoriesOf("4829")); got != "" {
+		t.Errorf("4829 = %q: a transfer", got)
+	}
+	if got := names(e.CategoriesOf("5411")); got != "На все покупки, Супермаркеты" {
+		t.Errorf("5411 = %q", got)
+	}
+	if got := names(e.CategoriesOf("5999")); got != "На все покупки" {
+		t.Errorf("5999 = %q: a purchase of no category of its own", got)
 	}
 }

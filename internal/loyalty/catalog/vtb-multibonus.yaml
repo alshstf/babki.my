@@ -26,6 +26,8 @@ editions:
       - { id: prime-salary, name: «Прайм+» — зарплатный клиент, pick: 4, of: 10 }
       - { id: prime, name: «Прайм+», pick: 3, of: 10 }
     categories:
+      - { id: all, name: Все покупки, all: listed }
+      - { id: all-other, name: Все остальные покупки, all: listed }
       - { id: supermarkets, name: Супермаркеты, mcc: ["5412", "5462", "5411", "5422", "5441", "5451", "5499", "9751"] }
       - { id: pharmacy, name: Аптеки, mcc: ["5122", "5912"] }
       - { id: health, name: Здоровье, mcc: ["8050", "4119", "5975", "5976", "8011", "8021", "8031", "8041", "8042", "8043", "8044", "8049", "8062", "8071", "8099"] }
