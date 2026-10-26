@@ -1206,6 +1206,7 @@ func (e GoalStatus) Valid() bool {
 
 // Defines values for ImportField.
 const (
+	ImportFieldAccount      ImportField = "account"
 	ImportFieldAmount       ImportField = "amount"
 	ImportFieldCategory     ImportField = "category"
 	ImportFieldCounterparty ImportField = "counterparty"
@@ -1223,6 +1224,8 @@ const (
 // Valid indicates whether the value is a known member of the ImportField enum.
 func (e ImportField) Valid() bool {
 	switch e {
+	case ImportFieldAccount:
+		return true
 	case ImportFieldAmount:
 		return true
 	case ImportFieldCategory:
@@ -1296,29 +1299,36 @@ func (e ImportRowVerdict) Valid() bool {
 
 // Defines values for ImportRowReasonCode.
 const (
-	ImportRowReasonCodeBadCurrency   ImportRowReasonCode = "bad_currency"
-	ImportRowReasonCodeBadDate       ImportRowReasonCode = "bad_date"
-	ImportRowReasonCodeBadNumber     ImportRowReasonCode = "bad_number"
-	ImportRowReasonCodeEngineRefused ImportRowReasonCode = "engine_refused"
-	ImportRowReasonCodeNoDate        ImportRowReasonCode = "no_date"
-	ImportRowReasonCodeNoNumber      ImportRowReasonCode = "no_number"
-	ImportRowReasonCodeNoPaper       ImportRowReasonCode = "no_paper"
-	ImportRowReasonCodeNoType        ImportRowReasonCode = "no_type"
-	ImportRowReasonCodePaired        ImportRowReasonCode = "paired"
-	ImportRowReasonCodePaperNotFound ImportRowReasonCode = "paper_not_found"
-	ImportRowReasonCodeTooLarge      ImportRowReasonCode = "too_large"
-	ImportRowReasonCodeTooPrecise    ImportRowReasonCode = "too_precise"
-	ImportRowReasonCodeTypeNotMapped ImportRowReasonCode = "type_not_mapped"
+	ImportRowReasonCodeAccountNotChosen ImportRowReasonCode = "account_not_chosen"
+	ImportRowReasonCodeBadCurrency      ImportRowReasonCode = "bad_currency"
+	ImportRowReasonCodeBadDate          ImportRowReasonCode = "bad_date"
+	ImportRowReasonCodeBadNumber        ImportRowReasonCode = "bad_number"
+	ImportRowReasonCodeDeclined         ImportRowReasonCode = "declined"
+	ImportRowReasonCodeEngineRefused    ImportRowReasonCode = "engine_refused"
+	ImportRowReasonCodeNoDate           ImportRowReasonCode = "no_date"
+	ImportRowReasonCodeNoNumber         ImportRowReasonCode = "no_number"
+	ImportRowReasonCodeNoPaper          ImportRowReasonCode = "no_paper"
+	ImportRowReasonCodeNoType           ImportRowReasonCode = "no_type"
+	ImportRowReasonCodeOtherAccount     ImportRowReasonCode = "other_account"
+	ImportRowReasonCodePaired           ImportRowReasonCode = "paired"
+	ImportRowReasonCodePaperNotFound    ImportRowReasonCode = "paper_not_found"
+	ImportRowReasonCodeTooLarge         ImportRowReasonCode = "too_large"
+	ImportRowReasonCodeTooPrecise       ImportRowReasonCode = "too_precise"
+	ImportRowReasonCodeTypeNotMapped    ImportRowReasonCode = "type_not_mapped"
 )
 
 // Valid indicates whether the value is a known member of the ImportRowReasonCode enum.
 func (e ImportRowReasonCode) Valid() bool {
 	switch e {
+	case ImportRowReasonCodeAccountNotChosen:
+		return true
 	case ImportRowReasonCodeBadCurrency:
 		return true
 	case ImportRowReasonCodeBadDate:
 		return true
 	case ImportRowReasonCodeBadNumber:
+		return true
+	case ImportRowReasonCodeDeclined:
 		return true
 	case ImportRowReasonCodeEngineRefused:
 		return true
@@ -1329,6 +1339,8 @@ func (e ImportRowReasonCode) Valid() bool {
 	case ImportRowReasonCodeNoPaper:
 		return true
 	case ImportRowReasonCodeNoType:
+		return true
+	case ImportRowReasonCodeOtherAccount:
 		return true
 	case ImportRowReasonCodePaired:
 		return true
@@ -1350,6 +1362,7 @@ const (
 	Ghostfolio  ImportTracker = "ghostfolio"
 	Intelinvest ImportTracker = "intelinvest"
 	Snowball    ImportTracker = "snowball"
+	Tbank       ImportTracker = "tbank"
 )
 
 // Valid indicates whether the value is a known member of the ImportTracker enum.
@@ -1360,6 +1373,8 @@ func (e ImportTracker) Valid() bool {
 	case Intelinvest:
 		return true
 	case Snowball:
+		return true
+	case Tbank:
 		return true
 	default:
 		return false
@@ -5352,14 +5367,26 @@ type ImportAddedPaper struct {
 	Ticker       string             `json:"ticker"`
 }
 
-// ImportField `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it.
+// ImportField `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it. `account`: which of the file's accounts the row is — a bank's statement may hold a card and a savings account in one file; see `ImportMapping.account`.
 type ImportField string
+
+// ImportFileAccount defines model for ImportFileAccount.
+type ImportFileAccount struct {
+	// Name The account as the file's account column names it
+	Name string `json:"name"`
+
+	// Rows How many of the file's rows are this account's
+	Rows int `json:"rows"`
+}
 
 // ImportFileFormat How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
 type ImportFileFormat string
 
 // ImportMapping defines model for ImportMapping.
 type ImportMapping struct {
+	// Account The file's account to load, as the `account` column names it (one of `ImportPreview.file_accounts`); rows of the file's other accounts are not loaded (`other_account`). Absent while the file holds one account; with several and none chosen no row is loaded (`account_not_chosen`).
+	Account *string `json:"account,omitempty"`
+
 	// Columns Field name → 0-based column index. A field with no column is absent. `instrument` takes an ISIN or a ticker; a trade with no `amount` has it worked out from quantity × price.
 	Columns map[string]int `json:"columns"`
 
@@ -5379,6 +5406,9 @@ type ImportPapersResult struct {
 
 // ImportPreview defines model for ImportPreview.
 type ImportPreview struct {
+	// FileAccounts The accounts the file's account column names, in the order the file first mentions them; empty when no column is mapped to `account`. With more than one, `mapping.account` says which to load.
+	FileAccounts []ImportFileAccount `json:"file_accounts"`
+
 	// Header The header's cells; empty when the table has none
 	Header  []string                         `json:"header"`
 	Mapping ImportMapping                    `json:"mapping"`
@@ -5414,7 +5444,7 @@ type ImportRow struct {
 // ImportRowVerdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason.code` is `engine_refused` and `reason.value` the journal's own words.
 type ImportRowVerdict string
 
-// ImportRowReason Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line.
+// ImportRowReason Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file.
 type ImportRowReason struct {
 	Code  ImportRowReasonCode            `json:"code"`
 	Field nullable.Nullable[ImportField] `json:"field"`
@@ -5443,7 +5473,7 @@ type ImportTableResult struct {
 	Rows   []ImportRow                    `json:"rows"`
 }
 
-// ImportTracker Another program whose export the file was recognized as, by its own columns: its rows are rearranged into this table's columns (date, type, paper, quantity, price, amount, currency, fee, note), each keeping its line, the type column keeping the program's own words.
+// ImportTracker Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`).
 type ImportTracker string
 
 // ImportedOperation defines model for ImportedOperation.

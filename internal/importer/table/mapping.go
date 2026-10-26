@@ -28,12 +28,16 @@ const (
 	// FieldMCC is a card purchase's merchant category code (decision Р-58):
 	// Т-Банк's statement has the column.
 	FieldMCC Field = "mcc"
+	// FieldAccount is which of the file's accounts a row belongs to: one
+	// statement may hold a card and a savings account, and a journal account
+	// takes only one of them (Mapping.Account).
+	FieldAccount Field = "account"
 )
 
 // Fields lists every field, in the order a person reads a trade.
 var Fields = []Field{
 	FieldDate, FieldType, FieldInstrument, FieldQuantity, FieldPrice,
-	FieldAmount, FieldCurrency, FieldFee, FieldNote, FieldCounterparty, FieldCategory, FieldMCC,
+	FieldAmount, FieldCurrency, FieldFee, FieldNote, FieldCounterparty, FieldCategory, FieldMCC, FieldAccount,
 }
 
 // Types are the operations a table may hold: what a person records by hand,
@@ -52,13 +56,19 @@ type Mapping struct {
 	HasHeader bool
 	Columns   map[Field]int
 	Types     map[string]operation.Type
+	// Account is the file's account to load, as the account column names it;
+	// rows of the file's other accounts are shown and not loaded. Empty when
+	// the file holds one account.
+	Account string
 }
 
 // headerWords are the words a header cell is recognized by, in Russian and
 // English exports alike. The first field whose word a cell contains wins, so
 // the more specific words come first — and the type last: a bank writes
 // «Дата операции», «Сумма операции», «Валюта операции», «Описание операции»,
-// and «операц» alone says only that nothing else fitted.
+// and «операц» alone says only that nothing else fitted. A cell whose field an
+// earlier column took stays unmapped rather than fall to a vaguer one: Т-Банк's
+// «Сумма операции с округлением» is a second amount, not the type.
 var headerWords = []struct {
 	field Field
 	words []string
@@ -75,6 +85,8 @@ var headerWords = []struct {
 	{FieldAmount, []string{"сумма", "объем", "объём", "amount", "total", "value"}},
 	{FieldCurrency, []string{"валют", "currency", "ccy"}},
 	{FieldNote, []string{"коммент", "примеч", "описан", "note", "description", "comment"}},
+	// After the amount and the currency: «Сумма в валюте счёта» is an amount.
+	{FieldAccount, []string{"счёт", "счет", "account"}},
 	{FieldType, []string{"тип", "операц", "вид", "направлен", "type", "action", "side"}},
 }
 
@@ -114,13 +126,13 @@ func Guess(t Table) Mapping {
 			isin = i
 		}
 		for _, hw := range headerWords {
-			if _, taken := m.Columns[hw.field]; taken {
+			if !slices.ContainsFunc(hw.words, func(w string) bool { return strings.Contains(h, w) }) {
 				continue
 			}
-			if slices.ContainsFunc(hw.words, func(w string) bool { return strings.Contains(h, w) }) {
+			if _, taken := m.Columns[hw.field]; !taken {
 				m.Columns[hw.field] = i
-				break
 			}
+			break
 		}
 	}
 	// An ISIN names a paper more surely than a ticker does.

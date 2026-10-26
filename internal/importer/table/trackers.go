@@ -37,13 +37,16 @@ const (
 	colNote
 )
 
-// recognize rearranges a tracker's export; any other table is left as it is.
+// recognize rearranges a tracker's export or a bank's statement this package
+// knows; any other table is left as it is.
 func recognize(t Table) Table {
 	if len(t.Rows) == 0 {
 		return t
 	}
 	header := newHeaderIndex(t.Rows[0].Cells)
 	switch {
+	case isTBank(header):
+		return fromTBank(t, header)
 	case isIntelinvest(t):
 		return fromIntelinvest(t)
 	case header.has("event", "date", "symbol", "quantity", "feetax"):
