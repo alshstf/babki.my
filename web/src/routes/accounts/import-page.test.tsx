@@ -12,8 +12,54 @@ import {
 import "@/i18n";
 import { TableImport } from "./import-page";
 
+// jsdom lacks scrollIntoView, which Radix Select calls on open.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 const sent = vi.hoisted(() => [] as { method: string; path: string; body: unknown }[]);
-const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false, statement: false, intelinvest: false }));
+const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false, statement: false, intelinvest: false, tbank: false }));
+
+// Т-Банк's statement of two accounts as the server reads it: nothing loads
+// until the person says which of the file's accounts this one is.
+const tbank = (account?: string) => ({
+  mapping: {
+    has_header: true,
+    columns: { date: 0, amount: 1, currency: 2, category: 3, counterparty: 4, note: 5, mcc: 6, account: 7 },
+    types: {},
+    ...(account ? { account } : {}),
+  },
+  header: ["Дата", "Сумма", "Валюта", "Категория", "Контрагент", "Примечание", "MCC", "Счёт"],
+  tracker: "tbank",
+  file_accounts: [
+    { name: "Карта", rows: 1 },
+    { name: "Копилка", rows: 1 },
+  ],
+  rows: [
+    {
+      line: 2,
+      cells: ["03.10.2026 10:15:00", "-1100,00", "RUB", "Сервис", "Облако", "12,50 USD", "5734", "Карта"],
+      verdict: account === "Карта" ? "new" : "unparsed",
+      reason: account === "Карта" ? null : account
+        ? { code: "other_account", field: "account", value: "Карта" }
+        : { code: "account_not_chosen", field: "account", value: "Карта" },
+      operation: account === "Карта"
+        ? {
+            type: "withdrawal", occurred_on: "2026-10-03", instrument_id: null, quantity: null, price: null,
+            amount_minor: -110_000, currency: "RUB", fee_minor: 0, note: "12,50 USD", counterparty: "Облако",
+            category_id: null, mcc: "5734",
+          }
+        : null,
+    },
+    {
+      line: 3,
+      cells: ["05.10.2026 18:00:00", "-300,00", "RUB", "Связь", "Мой телефон", "", "", "Карта"],
+      verdict: "unparsed",
+      reason: { code: "declined", field: null, value: "Ошибка" },
+      operation: null,
+    },
+  ],
+});
 
 // Intelinvest's export as the server rearranges it: a trade, and the money it
 // moved as a row of its own, shown and not imported.
@@ -21,6 +67,7 @@ const intelinvest = () => ({
   mapping: { has_header: true, columns: { date: 0, type: 1, instrument: 2, quantity: 3, price: 4, amount: 5 }, types: { stockbuy: "buy" } },
   header: ["Дата", "Тип", "Бумага", "Количество", "Цена", "Сумма"],
   tracker: "intelinvest",
+  file_accounts: [],
   rows: [
     {
       line: 7,
@@ -47,6 +94,7 @@ const intelinvest = () => ({
 const statement = () => ({
   mapping: { has_header: true, columns: { date: 0, amount: 1, note: 2, category: 3 }, types: {} },
   header: ["Дата операции", "Сумма операции", "Описание", "Категория"],
+  file_accounts: [],
   rows: [
     {
       line: 2,
@@ -69,6 +117,7 @@ const preview = (hasHeader: boolean) => ({
     types: { пополнение: "deposit" },
   },
   header: hasHeader ? ["Дата", "Тип", "Сумма"] : [],
+  file_accounts: [],
   rows: [
     {
       line: 2,
@@ -108,6 +157,9 @@ fetchMock.mockImplementation(async (input: Request) => {
   }
   if (path.endsWith("/imports/preview") && state.statement) return json(statement());
   if (path.endsWith("/imports/preview") && state.intelinvest) return json(intelinvest());
+  if (path.endsWith("/imports/preview") && state.tbank) {
+    return json(tbank((body as { mapping?: { account?: string } }).mapping?.account));
+  }
   if (path.endsWith("/imports/preview")) {
     const mapping = (body as { mapping?: { has_header: boolean } }).mapping;
     const answer = preview(mapping ? mapping.has_header : true);
@@ -160,6 +212,7 @@ afterEach(() => {
   state.missing = false;
   state.statement = false;
   state.intelinvest = false;
+  state.tbank = false;
 });
 
 function wrap(ui: ReactElement) {
@@ -249,6 +302,53 @@ describe("importing a table", () => {
     expect(await screen.findByTestId("import-by-sign")).toBeTruthy();
     expect(await screen.findByTestId("import-row-category")).toHaveTextContent("Продукты");
     expect(screen.getByTestId("import-row-2").textContent).toContain("вывод");
+  });
+
+  it("asks which of a statement's accounts loads here, and loads none until told", async () => {
+    state.tbank = true;
+    wrap(<TableImport accountId="acc-1" />);
+    const file = new File(["\"Имя счёта\";\"Дата операции\"\n"], "Operations.csv");
+    fireEvent.change(await screen.findByLabelText("Файл"), { target: { files: [file] } });
+
+    expect((await screen.findByTestId("import-tracker")).textContent).toContain("выписка Т-Банка");
+    expect(screen.getByTestId("import-row-2").textContent).toContain("В файле несколько счетов — выберите выше");
+    expect(screen.getByTestId("import-row-3").textContent).toContain("Банк не провёл эту операцию (статус «Ошибка»)");
+    expect(screen.getByRole("button", { name: "Импортировать (0)" })).toBeDisabled();
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Какой счёт из файла загрузить сюда" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Карта — строк: 1" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Импортировать (1)" })).toBeEnabled());
+    const asked = sent.filter((s) => s.path.endsWith("/imports/preview"));
+    expect(asked[asked.length - 1].body).toMatchObject({ mapping: { account: "Карта" } });
+  });
+
+  it("loads the statement's account the last import of this account loaded", async () => {
+    state.tbank = true;
+    state.imports = [
+      {
+        id: "imp-0",
+        account_id: "acc-1",
+        file_name: "Operations.csv",
+        mapping: { ...tbank().mapping, account: "Копилка" },
+        rows_written: 1,
+        rows_duplicate: 0,
+        rows_unparsed: 1,
+        rows_refused: 0,
+        created_at: "2026-09-01T10:00:00Z",
+        rolled_back_at: null,
+        operations_left: 1,
+      },
+    ];
+    wrap(<TableImport accountId="acc-1" />);
+    await screen.findByText("Импорты этого счёта");
+    fireEvent.change(screen.getByLabelText("Файл"), { target: { files: [new File(["x"], "Operations.csv")] } });
+
+    await waitFor(() => expect(sent.filter((s) => s.path.endsWith("/imports/preview"))).toHaveLength(2));
+    expect(sent.filter((s) => s.path.endsWith("/imports/preview"))[1].body).toMatchObject({
+      mapping: { account: "Копилка" },
+    });
+    expect(await screen.findByTestId("import-row-2")).toHaveTextContent("Строка другого счёта из файла — «Карта»");
   });
 
   it("files the papers the catalog lacks from the exchange and reads the rows again", async () => {

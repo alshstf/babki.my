@@ -44,6 +44,9 @@ type Line struct {
 	// an export writes that money as a row of its own: the operation moves
 	// it in the journal, so the row is shown and not imported.
 	PairedWith int
+	// Declined is a bank's status of an operation that did not go through
+	// («Ошибка» in Т-Банк's statement): the row is shown and not imported.
+	Declined string
 }
 
 // Parse reads CSV text: the delimiter is whichever of ';', ',' and a tab

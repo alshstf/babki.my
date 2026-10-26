@@ -35,6 +35,7 @@ type storedMapping struct {
 	HasHeader bool                      `json:"has_header"`
 	Columns   map[Field]int             `json:"columns"`
 	Types     map[string]operation.Type `json:"types"`
+	Account   string                    `json:"account,omitempty"`
 }
 
 const importCols = `i.id, i.account_id, i.file_name, i.mapping, i.rows_written, i.rows_duplicate,

@@ -3,6 +3,7 @@ package table
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -240,6 +241,9 @@ func mappingFromAPI(in apitypes.ImportMapping) Mapping {
 	for cell, typ := range in.Types {
 		m.Types[typeKey(cell)] = operation.Type(typ)
 	}
+	if in.Account != nil {
+		m.Account = strings.TrimSpace(*in.Account)
+	}
 	return m
 }
 
@@ -255,6 +259,9 @@ func mappingToAPI(m Mapping) apitypes.ImportMapping {
 	for cell, typ := range m.Types {
 		out.Types[cell] = apitypes.OperationType(typ)
 	}
+	if m.Account != "" {
+		out.Account = &m.Account
+	}
 	return out
 }
 
@@ -264,6 +271,11 @@ func previewToAPI(p Preview) apitypes.ImportPreview {
 		Header:  p.Header,
 		Rows:    make([]apitypes.ImportRow, 0, len(p.Rows)),
 		Tracker: nullable.NewNullNullable[apitypes.ImportTracker](),
+
+		FileAccounts: make([]apitypes.ImportFileAccount, 0, len(p.FileAccounts)),
+	}
+	for _, a := range p.FileAccounts {
+		out.FileAccounts = append(out.FileAccounts, apitypes.ImportFileAccount{Name: a.Name, Rows: a.Rows})
 	}
 	if p.Tracker != "" {
 		out.Tracker = nullable.NewNullableWithValue(apitypes.ImportTracker(p.Tracker))

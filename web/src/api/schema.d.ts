@@ -2752,10 +2752,10 @@ export interface components {
             net_minor: number;
         };
         /**
-         * @description `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it.
+         * @description `counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it. `account`: which of the file's accounts the row is — a bank's statement may hold a card and a savings account in one file; see `ImportMapping.account`.
          * @enum {string}
          */
-        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note" | "counterparty" | "category" | "mcc";
+        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note" | "counterparty" | "category" | "mcc" | "account";
         ImportMapping: {
             /** @description Whether the table's first line is a header rather than an operation */
             has_header: boolean;
@@ -2767,6 +2767,8 @@ export interface components {
             types: {
                 [key: string]: components["schemas"]["OperationType"];
             };
+            /** @description The file's account to load, as the `account` column names it (one of `ImportPreview.file_accounts`); rows of the file's other accounts are not loaded (`other_account`). Absent while the file holds one account; with several and none chosen no row is loaded (`account_not_chosen`). */
+            account?: string;
         };
         ImportPreviewRequest: {
             /** @description The file: for `text`, a CSV (';', ',' or a tab between cells) or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows. */
@@ -2781,10 +2783,10 @@ export interface components {
          */
         ImportFileFormat: "text" | "xlsx";
         /**
-         * @description Another program whose export the file was recognized as, by its own columns: its rows are rearranged into this table's columns (date, type, paper, quantity, price, amount, currency, fee, note), each keeping its line, the type column keeping the program's own words.
+         * @description Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`).
          * @enum {string}
          */
-        ImportTracker: "intelinvest" | "snowball" | "ghostfolio";
+        ImportTracker: "intelinvest" | "snowball" | "ghostfolio" | "tbank";
         ImportedOperation: {
             type: components["schemas"]["OperationType"];
             /** @description Date YYYY-MM-DD */
@@ -2824,14 +2826,22 @@ export interface components {
             /** @description What the row reads as; null when it is unparsed */
             operation?: components["schemas"]["ImportedOperation"] | null;
         };
-        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line. */
+        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file. */
         ImportRowReason: {
             /** @enum {string} */
-            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused" | "paired";
+            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused" | "paired" | "declined" | "other_account" | "account_not_chosen";
             field: components["schemas"]["ImportField"] | null;
             value: string;
         };
+        ImportFileAccount: {
+            /** @description The account as the file's account column names it */
+            name: string;
+            /** @description How many of the file's rows are this account's */
+            rows: number;
+        };
         ImportPreview: {
+            /** @description The accounts the file's account column names, in the order the file first mentions them; empty when no column is mapped to `account`. With more than one, `mapping.account` says which to load. */
+            file_accounts: components["schemas"]["ImportFileAccount"][];
             mapping: components["schemas"]["ImportMapping"];
             /** @description The header's cells; empty when the table has none */
             header: string[];

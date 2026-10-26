@@ -40,6 +40,40 @@ type Preview struct {
 	Rows    []Row
 	// Tracker is the program whose export the file was recognized as.
 	Tracker Tracker
+	// FileAccounts are the accounts the file's account column names, in the
+	// order the file first mentions them; empty when the column is not mapped.
+	FileAccounts []FileAccount
+}
+
+// FileAccount is one of the accounts a file holds and how many of its rows
+// are that account's.
+type FileAccount struct {
+	Name string
+	Rows int
+}
+
+// fileAccounts lists the accounts the account column names.
+func fileAccounts(t Table, m Mapping) []FileAccount {
+	col, ok := m.Columns[FieldAccount]
+	if !ok {
+		return nil
+	}
+	var out []FileAccount
+	at := map[string]int{}
+	for _, line := range dataRows(t, m) {
+		name := strings.TrimSpace(cellAt(line.Cells, col))
+		if name == "" {
+			continue
+		}
+		i, seen := at[name]
+		if !seen {
+			i = len(out)
+			at[name] = i
+			out = append(out, FileAccount{Name: name})
+		}
+		out[i].Rows++
+	}
+	return out
 }
 
 type accounts interface {
@@ -124,7 +158,7 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 		}
 	}
 
-	out := Preview{Mapping: m, Tracker: t.Tracker}
+	out := Preview{Mapping: m, Tracker: t.Tracker, FileAccounts: fileAccounts(t, m)}
 	if m.HasHeader && len(t.Rows) > 0 {
 		out.Header = t.Rows[0].Cells
 	}
@@ -144,7 +178,7 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 	}
 	r := &reader{
 		accountID: acc.ID, currency: acc.Currency, mapping: m, papers: s.papers,
-		known: map[string]*instrument.Instrument{}, categories: cats,
+		known: map[string]*instrument.Instrument{}, categories: cats, accounts: len(out.FileAccounts),
 	}
 	seen := map[string]int{}
 	var fresh []operation.Operation

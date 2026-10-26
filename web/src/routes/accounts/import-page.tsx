@@ -64,6 +64,7 @@ const FIELDS: ImportField[] = [
   "counterparty",
   "category",
   "mcc",
+  "account",
 ];
 
 // The operations a table may hold (the server refuses any other).
@@ -118,6 +119,16 @@ function rememberedTypes(guessed: ImportPreview, last: ImportMapping | undefined
   return added ? { ...guessed.mapping, types } : null;
 }
 
+// The guessed mapping with the file's account the account's last import
+// loaded, when this file holds it too — a bank's statement of several
+// accounts loads the same one into this account each month.
+function rememberedAccount(guessed: ImportPreview, last: ImportMapping | undefined): ImportMapping | null {
+  const name = last?.account;
+  if (!name || guessed.mapping.account || guessed.file_accounts.length < 2) return null;
+  if (!guessed.file_accounts.some((a) => a.name === name)) return null;
+  return { ...guessed.mapping, account: name };
+}
+
 export function ImportPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId/import" });
   return <TableImport accountId={accountId} />;
@@ -157,7 +168,12 @@ export function TableImport({ accountId }: { accountId: string }) {
         setCurrent(guessed);
         // What the type column's words meant in this account's last import
         // is what they mean now.
-        const remembered = rememberedTypes(guessed, imports.data?.[0]?.mapping);
+        const last = imports.data?.[0]?.mapping;
+        const withTypes = rememberedTypes(guessed, last);
+        const remembered = rememberedAccount(
+          withTypes ? { ...guessed, mapping: withTypes } : guessed,
+          last,
+        ) ?? withTypes;
         if (remembered) ask(read, remembered);
       },
     });
@@ -231,6 +247,10 @@ export function TableImport({ accountId }: { accountId: string }) {
         <Alert data-testid="import-tracker">
           <AlertDescription>{t(`tableImport.tracker.${current.tracker}`)}</AlertDescription>
         </Alert>
+      )}
+
+      {current && current.file_accounts.length > 1 && (
+        <FileAccountPicker preview={current} onChange={remap} disabled={preview.isPending} />
       )}
 
       {current && (
@@ -345,6 +365,47 @@ function MissingPapers({ rows, onAdded }: { rows: ImportRow[]; onAdded: () => vo
         )}
       </AlertDescription>
     </Alert>
+  );
+}
+
+// Which of the file's accounts this account loads: a bank's statement may
+// hold a card and a savings account in one file, and nothing loads until the
+// person says which one this is.
+function FileAccountPicker({
+  preview,
+  onChange,
+  disabled,
+}: {
+  preview: ImportPreview;
+  onChange: (mapping: ImportMapping) => void;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const { mapping } = preview;
+  const choose = (value: string) => {
+    const next = { ...mapping };
+    if (value === NONE) delete next.account;
+    else next.account = value;
+    onChange(next);
+  };
+  return (
+    <div className="grid max-w-md gap-1" data-testid="import-file-account">
+      <Label>{t("tableImport.fileAccount")}</Label>
+      <Select value={mapping.account ?? NONE} onValueChange={choose} disabled={disabled}>
+        <SelectTrigger aria-label={t("tableImport.fileAccount")}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE}>{t("tableImport.fileAccountNone")}</SelectItem>
+          {preview.file_accounts.map((a) => (
+            <SelectItem key={a.name} value={a.name}>
+              {t("tableImport.fileAccountOption", { name: a.name, count: a.rows })}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">{t("tableImport.fileAccountHint")}</p>
+    </div>
   );
 }
 

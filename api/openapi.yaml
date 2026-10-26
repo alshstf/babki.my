@@ -3793,8 +3793,8 @@ components:
         net_minor: { type: integer, format: int64 }
     ImportField:
       type: string
-      enum: [date, type, instrument, quantity, price, amount, currency, fee, note, counterparty, category, mcc]
-      description: "`counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it."
+      enum: [date, type, instrument, quantity, price, amount, currency, fee, note, counterparty, category, mcc, account]
+      description: "`counterparty`: who the money went to or came from. `category`: a category of the family's by its name, or «Родитель / Дочерняя» as the export writes it; a name that fits none, or more than one, leaves the row unfiled. `mcc`: a card purchase's merchant category code, four digits (decision Р-58); a cell that is not one leaves the row without it. `account`: which of the file's accounts the row is — a bank's statement may hold a card and a savings account in one file; see `ImportMapping.account`."
     ImportMapping:
       type: object
       required: [has_header, columns, types]
@@ -3808,6 +3808,9 @@ components:
           type: object
           description: "Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization. With no type column — a bank's statement has none — the amount's sign says: minus is a withdrawal, plus a deposit, and a zero amount is not read."
           additionalProperties: { $ref: "#/components/schemas/OperationType" }
+        account:
+          type: string
+          description: "The file's account to load, as the `account` column names it (one of `ImportPreview.file_accounts`); rows of the file's other accounts are not loaded (`other_account`). Absent while the file holds one account; with several and none chosen no row is loaded (`account_not_chosen`)."
     ImportPreviewRequest:
       type: object
       required: [content]
@@ -3822,11 +3825,15 @@ components:
       description: How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
     ImportTracker:
       type: string
-      enum: [intelinvest, snowball, ghostfolio]
+      enum: [intelinvest, snowball, ghostfolio, tbank]
       description: >-
-        Another program whose export the file was recognized as, by its own columns: its rows are
-        rearranged into this table's columns (date, type, paper, quantity, price, amount, currency,
-        fee, note), each keeping its line, the type column keeping the program's own words.
+        Another program's export or a bank's statement the file was recognized as, by its own
+        columns: its rows are rearranged into this table's columns, each keeping its line — a
+        tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type
+        column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or
+        Excel) into date, amount and currency of the account, category (the person's own over the
+        bank's), counterparty, note, MCC and the file's account, with no type column. An operation
+        the bank did not carry out is shown and not loaded (`declined`).
     ImportedOperation:
       type: object
       required: [type, occurred_on, amount_minor, currency, fee_minor, note, counterparty, category_id]
@@ -3865,20 +3872,30 @@ components:
     ImportRowReason:
       type: object
       required: [code, field, value]
-      description: "Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line."
+      description: "Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file."
       properties:
         code:
           type: string
-          enum: [no_type, type_not_mapped, no_date, bad_date, no_paper, paper_not_found, bad_currency, no_number, bad_number, too_precise, too_large, engine_refused, paired]
+          enum: [no_type, type_not_mapped, no_date, bad_date, no_paper, paper_not_found, bad_currency, no_number, bad_number, too_precise, too_large, engine_refused, paired, declined, other_account, account_not_chosen]
         field:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/ImportField"
         value: { type: string }
+    ImportFileAccount:
+      type: object
+      required: [name, rows]
+      properties:
+        name: { type: string, description: "The account as the file's account column names it" }
+        rows: { type: integer, description: "How many of the file's rows are this account's" }
     ImportPreview:
       type: object
-      required: [mapping, header, rows, tracker]
+      required: [mapping, header, rows, tracker, file_accounts]
       properties:
+        file_accounts:
+          type: array
+          items: { $ref: "#/components/schemas/ImportFileAccount" }
+          description: "The accounts the file's account column names, in the order the file first mentions them; empty when no column is mapped to `account`. With more than one, `mapping.account` says which to load."
         mapping: { $ref: "#/components/schemas/ImportMapping" }
         header: { type: array, items: { type: string }, description: "The header's cells; empty when the table has none" }
         rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }

@@ -53,6 +53,15 @@ const (
 	ReasonPaired Reason = "paired"
 	// ReasonEngineRefused is the journal's refusal; Value carries its words.
 	ReasonEngineRefused Reason = "engine_refused"
+	// ReasonDeclined is an operation the bank did not carry out; Value is the
+	// bank's status.
+	ReasonDeclined Reason = "declined"
+	// ReasonOtherAccount is a row of another of the file's accounts than the
+	// one being loaded; Value is its account.
+	ReasonOtherAccount Reason = "other_account"
+	// ReasonAccountNotChosen is a row of a file holding several accounts
+	// while none is chosen to load.
+	ReasonAccountNotChosen Reason = "account_not_chosen"
 )
 
 // Unreadable is a row this package cannot turn into an operation: why, which
@@ -83,6 +92,9 @@ type reader struct {
 	// categories are the family's, for a category column; filing by rules
 	// happens after reading (Service.file).
 	categories []category.Category
+	// accounts is how many accounts the file's account column names; with
+	// more than one, a row is read only once the mapping says which to load.
+	accounts int
 }
 
 func (r *reader) cell(line Line, f Field) string {
@@ -98,6 +110,18 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	op := operation.Operation{AccountID: r.accountID, Source: Source}
 	if line.PairedWith != 0 {
 		return op, unreadable(ReasonPaired, "", strconv.Itoa(line.PairedWith))
+	}
+	if _, mapped := r.mapping.Columns[FieldAccount]; mapped {
+		acct := strings.TrimSpace(r.cell(line, FieldAccount))
+		switch {
+		case r.mapping.Account != "" && acct != r.mapping.Account:
+			return op, unreadable(ReasonOtherAccount, FieldAccount, acct)
+		case r.mapping.Account == "" && r.accounts > 1:
+			return op, unreadable(ReasonAccountNotChosen, FieldAccount, acct)
+		}
+	}
+	if line.Declined != "" {
+		return op, unreadable(ReasonDeclined, "", line.Declined)
 	}
 
 	typ, err := r.rowType(line)
