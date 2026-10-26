@@ -2777,16 +2777,16 @@ export interface components {
             mapping?: components["schemas"]["ImportMapping"];
         };
         /**
-         * @description How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
+         * @description How `content` carries the file — as text, as an Excel workbook (.xlsx) in base64, or as a bank's statement in PDF in base64 (Сбер, Газпромбанк, Альфа-Банк; see ImportTracker).
          * @default text
          * @enum {string}
          */
-        ImportFileFormat: "text" | "xlsx";
+        ImportFileFormat: "text" | "xlsx" | "pdf";
         /**
-         * @description Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`). `ofx`: a statement in OFX (version 2 as XML, version 1 as SGML), each account's transactions under its number, the day the person paid when the bank gives it, the name as counterparty, MEMO as a note — as Т-Банк's category in its own OFX — and SIC as the MCC.
+         * @description Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`). `ofx`: a statement in OFX (version 2 as XML, version 1 as SGML), each account's transactions under its number, the day the person paid when the bank gives it, the name as counterparty, MEMO as a note — as Т-Банк's category in its own OFX — and SIC as the MCC. `sber`, `gazprombank`, `alfa`: the bank's statement in PDF, read by its layout — Сбер's of a payment account, of a credit card's account and its monthly report (the bank's category, the description as counterparty, an amount in another currency in the note); Газпромбанк's of a card and of a card's account, debit or credit (the device as counterparty, the MCC Яндекс's devices carry; of a credit card's «Погашение …» the debt's part is `internal`, the interest's the bank's fee); Альфа-Банк's of an account. A PDF of no statement known here is unreadable.
          * @enum {string}
          */
-        ImportTracker: "intelinvest" | "snowball" | "ghostfolio" | "tbank" | "ofx";
+        ImportTracker: "intelinvest" | "snowball" | "ghostfolio" | "tbank" | "ofx" | "sber" | "gazprombank" | "alfa";
         ImportedOperation: {
             type: components["schemas"]["OperationType"];
             /** @description Date YYYY-MM-DD */
@@ -2826,10 +2826,10 @@ export interface components {
             /** @description What the row reads as; null when it is unparsed */
             operation?: components["schemas"]["ImportedOperation"] | null;
         };
-        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file. */
+        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file; for internal (the bank moving money within the account, as Газпромбанк applies money already on a credit card to its debt — the balance does not change), the bank's words. */
         ImportRowReason: {
             /** @enum {string} */
-            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused" | "paired" | "declined" | "other_account" | "account_not_chosen";
+            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused" | "paired" | "declined" | "other_account" | "account_not_chosen" | "internal";
             field: components["schemas"]["ImportField"] | null;
             value: string;
         };

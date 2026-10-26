@@ -62,6 +62,9 @@ const (
 	// ReasonAccountNotChosen is a row of a file holding several accounts
 	// while none is chosen to load.
 	ReasonAccountNotChosen Reason = "account_not_chosen"
+	// ReasonInternal is a bank's move of money within the account; Value is
+	// the bank's words.
+	ReasonInternal Reason = "internal"
 )
 
 // Unreadable is a row this package cannot turn into an operation: why, which
@@ -122,6 +125,9 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	}
 	if line.Declined != "" {
 		return op, unreadable(ReasonDeclined, "", line.Declined)
+	}
+	if line.Internal != "" {
+		return op, unreadable(ReasonInternal, "", line.Internal)
 	}
 
 	typ, err := r.rowType(line)
@@ -208,6 +214,9 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 // with no type column, as a bank's statement has none — the sign of its
 // amount: money out is a withdrawal, money in a deposit.
 func (r *reader) rowType(line Line) (operation.Type, error) {
+	if line.Type != "" {
+		return line.Type, nil
+	}
 	if _, mapped := r.mapping.Columns[FieldType]; !mapped {
 		cell := r.cell(line, FieldAmount)
 		v, _, err := parseNumber(cell, FieldAmount)

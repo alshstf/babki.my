@@ -19,6 +19,8 @@ type Format string
 const (
 	FormatText Format = "text"
 	FormatXLSX Format = "xlsx"
+	// FormatPDF is a bank's statement in PDF, in base64 (readPDF).
+	FormatPDF Format = "pdf"
 )
 
 // Read reads an uploaded file into a table, and an export of another tracker
@@ -35,6 +37,12 @@ func Read(content string, format Format) (Table, error) {
 			return Table{}, fmt.Errorf("%w: the workbook is not base64", ErrBadTable)
 		}
 		t, err = ReadWorkbook(data)
+	case FormatPDF:
+		data, decodeErr := base64.StdEncoding.DecodeString(content)
+		if decodeErr != nil {
+			return Table{}, fmt.Errorf("%w: the PDF is not base64", ErrBadTable)
+		}
+		t, err = readPDF(data)
 	case FormatText, "":
 		switch {
 		case isOFX(content):

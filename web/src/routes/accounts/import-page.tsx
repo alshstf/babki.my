@@ -215,7 +215,7 @@ export function TableImport({ accountId }: { accountId: string }) {
         <Input
           id="import-file"
           type="file"
-          accept=".csv,.txt,.xlsx,.xls,.json,.ofx,.qfx,text/csv,text/plain,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          accept=".csv,.txt,.xlsx,.xls,.json,.ofx,.qfx,.pdf,application/pdf,text/csv,text/plain,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           onChange={(e) => void chooseFile(e.target.files?.[0])}
         />
         <p className="text-xs text-muted-foreground">{t("tableImport.fileHint")}</p>

@@ -3820,12 +3820,12 @@ components:
         mapping: { $ref: "#/components/schemas/ImportMapping" }
     ImportFileFormat:
       type: string
-      enum: [text, xlsx]
+      enum: [text, xlsx, pdf]
       default: text
-      description: How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
+      description: How `content` carries the file — as text, as an Excel workbook (.xlsx) in base64, or as a bank's statement in PDF in base64 (Сбер, Газпромбанк, Альфа-Банк; see ImportTracker).
     ImportTracker:
       type: string
-      enum: [intelinvest, snowball, ghostfolio, tbank, ofx]
+      enum: [intelinvest, snowball, ghostfolio, tbank, ofx, sber, gazprombank, alfa]
       description: >-
         Another program's export or a bank's statement the file was recognized as, by its own
         columns: its rows are rearranged into this table's columns, each keeping its line — a
@@ -3836,7 +3836,13 @@ components:
         the bank did not carry out is shown and not loaded (`declined`). `ofx`: a statement in OFX
         (version 2 as XML, version 1 as SGML), each account's transactions under its number, the day
         the person paid when the bank gives it, the name as counterparty, MEMO as a note — as
-        Т-Банк's category in its own OFX — and SIC as the MCC.
+        Т-Банк's category in its own OFX — and SIC as the MCC. `sber`, `gazprombank`, `alfa`: the
+        bank's statement in PDF, read by its layout — Сбер's of a payment account, of a credit card's
+        account and its monthly report (the bank's category, the description as counterparty, an
+        amount in another currency in the note); Газпромбанк's of a card and of a card's account,
+        debit or credit (the device as counterparty, the MCC Яндекс's devices carry; of a credit
+        card's «Погашение …» the debt's part is `internal`, the interest's the bank's fee);
+        Альфа-Банк's of an account. A PDF of no statement known here is unreadable.
     ImportedOperation:
       type: object
       required: [type, occurred_on, amount_minor, currency, fee_minor, note, counterparty, category_id]
@@ -3875,11 +3881,11 @@ components:
     ImportRowReason:
       type: object
       required: [code, field, value]
-      description: "Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file."
+      description: "Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words; for paired (money an operation in the file moves itself, as Intelinvest writes it), that operation's line; for declined (an operation the bank did not carry out), the bank's status; for other_account and account_not_chosen, the row's account in the file; for internal (the bank moving money within the account, as Газпромбанк applies money already on a credit card to its debt — the balance does not change), the bank's words."
       properties:
         code:
           type: string
-          enum: [no_type, type_not_mapped, no_date, bad_date, no_paper, paper_not_found, bad_currency, no_number, bad_number, too_precise, too_large, engine_refused, paired, declined, other_account, account_not_chosen]
+          enum: [no_type, type_not_mapped, no_date, bad_date, no_paper, paper_not_found, bad_currency, no_number, bad_number, too_precise, too_large, engine_refused, paired, declined, other_account, account_not_chosen, internal]
         field:
           nullable: true
           allOf:

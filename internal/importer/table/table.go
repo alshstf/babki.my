@@ -47,6 +47,14 @@ type Line struct {
 	// Declined is a bank's status of an operation that did not go through
 	// («Ошибка» in Т-Банк's statement): the row is shown and not imported.
 	Declined string
+	// Internal is a bank's words for a row that moves money within the
+	// account — Газпромбанк applying money already on the card to its debt:
+	// the balance does not change, so the row is shown and not imported.
+	Internal string
+	// Type is the operation a statement's own words say the row is, over
+	// the sign of its amount: the interest a card's debt was charged is the
+	// bank's fee, not spending.
+	Type operation.Type
 }
 
 // Parse reads CSV text: the delimiter is whichever of ';', ',' and a tab
