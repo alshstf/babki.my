@@ -14,7 +14,8 @@ import (
 func tinyPDF(runs ...struct {
 	x, y int
 	text string
-}) []byte {
+},
+) []byte {
 	var content bytes.Buffer
 	for _, r := range runs {
 		fmt.Fprintf(&content, "BT /F1 10 Tf 1 0 0 1 %d %d Tm (%s) Tj ET\n", r.x, r.y, r.text)

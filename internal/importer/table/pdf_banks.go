@@ -402,7 +402,8 @@ func gazprombankOperation(s *statement, cols []pdfColumn, account string, op []p
 	case strings.Contains(content, "Операция:"):
 		// «Возврат части стоимости покупки. Операция: …» names itself before
 		// the card's details; a purchase names its shop as the device.
-		row[stCounterparty] = strings.Trim(content[:strings.Index(content, "Операция:")], " .")
+		before, _, _ := strings.Cut(content, "Операция:")
+		row[stCounterparty] = strings.Trim(before, " .")
 		if m := gpbDevice.FindStringSubmatch(content); m != nil {
 			if device := strings.Trim(m[1], " ."); device != "" {
 				row[stCounterparty] = device
