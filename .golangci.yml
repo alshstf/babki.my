@@ -5,6 +5,11 @@ linters:
     - misspell
     - unconvert
     - gocritic
+  settings:
+    misspell:
+      # OFX's tag for a currency's rate, not a misspelt «curate».
+      ignore-rules:
+        - currate
 formatters:
   enable:
     - gofumpt
