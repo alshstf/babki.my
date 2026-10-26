@@ -12,13 +12,17 @@ export async function readTableFile(file: Blob): Promise<string> {
 
 // Upload is a file as the import sends it: text, or an Excel workbook in
 // base64 for the server to read.
-export type Upload = { content: string; format: "text" | "xlsx" };
+export type Upload = { content: string; format: "text" | "xlsx" | "pdf" };
 
-// readUpload reads a file for the import: an Excel workbook (.xlsx) as it is,
-// anything else — a CSV, a tracker's JSON export — as text.
+// readUpload reads a file for the import: an Excel workbook (.xlsx) and a
+// bank's statement in PDF as they are, anything else — a CSV, an OFX
+// statement, a tracker's JSON export — as text.
 export async function readUpload(file: File): Promise<Upload> {
   if (/\.xlsx$/i.test(file.name)) {
     return { content: toBase64(await file.arrayBuffer()), format: "xlsx" };
+  }
+  if (/\.pdf$/i.test(file.name)) {
+    return { content: toBase64(await file.arrayBuffer()), format: "pdf" };
   }
   return { content: await readTableFile(file), format: "text" };
 }
