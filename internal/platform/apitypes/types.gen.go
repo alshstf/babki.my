@@ -1361,6 +1361,7 @@ func (e ImportRowReasonCode) Valid() bool {
 const (
 	Ghostfolio  ImportTracker = "ghostfolio"
 	Intelinvest ImportTracker = "intelinvest"
+	Ofx         ImportTracker = "ofx"
 	Snowball    ImportTracker = "snowball"
 	Tbank       ImportTracker = "tbank"
 )
@@ -1371,6 +1372,8 @@ func (e ImportTracker) Valid() bool {
 	case Ghostfolio:
 		return true
 	case Intelinvest:
+		return true
+	case Ofx:
 		return true
 	case Snowball:
 		return true
@@ -5418,7 +5421,7 @@ type ImportPreview struct {
 
 // ImportPreviewRequest defines model for ImportPreviewRequest.
 type ImportPreviewRequest struct {
-	// Content The file: for `text`, a CSV (';', ',' or a tab between cells) or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows.
+	// Content The file: for `text`, a CSV (';', ',' or a tab between cells), an OFX statement or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows.
 	Content string `json:"content"`
 
 	// Format How `content` carries the file — as text, or as an Excel workbook (.xlsx) in base64.
@@ -5473,7 +5476,7 @@ type ImportTableResult struct {
 	Rows   []ImportRow                    `json:"rows"`
 }
 
-// ImportTracker Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`).
+// ImportTracker Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`). `ofx`: a statement in OFX (version 2 as XML, version 1 as SGML), each account's transactions under its number, the day the person paid when the bank gives it, the name as counterparty, MEMO as a note — as Т-Банк's category in its own OFX — and SIC as the MCC.
 type ImportTracker string
 
 // ImportedOperation defines model for ImportedOperation.

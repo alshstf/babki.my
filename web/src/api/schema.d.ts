@@ -2771,7 +2771,7 @@ export interface components {
             account?: string;
         };
         ImportPreviewRequest: {
-            /** @description The file: for `text`, a CSV (';', ',' or a tab between cells) or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows. */
+            /** @description The file: for `text`, a CSV (';', ',' or a tab between cells), an OFX statement or Ghostfolio's JSON export; for `xlsx`, the Excel workbook in base64, whose first visible sheet with anything on it is read. At most 5000 rows. */
             content: string;
             format?: components["schemas"]["ImportFileFormat"];
             mapping?: components["schemas"]["ImportMapping"];
@@ -2783,10 +2783,10 @@ export interface components {
          */
         ImportFileFormat: "text" | "xlsx";
         /**
-         * @description Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`).
+         * @description Another program's export or a bank's statement the file was recognized as, by its own columns: its rows are rearranged into this table's columns, each keeping its line — a tracker's into date, type, paper, quantity, price, amount, currency, fee and note, the type column keeping the program's own words; a bank's (`tbank`: Т-Банк's «Операции», CSV or Excel) into date, amount and currency of the account, category (the person's own over the bank's), counterparty, note, MCC and the file's account, with no type column. An operation the bank did not carry out is shown and not loaded (`declined`). `ofx`: a statement in OFX (version 2 as XML, version 1 as SGML), each account's transactions under its number, the day the person paid when the bank gives it, the name as counterparty, MEMO as a note — as Т-Банк's category in its own OFX — and SIC as the MCC.
          * @enum {string}
          */
-        ImportTracker: "intelinvest" | "snowball" | "ghostfolio" | "tbank";
+        ImportTracker: "intelinvest" | "snowball" | "ghostfolio" | "tbank" | "ofx";
         ImportedOperation: {
             type: components["schemas"]["OperationType"];
             /** @description Date YYYY-MM-DD */

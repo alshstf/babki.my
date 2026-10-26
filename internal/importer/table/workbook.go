@@ -36,7 +36,9 @@ func Read(content string, format Format) (Table, error) {
 		}
 		t, err = ReadWorkbook(data)
 	case FormatText, "":
-		if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(content, "\uFEFF")), "{") {
+		if isOFX(content) {
+			t, err = readOFX(content)
+		} else if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(content, "\uFEFF")), "{") {
 			t, err = readGhostfolioJSON(content)
 		} else {
 			t, err = Parse(content)
