@@ -179,6 +179,28 @@ func TestWindowsCountFromTheContractsMonth(t *testing.T) {
 	}
 }
 
+// The windows as Газпромбанк's statement of such a card prints them in its
+// table of grace periods, for a contract made in December: each window's last
+// day and the day its grace ends — two months of purchases free until the end
+// of the sixth month, counted from the contract's month — with 31 January
+// 2027, a Sunday, moved to Monday the 1st of February.
+func TestWindowsMatchTheBanksStatement(t *testing.T) {
+	opened := d("2024-12-10")
+	gpb := gpb180()
+	gpb.OpenedOn, gpb.ShiftToWorkday = &opened, true
+	for _, c := range []struct{ first, to, ends string }{
+		{"2026-06-10", "2026-07-31", "2026-11-30"},
+		{"2026-08-12", "2026-09-30", "2027-02-01"},
+		{"2026-10-15", "2026-11-30", "2027-03-31"},
+	} {
+		_, to := gpb.group(d(c.first))
+		if last := to.AddDate(0, 0, -1); day(last) != c.to || day(gpb.deadline(d(c.first), 0)) != c.ends {
+			t.Errorf("%s: window to %s, grace to %s; the bank says %s and %s",
+				c.first, day(last), day(gpb.deadline(d(c.first), 0)), c.to, c.ends)
+		}
+	}
+}
+
 // Spending of a category the bank takes for transfers — and of the ones under
 // it — has no grace on this card: interest from its day (decision Р-29).
 func TestTransferCategoriesHaveNoGrace(t *testing.T) {
